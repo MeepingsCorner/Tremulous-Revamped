@@ -7485,7 +7485,10 @@ impl TremMenus {
             self.flush();
             return;
         }
-        if !now && self.intro_started && self.system_cin.is_none() && !self.ui.as_ref().unwrap().is_open() {
+        // CL_Frame tests clc.state == CA_DISCONNECTED: while connecting (and
+        // downloading) there is no map yet, but the connect screen shows
+        let connecting = self.game().is_some_and(|g| g.bind().is_connecting());
+        if !now && !connecting && self.intro_started && self.system_cin.is_none() && !self.ui.as_ref().unwrap().is_open() {
             self.stop_ui_sound();
             self.ui.as_mut().unwrap().set_active_menu(UiMenuCommand::Main);
             self.flush();
@@ -7819,7 +7822,8 @@ impl TremMenus {
         if let Some(p) = self.cin_audio.as_mut() {
             p.stop();
         }
-        let connected = self.game().is_some_and(|g| g.bind().has_world());
+        // connected or connecting (the connect screen shows): no main menu
+        let connected = self.game().is_some_and(|g| g.bind().has_world() || g.bind().is_connecting());
         if !connected {
             if let Some(ui) = self.ui.as_mut() {
                 ui.set_active_menu(UiMenuCommand::Main);

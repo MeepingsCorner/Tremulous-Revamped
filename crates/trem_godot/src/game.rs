@@ -784,7 +784,7 @@ impl TremGame {
     /// Connecting to a server or loading its map (clc.state between
     /// CA_CONNECTING and CA_PRIMED; the connect / loading screen is up).
     #[func]
-    fn is_connecting(&self) -> bool {
+    pub(crate) fn is_connecting(&self) -> bool {
         self.connect_screen.is_some() || self.loading.as_ref().is_some_and(|l| l.mode == LoadMode::Client)
     }
 
@@ -3478,7 +3478,8 @@ impl TremGame {
         }
         let si = &nh.cl.engine_cs(trem_sim::kernel::svgame::cs::SERVERINFO);
         let mut media = 0.0;
-        let message = match st {
+        let mut motd = nh.cl.server_message.clone();
+        let mut message = match st {
             ConnState::Connecting => format!("Awaiting connection...{}", nh.cl.connect_packet_count),
             ConnState::Challenging => format!("Awaiting challenge...{}", nh.cl.connect_packet_count),
             ConnState::Connected => match self.download_info() {
@@ -3490,12 +3491,18 @@ impl TremGame {
             },
             _ => String::new(),
         };
+        // the level name box holds one line: the download's bytes, rate,
+        // time left and queue go in the (multi-line) MOTD box under it
+        if let Some((first, rest)) = message.split_once('\n') {
+            motd = rest.to_string();
+            message = first.to_string();
+        }
         let hostname = trem_sim::kernel::svgame::info_value(si, "sv_hostname");
         self.connect_screen = Some(LoadInfo {
             mapname: trem_sim::kernel::svgame::info_value(si, "mapname"),
             message,
             hostname: if hostname.is_empty() { format!("Connecting to {}", nh.cl.servername) } else { hostname },
-            motd: nh.cl.server_message.clone(),
+            motd,
             media,
             ..Default::default()
         });
