@@ -38,6 +38,11 @@ uniform int frame_b = 0;
 uniform float backlerp = 0.0;
 uniform vec4 tint : source_color = vec4(1.0);
 uniform float emission = 0.0;
+// enhanced: subsurface scattering (models.rs sss_class) - flesh lets light
+// through; sss_skin limits it to skin-coloured texels (shared body textures)
+uniform float sss = 0.0;
+uniform float sss_depth = 0.1;
+uniform bool sss_skin = false;
 // the shader script's alphaFunc: without it the renderer ignores the image's
 // alpha (telenode_parts.tga / telenode_top.tga carry an all-zero alpha channel)
 uniform bool alpha_test = false;
@@ -123,6 +128,19 @@ void fragment() {
             IRRADIANCE = vec4(lin_l, 1.0);
             RADIANCE = vec4(lin_l * 0.3, 1.0);
             EMISSION = pow(clamp(c.rgb * emission, 0.0, 1.0), vec3(R_GAMMA_EXP));
+            float k = sss;
+            if (sss_skin) {
+                // skin: red over green over blue, warm, not grey, not dark
+                vec3 g = clamp(base, 0.0, 1.0);
+                float mx = max(g.r, max(g.g, g.b));
+                float sat = (mx - min(g.r, min(g.g, g.b))) / max(mx, 1e-3);
+                k *= smoothstep(0.04, 0.12, g.r - g.b) * step(g.b, g.g + 0.02) * smoothstep(0.15, 0.3, g.r) * (1.0 - smoothstep(0.6, 0.8, sat));
+            }
+            SSS_STRENGTH = k;
+            // light through thin parts takes the surface's own colour, warmed
+            SSS_TRANSMITTANCE_COLOR = vec4(clamp(ALBEDO * 1.6 + vec3(0.12, 0.02, 0.0), 0.0, 1.0), 1.0);
+            SSS_TRANSMITTANCE_DEPTH = sss_depth;
+            SSS_TRANSMITTANCE_BOOST = 0.25 * k;
         } else {
             ALBEDO = vec3(0.0);
             EMISSION = pow(clamp(rgb + c.rgb * emission, 0.0, 1.0), vec3(R_GAMMA_EXP)) * 1.4;
@@ -494,6 +512,11 @@ impl Library {
                 mat.set_shader_parameter("albedo_hd", &hd.to_variant());
                 mat.set_shader_parameter("has_hd", &true.to_variant());
             }
+            if let Some(c) = sss_class(&img) {
+                mat.set_shader_parameter("sss", &c.strength.to_variant());
+                mat.set_shader_parameter("sss_depth", &c.depth.to_variant());
+                mat.set_shader_parameter("sss_skin", &c.skin_only.to_variant());
+            }
             // the first image stage's tcMods / rgbGen, and a blended second
             // stage over an opaque first (level2adv: the scrolling electric
             // pattern showing through adv.tga's transparent veins)
@@ -672,4 +695,61 @@ pub fn model_basis(angles: &[f32; 3]) -> Basis {
     let (f, r, u) = trem_sim::kernel::qmath::angle_vectors(angles);
     let left = [-r[0], -r[1], -r[2]];
     tag_basis(&[f, left, u])
+}
+
+/// Enhanced-mode subsurface scattering of a model surface (by its texture):
+/// alien bodies and structures are flesh; on humans only the skin (the head,
+/// and the bare arms of the shared body texture).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SssClass {
+    pub strength: f32,
+    /// transmittance depth (Godot units): thicker flesh lets less through
+    pub depth: f32,
+    pub skin_only: bool,
+}
+
+pub fn sss_class(texture: &str) -> Option<SssClass> {
+    let t = texture.to_ascii_lowercase().replace('\\', "/");
+    const ALIEN_BUILD: &[&str] = &["overmind", "eggpod", "acid_tube", "trapper", "booster", "hive", "hovel", "barricade", "creep"];
+    if t.starts_with("models/players/human") {
+        // the light-armour body; the battle suit (human_bsuit) is all armour
+        return match t.rsplit('/').next().unwrap_or("") {
+            n if n.starts_with("h_base") => Some(SssClass { strength: 0.55, depth: 0.08, skin_only: true }),
+            n if n.starts_with("base") && t.contains("human_base") => Some(SssClass { strength: 0.5, depth: 0.06, skin_only: true }),
+            _ => None,
+        };
+    }
+    if t.starts_with("models/players/") {
+        // dretch .. tyrant and the granger: flesh all over
+        let big = t.contains("level4") || t.contains("level3");
+        return Some(SssClass { strength: 0.7, depth: if big { 0.25 } else { 0.12 }, skin_only: false });
+    }
+    if t.starts_with("models/buildables/") && ALIEN_BUILD.iter().any(|b| t.contains(b)) {
+        return Some(SssClass { strength: 0.6, depth: 0.3, skin_only: false });
+    }
+    None
+}
+
+#[cfg(test)]
+mod sss_tests {
+    use super::sss_class;
+
+    #[test]
+    fn flesh_gets_subsurface_scattering() {
+        assert!(sss_class("models/players/level2/level2").is_some_and(|c| !c.skin_only));
+        assert!(sss_class("models/players/builder/builder.tga").is_some());
+        assert!(sss_class("models/buildables/overmind/overmind.tga").is_some());
+        assert!(sss_class("models/buildables/eggpod/pod_strands.tga").is_some());
+        assert!(sss_class("models/players/human_base/h_base").is_some_and(|c| c.skin_only));
+        assert!(sss_class("models/players/human_base/base.tga").is_some_and(|c| c.skin_only));
+    }
+
+    #[test]
+    fn armour_and_human_structures_do_not() {
+        assert_eq!(sss_class("models/players/human_bsuit/human_bsuit.tga"), None);
+        assert_eq!(sss_class("models/players/human_base/armour.tga"), None);
+        assert_eq!(sss_class("models/buildables/reactor/reactor.tga"), None);
+        assert_eq!(sss_class("models/buildables/mgturret/turret.tga"), None);
+        assert_eq!(sss_class("models/weapons/rifle/rifle.tga"), None);
+    }
 }
