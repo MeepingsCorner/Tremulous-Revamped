@@ -14,7 +14,17 @@ use std::collections::HashMap;
 use crate::cmd::{Cvars, CVAR_ARCHIVE};
 
 /// (name, default) of the sound path's cvars (CVAR_ARCHIVE).
-pub const FMOD_CVARS: &[(&str, &str)] = &[("s_fmod", "1"), ("s_occlusion", "0"), ("s_reverb", "1")];
+pub const FMOD_CVARS: &[(&str, &str)] = &[("s_fmod", "1"), ("s_occlusion", "-1"), ("s_reverb", "1")];
+
+/// `s_occlusion`: -1 follows the graphics mode (on in enhanced, off in
+/// vanilla, which has no occlusion), 0 always off, 1 always on.
+pub fn occlusion_on(s_occlusion: i32, enhanced: bool) -> bool {
+    match s_occlusion {
+        0 => false,
+        v if v < 0 => enhanced,
+        _ => true,
+    }
+}
 
 pub fn register_cvars(c: &mut Cvars) {
     for (n, v) in FMOD_CVARS {
@@ -282,6 +292,14 @@ impl Drop for FmodAudio {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn occlusion_follows_enhanced_on_auto() {
+        assert!(super::occlusion_on(-1, true));
+        assert!(!super::occlusion_on(-1, false));
+        assert!(!super::occlusion_on(0, true));
+        assert!(super::occlusion_on(1, false));
+    }
+
     use super::*;
     #[test]
     fn materials_by_name() {

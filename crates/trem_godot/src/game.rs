@@ -2162,7 +2162,7 @@ impl TremGame {
             let db = a.get_bus_volume_db(0);
             if a.is_bus_mute(0) { 0.0 } else { 10f32.powf(db / 20.0) }
         };
-        let occ = self.client.cvars.integer("s_occlusion") != 0;
+        let occ = crate::fmodaudio::occlusion_on(self.client.cvars.integer("s_occlusion"), self.client.cvars.integer("r_enhanced") != 0);
         let rev = self.client.cvars.integer("s_reverb") != 0;
         fm.set_options(occ, rev, master);
         fm.update();

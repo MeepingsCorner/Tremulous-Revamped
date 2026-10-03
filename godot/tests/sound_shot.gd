@@ -15,6 +15,9 @@ func _ready() -> void:
 		if a.begins_with("--occ="):
 			game.exec("s_occlusion " + a.substr(6))
 			print("sound: s_occlusion ", a.substr(6))
+		if a.begins_with("--enh="):
+			game.exec("r_enhanced " + a.substr(6))
+			print("sound: r_enhanced ", a.substr(6))
 		if a.begins_with("--rev="):
 			game.exec("s_reverb " + a.substr(6))
 			print("sound: s_reverb ", a.substr(6))
@@ -50,4 +53,8 @@ func _run() -> void:
 	game.exec("s_fmodinfo")
 	await _wait(1.5)
 	game.exec("s_fmodinfo")
+	# the settings are archived: leave the owner's defaults behind
+	game.exec("s_occlusion -1")
+	game.exec("s_reverb 1")
+	game.exec("r_enhanced 1")
 	get_tree().quit()
