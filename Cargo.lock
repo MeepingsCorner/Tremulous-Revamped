@@ -511,6 +511,7 @@ dependencies = [
 name = "trem_godot"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "godot",
  "trem_sim",
 ]

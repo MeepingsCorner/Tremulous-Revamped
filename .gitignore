@@ -8,3 +8,12 @@
 *.bak
 ~*
 *.TMP
+# FMOD Engine files (proprietary; tools/get_audio_libs.ps1 copies them from the FMOD install)
+/third_party/fmod/
+# runtime DLLs fetched by tools/get_audio_libs.ps1
+/godot/bin/fmod.dll
+/godot/bin/phonon.dll
+/godot/bin/phonon_fmod.dll
+/godot/bin/trem_audio.dll
+
+.agent/

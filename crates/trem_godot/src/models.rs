@@ -21,7 +21,9 @@ const VAT_SHADER: &str = r#"
 shader_type spatial;
 // r_gamma 1.3 (a common Tremulous setting): gamma-space result -> linear
 const float R_GAMMA_EXP = 2.2 / 1.3;
-render_mode cull_disabled, depth_draw_opaque, unshaded;
+render_mode cull_disabled, depth_draw_opaque;
+#define ENHANCED_LIT
+global uniform float trem_gfx;
 uniform sampler2D pos_tex : filter_nearest;
 uniform sampler2D nrm_tex : filter_nearest;
 uniform sampler2D albedo_tex : filter_linear_mipmap, repeat_enable;
@@ -96,7 +98,37 @@ void fragment() {
         vec4 c2 = texture(albedo2_tex, tcmods(UV, tc1_k, tc1_a, tc1_b, TIME)) * tint;
         rgb = mix(rgb, lit1 ? c2.rgb * l * 2.0 : c2.rgb, c2.a);
     }
+#ifdef ENHANCED_LIT
+    if (trem_gfx < 0.5) {
+        // vanilla: tr_shade.c's result, unlit
+        ALBEDO = vec3(0.0);
+        ROUGHNESS = 1.0;
+        SPECULAR = 0.0;
+        EMISSION = pow(clamp(rgb + c.rgb * emission, 0.0, 1.0), vec3(R_GAMMA_EXP));
+    } else {
+        // enhanced: the texture lit by the light grid as irradiance (so
+        // SSAO, the ray tracer and dynamic lights act on it), HDR
+        vec3 base = c.rgb;
+        if (layer2) {
+            vec4 c2 = texture(albedo2_tex, tcmods(UV, tc1_k, tc1_a, tc1_b, TIME)) * tint;
+            base = mix(base, c2.rgb, c2.a);
+        }
+        vec3 lin_l = pow(amb * 2.0 + dcol * 2.0 * max(dot(n, ldir), 0.0), vec3(R_GAMMA_EXP));
+        if (lit0) {
+            ALBEDO = pow(clamp(base, 0.0, 1.0), vec3(R_GAMMA_EXP));
+            IRRADIANCE = vec4(lin_l, 1.0);
+            RADIANCE = vec4(lin_l * 0.3, 1.0);
+            EMISSION = pow(clamp(c.rgb * emission, 0.0, 1.0), vec3(R_GAMMA_EXP));
+        } else {
+            ALBEDO = vec3(0.0);
+            EMISSION = pow(clamp(rgb + c.rgb * emission, 0.0, 1.0), vec3(R_GAMMA_EXP)) * 1.4;
+        }
+        ROUGHNESS = 0.5;
+        SPECULAR = 0.45;
+    }
+#else
     ALBEDO = pow(clamp(rgb + c.rgb * emission, 0.0, 1.0), vec3(R_GAMMA_EXP));
+#endif
 }
 "#;
 
@@ -187,8 +219,8 @@ impl Library {
             sh
         };
         let vat = mk(VAT_SHADER.to_string());
-        let vat_add = mk(VAT_SHADER.replace("render_mode cull_disabled, depth_draw_opaque, unshaded;", "render_mode cull_disabled, unshaded, blend_add, depth_draw_never;").replace("if (alpha_test && c.a < 0.5) { discard; }", "").replace("min(amb + dcol * max(dot(n, ldir), 0.0), vec3(1.0))", "vec3(0.5)"));
-        let vat_mix = mk(VAT_SHADER.replace("render_mode cull_disabled, depth_draw_opaque, unshaded;", "render_mode cull_disabled, unshaded, blend_mix, depth_draw_never;").replace("if (alpha_test && c.a < 0.5) { discard; }", "ALPHA = c.a;"));
+        let vat_add = mk(VAT_SHADER.replace("render_mode cull_disabled, depth_draw_opaque;\n#define ENHANCED_LIT", "render_mode cull_disabled, unshaded, blend_add, depth_draw_never;").replace("if (alpha_test && c.a < 0.5) { discard; }", "").replace("min(amb + dcol * max(dot(n, ldir), 0.0), vec3(1.0))", "vec3(0.5)"));
+        let vat_mix = mk(VAT_SHADER.replace("render_mode cull_disabled, depth_draw_opaque;\n#define ENHANCED_LIT", "render_mode cull_disabled, unshaded, blend_mix, depth_draw_never;").replace("if (alpha_test && c.a < 0.5) { discard; }", "ALPHA = c.a;"));
         let white = crate::assets::flat_texture(Color::from_rgb(1.0, 1.0, 1.0)).upcast::<Texture2D>();
         Some(Library { pk3, shader_images, vat_add, vat_mix, textures: HashMap::new(), models: HashMap::new(), skins: HashMap::new(), anims: HashMap::new(), sounds: HashMap::new(), weapons: HashMap::new(), buildables: HashMap::new(), vat, white, default_tex: None })
     }

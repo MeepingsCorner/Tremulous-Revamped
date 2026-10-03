@@ -5,9 +5,14 @@ edition.workspace = true
 license.workspace = true
 description = "Godot 4 front end (GDExtension) for the trem_sim simulation"
 
+build = "build.rs"
+
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
 trem_sim = { path = "../trem_sim" }
-godot = { version = "0.5", features = ["api-4-7"] }
+godot = { version = "0.5", features = ["api-4-7", "experimental-godot-api"] }
+
+[build-dependencies]
+cc = "1"

@@ -43,6 +43,7 @@ bind  F6            \"port_removebot humans\"
 bind  F7            port_restart
 bind  F8            port_maps
 bind  F9            port_help
+bind  F10           port_gfx
 ";
 
 /// The 1.1.0 data's default.cfg (data-1.1.0.pk3), verbatim: used when no
@@ -164,6 +165,8 @@ const HOST_COMMANDS: &[&str] = &[
     "port_restart",
     "port_maps",
     "port_help",
+    // the graphics modes (gfx.rs)
+    "port_gfx",
 ];
 
 /// ui_atoms.c `commands[]` handled by the menus (`UI_ConsoleCommand`).

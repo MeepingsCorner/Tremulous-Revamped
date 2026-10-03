@@ -83,6 +83,10 @@ struct MapLoad {
     brush: crate::mapents::BrushMeshes,
     sky: Option<Vec<Gd<ImageTexture>>>,
     grid: Option<crate::bspview::LightGrid>,
+    /// the world's triangles for the ray-traced effects (gfx.rs / rt.rs)
+    rt_geom: Option<crate::bspview::RtGeometry>,
+    /// the world's triangles for the acoustic simulation (fmodaudio.rs)
+    acoustic: Option<crate::fmodaudio::AcousticMesh>,
     /// console lines to run once the map is up (rotation post commands)
     then: Vec<String>,
     /// devmap
@@ -240,6 +244,13 @@ pub struct TremGame {
     netext: netext::NetExt,
     // wt-b: VoIP sound, the video capture, joystick keys for the ui / console catchers
     wtb: WtB,
+    /// the graphics mode (gfx.rs): vanilla / enhanced, ray-traced effects
+    gfx: crate::gfx::GfxRuntime,
+    /// the FMOD + Steam Audio sound path (fmodaudio.rs); None: Godot's audio
+    fmod: Option<crate::fmodaudio::FmodAudio>,
+    fmod_tried: bool,
+    /// the next map's acoustic geometry
+    fmod_scene: Option<crate::fmodaudio::AcousticMesh>,
 }
 
 #[godot_api]
@@ -307,10 +318,19 @@ impl INode3D for TremGame {
             misc: Default::default(),
             netext: Default::default(),
             wtb: Default::default(),
+            gfx: Default::default(),
+            fmod: None,
+            fmod_tried: false,
+            fmod_scene: None,
         }
     }
 
     fn ready(&mut self) {
+        // the GPU's abilities (the graphics modes' global shader uniform
+        // trem_gfx is declared in project.godot)
+        let caps = crate::gfx::GpuCaps::detect();
+        godot_print!("trem: {}", caps.describe());
+        self.gfx.caps = Some(caps);
         self.pk3_paths = find_pk3s();
         self.lib = Library::open(&self.pk3_paths);
         match &self.lib {
@@ -322,6 +342,8 @@ impl INode3D for TremGame {
         // additions, autogen.cfg, autoexec.cfg
         self.client_fs = Some(crate::hostfs::HostFs::new(&self.pk3_paths));
         self.with_client(|c, g| c.startup(g));
+        crate::gfx::register_cvars(&mut self.client.cvars);
+        crate::fmodaudio::register_cvars(&mut self.client.cvars);
         // Com_StartupVariable / Com_AddStartupCommands: +set and the other
         // "+" commands of the command line (+map / +devmap below)
         let startup = startup_commands();
@@ -376,6 +398,7 @@ impl INode3D for TremGame {
             self.step_loading();
             return;
         }
+        self.fmod_frame();
         if self.net_active() {
             self.net_process(delta);
             return;
@@ -625,6 +648,20 @@ impl TremGame {
     #[func]
     fn is_server_command(&self, word: GString) -> bool {
         self.is_server_word(&word.to_string())
+    }
+
+    /// `port_gfx <arg>` (gfx.rs) for scripts: returns the mode description.
+    #[func]
+    fn gfx(&mut self, arg: GString) -> GString {
+        self.port_gfx(&arg.to_string());
+        GString::from(self.gfx.describe().trim_end())
+    }
+
+    /// The view origin (Quake units) and yaw, as `viewpos` prints them.
+    #[func]
+    fn view_pos(&self) -> Vector4 {
+        let (o, a) = self.cam_q;
+        Vector4::new(o[0], o[1], o[2], a[1])
     }
 
     /// g_cheats (devmap): enables give/god/noclip/notarget/setviewpos/destroy.
@@ -1470,6 +1507,8 @@ impl TremGame {
             sessions: None,
             render: None,
             meshes: None,
+            rt_geom: None,
+            acoustic: None,
             brush: HashMap::new(),
             sky: None,
             grid: None,
@@ -1597,6 +1636,8 @@ impl TremGame {
                 let MapLoad { bsp, set, .. } = &mut *ld;
                 let mut render = crate::bspview::BspRender::new(bsp, set);
                 ld.meshes = Some(render.model(&ld.bsp, &mut ld.set, 0));
+                ld.rt_geom = Some(std::mem::take(&mut render.rt));
+                ld.acoustic = Some(std::mem::take(&mut render.acoustic));
                 ld.render = Some(render);
                 ld.info.media = 0.66;
             }
@@ -1688,6 +1729,8 @@ impl TremGame {
                 let w = ld.world.take().expect("world");
                 self.current = CurrentMap::Bsp(ld.paths.clone(), ld.name.clone());
                 let map = w.map;
+                self.gfx.pending_geom = ld.rt_geom.take();
+                self.fmod_scene = ld.acoustic.take();
                 self.populate_world(w, map, ld.meshes.take(), ld.sessions.take());
                 self.brush_meshes = std::mem::take(&mut ld.brush);
                 self.lightgrid = ld.grid.take();
@@ -1715,6 +1758,17 @@ impl TremGame {
         for (name, t) in ["rt", "lf", "bk", "ft", "up", "dn"].iter().zip(faces.iter()) {
             mat.set_shader_parameter(*name, &t.to_variant());
         }
+        // the sky's mean colour: the ray tracer's radiance for rays that leave the map
+        let mut sum = [0f32; 3];
+        for t in faces.iter() {
+            if let Some(img) = t.get_image() {
+                let m = crate::gfx::derive_maps(&img, false).mean_linear;
+                for k in 0..3 {
+                    sum[k] += m[k] / faces.len().max(1) as f32;
+                }
+            }
+        }
+        self.gfx.sky = sum;
         let mut sky = godot::classes::Sky::new_gd();
         sky.set_material(&mat);
         let children = self.base().get_children();
@@ -1726,6 +1780,7 @@ impl TremGame {
                 }
             }
         }
+        self.apply_gfx();
     }
 
     fn start_map(&mut self, map: MapId) {
@@ -1904,12 +1959,27 @@ impl TremGame {
         env.set_glow_enabled(true);
         let mut we = WorldEnvironment::new_alloc();
         we.set_environment(&env);
+        // the graphics modes (gfx.rs): the vanilla settings above, and the
+        // ray-traced effects where the GPU has hardware ray tracing (Vulkan ray tracing pipelines)
+        self.gfx.vanilla = Some(crate::gfx::VanillaEnv::capture(&env));
+        self.gfx.env = Some(env.clone());
+        self.gfx.is_bsp = bsp_meshes.is_some();
+        self.gfx.fake_lights.clear();
+        if self.gfx.caps.as_ref().is_some_and(|c| c.backend() != crate::gfx::RtBackend::None) {
+            let rt = self.gfx.rt.get_or_insert_with(crate::rt::TremRtEffect::create).clone();
+            let mut comp = godot::classes::Compositor::new_gd();
+            let mut effects: Array<Gd<godot::classes::CompositorEffect>> = Array::new();
+            effects.push(&rt.upcast::<godot::classes::CompositorEffect>());
+            comp.set_compositor_effects(&effects);
+            we.set_compositor(&comp);
+        }
         self.base_mut().add_child(&we);
         let mut sun = DirectionalLight3D::new_alloc();
         sun.set_shadow(true);
         sun.set_param(LightParam::ENERGY, 1.2);
         sun.set_basis(Basis::from_euler(EulerOrder::YXZ, Vector3::new(-1.0, 0.6, 0.0)));
         self.base_mut().add_child(&sun);
+        self.gfx.sun = Some(sun.clone());
         // base lights
         let spots = self.world.as_ref().map(|w| w.spots.clone()).unwrap_or_default();
         for me in spots.iter() {
@@ -1922,6 +1992,7 @@ impl TremGame {
                 o[2] += 200.0;
                 l.set_position(q2g(&o));
                 self.base_mut().add_child(&l);
+                self.gfx.fake_lights.push(l);
             }
         }
 
@@ -2004,6 +2075,8 @@ impl TremGame {
         self.view_vp = Some(vp);
         self.view_sprite = Some(sprite);
         self.vrect = (0, 0, 0, 0);
+        self.gfx.view_vp = self.view_vp.clone();
+        self.gfx.view_msaa = None;
         let mut ghost = MeshInstance3D::new_alloc();
         ghost.set_mesh(&BoxMesh::new_gd());
         ghost.set_visible(false);
@@ -2011,6 +2084,111 @@ impl TremGame {
         self.camera = Some(cam);
         self.viewmodel = Some(vm);
         self.ghost = Some(ghost);
+        self.apply_gfx();
+    }
+
+    /// r_enhanced / r_rtMode / r_rtDebug -> gfx.rs.
+    fn apply_gfx(&mut self) {
+        let enhanced = self.client.cvars.integer("r_enhanced") != 0;
+        let rt = self.client.cvars.find("r_rtMode").map(|v| v.string.trim().parse::<i32>().unwrap_or(-1)).unwrap_or(-1);
+        let debug = self.client.cvars.integer("r_rtDebug");
+        let backend = self.client.cvars.integer("r_rtBackend");
+        self.gfx.apply(enhanced, rt, debug, backend);
+    }
+
+    /// The FMOD + Steam Audio sound path once per frame: start it (s_fmod),
+    /// the map's acoustic geometry, the listener (the view camera), the
+    /// options (s_occlusion, s_reverb) and the master volume (s_volume's bus).
+    fn fmod_frame(&mut self) {
+        let want = self.client.cvars.integer("s_fmod") != 0;
+        if !want {
+            if self.fmod.take().is_some() {
+                godot_print!("trem: FMOD sound path off (s_fmod 0): Godot audio");
+            }
+            self.fmod_tried = false;
+            return;
+        }
+        if self.fmod.is_none() && !self.fmod_tried {
+            self.fmod_tried = true;
+            let dir = godot::classes::ProjectSettings::singleton().globalize_path("res://bin").to_string();
+            let rate = godot::classes::AudioServer::singleton().get_mix_rate() as i32;
+            match crate::fmodaudio::FmodAudio::open(&dir, rate) {
+                Ok(f) => {
+                    godot_print!("trem: FMOD + Steam Audio sound path up ({rate} Hz)");
+                    self.fmod = Some(f);
+                }
+                Err(e) => godot_print!("trem: FMOD sound path unavailable, using Godot audio: {e}"),
+            }
+        }
+        let Some(fm) = self.fmod.as_mut() else { return };
+        if let Some(scene) = self.fmod_scene.take() {
+            if fm.set_scene(&scene) {
+                godot_print!("trem: acoustic scene: {} triangles", scene.tris.len());
+            } else {
+                godot_warn!("trem: acoustic scene failed: {}", fm.error());
+            }
+        }
+        if let Some(cam) = self.camera.as_ref().filter(|c| c.is_inside_tree()) {
+            let t = cam.get_global_transform();
+            let f = -t.basis.col_c();
+            let u = t.basis.col_b();
+            fm.listener([t.origin.x, t.origin.y, t.origin.z], [f.x, f.y, f.z], [u.x, u.y, u.z]);
+        }
+        let master = {
+            let a = godot::classes::AudioServer::singleton();
+            let db = a.get_bus_volume_db(0);
+            if a.is_bus_mute(0) { 0.0 } else { 10f32.powf(db / 20.0) }
+        };
+        let occ = self.client.cvars.integer("s_occlusion") != 0;
+        let rev = self.client.cvars.integer("s_reverb") != 0;
+        fm.set_options(occ, rev, master);
+        fm.update();
+    }
+
+    /// `port_gfx [vanilla|enhanced|rt|pt|auto|off|info]` (F10: toggle).
+    fn port_gfx(&mut self, arg: &str) {
+        match arg.to_ascii_lowercase().as_str() {
+            "" | "toggle" => {
+                let on = self.client.cvars.integer("r_enhanced") != 0;
+                self.client.cvars.set("r_enhanced", if on { "0" } else { "1" });
+            }
+            "vanilla" | "0" => {
+                self.client.cvars.set("r_enhanced", "0");
+            }
+            "enhanced" | "1" => {
+                self.client.cvars.set("r_enhanced", "1");
+            }
+            "rt" | "raytrace" | "raytracing" => {
+                self.client.cvars.set("r_enhanced", "1");
+                self.client.cvars.set("r_rtMode", "1");
+            }
+            "pt" | "pathtrace" | "pathtracing" => {
+                self.client.cvars.set("r_enhanced", "1");
+                self.client.cvars.set("r_rtMode", "2");
+            }
+            "auto" => {
+                self.client.cvars.set("r_rtMode", "-1");
+            }
+            "off" | "nort" => {
+                self.client.cvars.set("r_rtMode", "0");
+            }
+            "software" | "sw" => {
+                self.client.cvars.set("r_rtBackend", "1");
+            }
+            "hardware" | "hw" => {
+                self.client.cvars.set("r_rtBackend", "0");
+            }
+            a if a.starts_with("debug") => {
+                // the ray tracer's terms alone: 1 AO, 2 indirect light, 3 reflections
+                let n = a.trim_start_matches("debug").trim().parse::<i32>().unwrap_or(0);
+                self.client.cvars.set("r_rtDebug", &n.to_string());
+            }
+            _ => {}
+        }
+        self.apply_gfx();
+        let msg = self.gfx.describe();
+        godot_print!("{}", msg.trim_end());
+        self.misc.con.print(&msg);
     }
 
     /// Run `f` on the client with this node as its `ClientHost`.
@@ -2023,6 +2201,15 @@ impl TremGame {
 
     /// `CL_KeyEvent` (key repeats are filtered by the caller).
     fn key_event_num(&mut self, key: i32, down: bool) {
+        // F10 switches the graphics mode (like Halo: CE Anniversary's
+        // switch) unless the player bound it to something else
+        if key == crate::keys::K_F1 + 9 && down {
+            let b = self.client.keys.get_binding(key).to_string();
+            if b.is_empty() || b.eq_ignore_ascii_case("port_gfx") {
+                self.port_gfx("");
+                return;
+            }
+        }
         self.sync_catcher();
         let time = godot::classes::Time::singleton().get_ticks_msec() as u32;
         self.with_client(|c, g| c.key_event(key, down, time, g));
@@ -2046,6 +2233,14 @@ impl TremGame {
             self.with_client(|c, g| c.execute(g));
         }
         self.misc_client_frame(); // wt-misc: CL_CheckUserinfo, gamepad, console text
+        // the graphics mode cvars (gfx.rs)
+        let mut gfx_changed = false;
+        for n in ["r_enhanced", "r_rtMode", "r_rtDebug", "r_rtBackend"] {
+            gfx_changed |= self.client.cvars.take_modified(n);
+        }
+        if gfx_changed {
+            self.apply_gfx();
+        }
         // cg_thirdPerson <-> the third_person property
         let tp = self.client.cvars.integer("cg_thirdPerson") != 0;
         if self.client.cvars.take_modified("cg_thirdPerson") {
@@ -2301,6 +2496,8 @@ impl TremGame {
         l.set_color(Color::from_rgb(c[0], c[1], c[2]));
         l.set_param(LightParam::RANGE, 9.0);
         l.set_param(LightParam::ENERGY, 3.0);
+        // enhanced: the flash lights the lit world and casts shadows
+        l.set_shadow(self.gfx.enhanced);
         l.set_position(q2g(&p));
         self.base_mut().add_child(&l);
         self.flashes.push((l, 0.06));
@@ -2743,6 +2940,19 @@ impl TremGame {
     }
 
     fn play_sound(&mut self, paths: &str, origin: &[f32; 3], local: bool) {
+        // the FMOD + Steam Audio path (fmodaudio.rs) when it is up
+        if let (Some(fm), Some(lib)) = (self.fmod.as_mut(), self.lib.as_mut()) {
+            for p in paths.split('|') {
+                let key = p.to_lowercase();
+                let id = fm.sound(&key, || lib.pk3.read(p).map(|d| d.as_slice().to_vec()));
+                if let Some(id) = id {
+                    let pos = if local { None } else { let g = q2g(origin); Some([g.x, g.y, g.z]) };
+                    fm.play(id, pos, false, 1.0);
+                    return;
+                }
+            }
+            return;
+        }
         let Some(stream) = self.resolve_sound(paths) else { return };
         if let Some(a) = self.audio.as_mut() {
             if local {
@@ -3537,6 +3747,8 @@ impl TremGame {
                         sessions: None,
                         render: None,
                         meshes: None,
+                        rt_geom: None,
+                        acoustic: None,
                         brush: HashMap::new(),
                         sky: None,
                         grid: None,
@@ -3605,6 +3817,8 @@ impl TremGame {
         let map = view.map;
         self.world = Some(view);
         self.me = None;
+        self.gfx.pending_geom = ld.rt_geom.take();
+        self.fmod_scene = ld.acoustic.take();
         self.build_level(map, ld.meshes.take());
         self.brush_meshes = std::mem::take(&mut ld.brush);
         self.lightgrid = ld.grid.take();
@@ -3975,6 +4189,7 @@ impl crate::clientcmd::ClientHost for TremGame {
             "port_addbot" => self.add_bots(GString::from(a1), 1),
             "port_removebot" => self.remove_bot(GString::from(a1)),
             "port_restart" => self.restart(),
+            "port_gfx" => self.port_gfx(a1),
             _ => {}
         }
         let line = argv.join(" ");

@@ -18,13 +18,29 @@ const SURF_NODRAW: i32 = 0x80;
 
 const WORLD_SHADER: &str = r#"
 shader_type spatial;
+// trem_gfx 0: vanilla, the original renderer's result as emission (no
+// lighting, no post effects); 1: enhanced, the same texture and baked light
+// as a lit surface: the light map is the irradiance (SSAO / SSIL / the ray
+// tracer act on it), a generated normal map bumps it along the light grid's
+// dominant direction (CUSTOM0: direction xyz, directed fraction w).
 // r_gamma 1.3 (a common Tremulous setting): gamma-space result -> linear
 const float R_GAMMA_EXP = 2.2 / 1.3;
-render_mode unshaded, cull_disabled;
-uniform sampler2D tex : filter_linear_mipmap, repeat_enable;
+render_mode cull_disabled;
+global uniform float trem_gfx;
+uniform sampler2D tex : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform sampler2D lm : filter_linear;
 uniform bool use_lm = false;
 uniform vec4 tint = vec4(1.0);
+uniform sampler2D nrm : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform bool has_nrm = false;
+uniform float rough = 0.7;
+uniform float spec = 0.4;
+uniform float bump = 1.0;
+uniform float irr_scale = 1.0;
+varying vec4 grid;
+void vertex() {
+    grid = CUSTOM0;
+}
 void fragment() {
     vec4 t = texture(tex, UV) * tint;
     if (t.a < 0.5) { discard; }
@@ -34,7 +50,37 @@ void fragment() {
     light *= 2.0;
     float m = max(light.r, max(light.g, light.b));
     if (m > 1.0) { light /= m; }
-    ALBEDO = pow(clamp(t.rgb * light * 2.0, 0.0, 1.0), vec3(R_GAMMA_EXP));
+    if (trem_gfx < 0.5) {
+        ALBEDO = vec3(0.0);
+        ROUGHNESS = 1.0;
+        SPECULAR = 0.0;
+        METALLIC = 0.0;
+        EMISSION = pow(clamp(t.rgb * light * 2.0, 0.0, 1.0), vec3(R_GAMMA_EXP));
+    } else {
+        vec3 alb = pow(clamp(t.rgb, 0.0, 1.0), vec3(R_GAMMA_EXP));
+        // the overbright is kept (HDR, tone mapped) instead of clamped
+        vec3 baked = pow(light * 2.0, vec3(R_GAMMA_EXP));
+        float k = 1.0;
+        if (has_nrm) {
+            vec3 tn = texture(nrm, UV).xyz;
+            vec3 nm = tn * 2.0 - 1.0;
+            nm.xy *= bump;
+            vec3 nb = normalize(TANGENT * nm.x + BINORMAL * nm.y + NORMAL * nm.z);
+            vec3 L = normalize((VIEW_MATRIX * vec4(grid.xyz, 0.0)).xyz + vec3(1e-5));
+            float d = clamp(grid.w, 0.0, 0.85);
+            float lit_b = (1.0 - d) + d * max(dot(nb, L), 0.0);
+            float lit_g = (1.0 - d) + d * max(dot(NORMAL, L), 0.0);
+            k = clamp(lit_b / max(lit_g, 0.05), 0.45, 1.7);
+            NORMAL_MAP = tn;
+            NORMAL_MAP_DEPTH = bump;
+        }
+        ALBEDO = alb;
+        ROUGHNESS = rough;
+        SPECULAR = spec;
+        METALLIC = 0.0;
+        IRRADIANCE = vec4(baked * k * irr_scale, 1.0);
+        RADIANCE = vec4(baked * 0.3 * irr_scale, 1.0);
+    }
 }
 "#;
 
@@ -44,13 +90,15 @@ shader_type spatial;
 // r_gamma 1.3 (a common Tremulous setting): gamma-space result -> linear
 const float R_GAMMA_EXP = 2.2 / 1.3;
 render_mode unshaded, cull_disabled, blend_add, depth_draw_never;
+global uniform float trem_gfx;
 uniform sampler2D tex : filter_linear_mipmap, repeat_enable;
 uniform sampler2D lm : filter_linear;
 uniform bool use_lm = false;
 uniform vec4 tint = vec4(1.0);
 void fragment() {
     vec4 t = texture(tex, UV) * tint;
-    ALBEDO = pow(clamp(t.rgb, 0.0, 1.0), vec3(R_GAMMA_EXP));
+    // enhanced: glows go over 1.0 so the bloom picks them up
+    ALBEDO = pow(clamp(t.rgb, 0.0, 1.0), vec3(R_GAMMA_EXP)) * (trem_gfx > 0.5 ? 1.8 : 1.0);
 }
 "#;
 const WORLD_SHADER_MIX: &str = r#"
@@ -58,6 +106,7 @@ shader_type spatial;
 // r_gamma 1.3 (a common Tremulous setting): gamma-space result -> linear
 const float R_GAMMA_EXP = 2.2 / 1.3;
 render_mode unshaded, cull_disabled, blend_mix, depth_draw_never;
+global uniform float trem_gfx;
 uniform sampler2D tex : filter_linear_mipmap, repeat_enable;
 uniform sampler2D lm : filter_linear;
 uniform bool use_lm = false;
@@ -65,10 +114,36 @@ uniform vec4 tint = vec4(1.0);
 void fragment() {
     vec4 t = texture(tex, UV) * tint;
     vec3 light = use_lm ? texture(lm, UV2).rgb * 2.0 : vec3(1.0);
-    ALBEDO = pow(clamp(t.rgb * light, 0.0, 1.0), vec3(R_GAMMA_EXP));
+    vec3 c = trem_gfx > 0.5 ? pow(clamp(t.rgb, 0.0, 1.0), vec3(R_GAMMA_EXP)) * pow(light, vec3(R_GAMMA_EXP)) : pow(clamp(t.rgb * light, 0.0, 1.0), vec3(R_GAMMA_EXP));
+    ALBEDO = c;
     ALPHA = t.a;
 }
 "#;
+
+/// The world's opaque triangles for the ray tracer (rt.rs), in Godot space:
+/// positions, indices and per-vertex surface data (the outgoing baked
+/// radiance = mean albedo x light map, and the mean albedo, both linear).
+#[derive(Default, Clone)]
+pub struct RtGeometry {
+    pub pos: Vec<[f32; 3]>,
+    pub rad: Vec<[f32; 4]>,
+    pub alb: Vec<[f32; 4]>,
+    pub idx: Vec<u32>,
+}
+
+/// Longest edge (Quake units) of a ray tracer triangle: the light map is
+/// sampled at the vertices, so big faces are split to keep its detail.
+const RT_MAX_EDGE: f32 = 48.0;
+const RT_MAX_TRIS: usize = 1_500_000;
+
+fn color_shift_f(c: [f32; 3]) -> [f32; 3] {
+    let mut l = [c[0] * 2.0, c[1] * 2.0, c[2] * 2.0];
+    let m = l[0].max(l[1]).max(l[2]);
+    if m > 1.0 {
+        l.iter_mut().for_each(|x| *x /= m);
+    }
+    l
+}
 
 fn lightmap_textures(bsp: &Bsp) -> Vec<Gd<ImageTexture>> {
     let n = bsp.lightmaps.len() / (128 * 128 * 3);
@@ -147,6 +222,14 @@ pub struct BspRender {
     shader_mix: Gd<Shader>,
     white: Gd<ImageTexture>,
     tex_cache: HashMap<i32, Gd<ImageTexture>>,
+    /// per shader: the generated normal map and the mean linear albedo (gfx.rs)
+    derived: HashMap<i32, (Option<Gd<ImageTexture>>, [f32; 3])>,
+    /// the light grid, for the enhanced mode's bumped baked light (CUSTOM0)
+    grid: Option<LightGrid>,
+    /// the world's opaque triangles for the ray tracer (model 0)
+    pub rt: RtGeometry,
+    /// the same, unsplit, for the acoustic simulation (fmodaudio.rs)
+    pub acoustic: crate::fmodaudio::AcousticMesh,
 }
 
 impl BspRender {
@@ -164,6 +247,67 @@ impl BspRender {
             shader_mix: mk(WORLD_SHADER_MIX),
             white: flat_texture(Color::from_rgb(1.0, 1.0, 1.0)),
             tex_cache: HashMap::new(),
+            derived: HashMap::new(),
+            grid: LightGrid::from_bsp(bsp),
+            rt: RtGeometry::default(),
+            acoustic: Default::default(),
+        }
+    }
+
+    /// The light map at (s, t) of light map `lm` (bilinear), or the vertex
+    /// colour without one; gamma space, before the overbright shift.
+    fn sample_lightmap(bsp: &Bsp, lm: i32, v: &V) -> [f32; 3] {
+        let n = bsp.lightmaps.len() / (128 * 128 * 3);
+        if lm < 0 || lm as usize >= n {
+            return [v.c[0], v.c[1], v.c[2]];
+        }
+        let base = lm as usize * 128 * 128 * 3;
+        let fx = (v.lm[0] * 128.0 - 0.5).clamp(0.0, 127.0);
+        let fy = (v.lm[1] * 128.0 - 0.5).clamp(0.0, 127.0);
+        let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(127), (y0 + 1).min(127));
+        let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
+        let px = |x: usize, y: usize, k: usize| bsp.lightmaps[base + (y * 128 + x) * 3 + k] as f32 / 255.0;
+        [0, 1, 2].map(|k| {
+            let a = px(x0, y0, k) + (px(x1, y0, k) - px(x0, y0, k)) * tx;
+            let b = px(x0, y1, k) + (px(x1, y1, k) - px(x0, y1, k)) * tx;
+            a + (b - a) * ty
+        })
+    }
+
+    /// Add one triangle to the ray tracer's geometry, split until its
+    /// longest edge is at most RT_MAX_EDGE.
+    fn rt_triangle(&mut self, bsp: &Bsp, lm: i32, alb: [f32; 3], a: V, b: V, c: V, depth: u32) {
+        if self.rt.idx.len() / 3 >= RT_MAX_TRIS {
+            return;
+        }
+        let d = |p: &V, q: &V| ((p.xyz[0] - q.xyz[0]).powi(2) + (p.xyz[1] - q.xyz[1]).powi(2) + (p.xyz[2] - q.xyz[2]).powi(2)).sqrt();
+        let (ab, bc, ca) = (d(&a, &b), d(&b, &c), d(&c, &a));
+        let m = ab.max(bc).max(ca);
+        if m > RT_MAX_EDGE && depth < 8 {
+            if m == ab {
+                let mid = lerp(&a, &b, 0.5);
+                self.rt_triangle(bsp, lm, alb, a, mid, c, depth + 1);
+                self.rt_triangle(bsp, lm, alb, mid, b, c, depth + 1);
+            } else if m == bc {
+                let mid = lerp(&b, &c, 0.5);
+                self.rt_triangle(bsp, lm, alb, a, b, mid, depth + 1);
+                self.rt_triangle(bsp, lm, alb, a, mid, c, depth + 1);
+            } else {
+                let mid = lerp(&c, &a, 0.5);
+                self.rt_triangle(bsp, lm, alb, a, b, mid, depth + 1);
+                self.rt_triangle(bsp, lm, alb, mid, b, c, depth + 1);
+            }
+            return;
+        }
+        for v in [a, b, c] {
+            let l = color_shift_f(Self::sample_lightmap(bsp, lm, &v));
+            let baked = l.map(|x| (x * 2.0).powf(crate::gfx::R_GAMMA_EXP));
+            let g = q2g(&v.xyz);
+            self.rt.idx.push(self.rt.pos.len() as u32);
+            self.rt.pos.push([g.x, g.y, g.z]);
+            self.rt.rad.push([alb[0] * baked[0], alb[1] * baked[1], alb[2] * baked[2], 1.0]);
+            self.rt.alb.push([alb[0], alb[1], alb[2], 1.0]);
         }
     }
 
@@ -204,37 +348,80 @@ impl BspRender {
                 continue;
             }
             let (shader_num, lm) = key;
+            let info = self.script_images.get(&bsp.shaders[shader_num as usize].name.to_lowercase()).cloned().unwrap_or_default();
+            if info.nodraw {
+                continue;
+            }
+            let opaque = info.blend == crate::assets::Blend::Opaque;
             let script_images = &self.script_images;
+            let derived = &mut self.derived;
             let tex = self
                 .tex_cache
                 .entry(shader_num)
                 .or_insert_with(|| {
                     let name = bsp.shaders[shader_num as usize].name.clone();
                     let img = script_images.get(&name.to_lowercase()).and_then(|p| p.image.clone()).and_then(|p| load_image(pk3, &p)).or_else(|| load_image(pk3, &name));
+                    // the enhanced mode's generated maps (gfx.rs)
+                    let d = match img.as_ref() {
+                        Some(i) => crate::gfx::derive_maps(i, opaque),
+                        None => crate::gfx::DerivedMaps { normal: None, mean_linear: [0.3, 0.3, 0.32] },
+                    };
+                    derived.insert(shader_num, (d.normal, d.mean_linear));
                     match img.and_then(|i| ImageTexture::create_from_image(&i)) {
                         Some(t) => t,
                         None => flat_texture(Color::from_rgb(0.55, 0.55, 0.6)),
                     }
                 })
                 .clone();
+            let (nrm, mean) = self.derived.get(&shader_num).cloned().unwrap_or((None, [0.3; 3]));
+            // the ray tracer sees the world's opaque surfaces
+            if m == 0 && opaque {
+                let mat = crate::fmodaudio::material_of(&bsp.shaders[shader_num as usize].name);
+                let base = self.acoustic.verts.len() as i32;
+                for v in vs {
+                    let g = q2g(&v.xyz);
+                    self.acoustic.verts.push([g.x, g.y, g.z]);
+                }
+                for t in is.chunks_exact(3) {
+                    self.acoustic.tris.push([base + t[0] as i32, base + t[1] as i32, base + t[2] as i32]);
+                    self.acoustic.mats.push(mat);
+                }
+                for t in is.chunks_exact(3) {
+                    let (a, b, c) = (vs[t[0] as usize], vs[t[1] as usize], vs[t[2] as usize]);
+                    self.rt_triangle(bsp, lm, mean, a, b, c, 0);
+                }
+            }
             let mut st = SurfaceTool::new_gd();
             st.begin(PrimitiveType::TRIANGLES);
+            st.set_custom_format(0, godot::classes::surface_tool::CustomFormat::RGBA_FLOAT);
             for v in vs {
                 st.set_normal(q2g_dir(&v.n));
                 st.set_uv(Vector2::new(v.st[0], v.st[1]));
                 st.set_uv2(Vector2::new(v.lm[0], v.lm[1]));
                 st.set_color(Color::from_rgba(v.c[0], v.c[1], v.c[2], v.c[3]));
+                // the light grid's dominant direction (Godot space) and the
+                // directed share of its light, for the bumped baked light
+                let g = match self.grid.as_ref() {
+                    Some(g) => {
+                        let (amb, dir, d) = g.sample(&v.xyz);
+                        let la = amb[0] * 0.3 + amb[1] * 0.59 + amb[2] * 0.11;
+                        let ld = dir[0] * 0.3 + dir[1] * 0.59 + dir[2] * 0.11;
+                        let gd = q2g_dir(&d);
+                        Color::from_rgba(gd.x, gd.y, gd.z, if la + ld > 0.0 { ld / (la + ld) } else { 0.0 })
+                    }
+                    None => Color::from_rgba(0.0, 1.0, 0.0, 0.0),
+                };
+                st.set_custom(0, g);
                 st.add_vertex(q2g(&v.xyz));
             }
             // Q3 winding is clockwise seen from the front, Godot's too: keep order.
             for &i in is {
                 st.add_index(i as i32);
             }
-            let Some(mesh) = st.commit() else { continue };
-            let info = self.script_images.get(&bsp.shaders[shader_num as usize].name.to_lowercase()).cloned().unwrap_or_default();
-            if info.nodraw {
-                continue;
+            if nrm.is_some() {
+                st.generate_tangents();
             }
+            let Some(mesh) = st.commit() else { continue };
             let mut mat = ShaderMaterial::new_gd();
             mat.set_shader(match info.blend {
                 crate::assets::Blend::Add => &self.shader_add,
@@ -245,6 +432,16 @@ impl BspRender {
             let use_lm = lm >= 0 && (lm as usize) < self.lightmaps.len();
             mat.set_shader_parameter("use_lm", &use_lm.to_variant());
             mat.set_shader_parameter("lm", &(if use_lm { self.lightmaps[lm as usize].clone() } else { self.white.clone() }).to_variant());
+            if opaque {
+                let (rough, spec, bump) = crate::gfx::surface_props(&bsp.shaders[shader_num as usize].name);
+                mat.set_shader_parameter("rough", &rough.to_variant());
+                mat.set_shader_parameter("spec", &spec.to_variant());
+                mat.set_shader_parameter("bump", &bump.to_variant());
+                if let Some(n) = nrm.as_ref() {
+                    mat.set_shader_parameter("nrm", &n.to_variant());
+                    mat.set_shader_parameter("has_nrm", &true.to_variant());
+                }
+            }
             let mut mi = MeshInstance3D::new_alloc();
             mi.set_mesh(&mesh);
             mi.set_material_override(&mat);

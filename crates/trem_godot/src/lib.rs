@@ -33,6 +33,9 @@ mod particles;
 mod trails;
 mod voipsnd; // wt-b VoIP
 mod avicap; // wt-b video capture
+mod gfx; // graphics modes (vanilla / enhanced)
+mod rt; // ray-traced effects of the enhanced mode
+mod fmodaudio; // FMOD + Steam Audio sound path
 
 struct TremExtension;
 
