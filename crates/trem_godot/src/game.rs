@@ -2141,6 +2141,7 @@ impl TremGame {
         let backend = self.client.cvars.integer("r_rtBackend");
         self.gfx.upscale = (self.client.cvars.integer("r_upscale"), self.client.cvars.value("r_upscaleScale"));
         self.gfx.shadow_max = self.client.cvars.integer("r_dlightShadows").clamp(0, 16) as usize;
+        self.gfx.model_debug = self.client.cvars.integer("r_modelDebug");
         self.gfx.apply(enhanced, rt, debug, backend);
     }
 
@@ -2299,7 +2300,7 @@ impl TremGame {
         self.misc_client_frame(); // wt-misc: CL_CheckUserinfo, gamepad, console text
         // the graphics mode cvars (gfx.rs)
         let mut gfx_changed = false;
-        for n in ["r_enhanced", "r_rtMode", "r_rtDebug", "r_rtBackend", "r_hdTextures", "r_hdPath", "r_hdMaxSize"] {
+        for n in ["r_enhanced", "r_rtMode", "r_rtDebug", "r_rtBackend", "r_hdTextures", "r_hdPath", "r_hdMaxSize", "r_upscale", "r_upscaleScale", "r_dlightShadows", "r_modelDebug"] {
             gfx_changed |= self.client.cvars.take_modified(n);
         }
         if gfx_changed {

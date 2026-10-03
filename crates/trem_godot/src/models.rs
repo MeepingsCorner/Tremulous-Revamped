@@ -135,7 +135,9 @@ void fragment() {
         if (lit0) {
             ALBEDO = pow(clamp(base, 0.0, 1.0), vec3(R_GAMMA_EXP));
             IRRADIANCE = vec4(lin_l, 1.0);
-            RADIANCE = vec4(lin_l * 0.3, 1.0);
+            // a faint sheen only: a white reflection at the light grid's level
+            // lifted the dark alien skins to grey (the "white cast")
+            RADIANCE = vec4(lin_l * 0.05, 1.0);
             EMISSION = pow(clamp(c.rgb * emission, 0.0, 1.0), vec3(R_GAMMA_EXP));
             float k = sss;
             if (sss_skin) {
@@ -150,12 +152,25 @@ void fragment() {
             SSS_TRANSMITTANCE_COLOR = vec4(clamp(ALBEDO * 1.6 + vec3(0.12, 0.02, 0.0), 0.0, 1.0), 1.0);
             SSS_TRANSMITTANCE_DEPTH = sss_depth;
             SSS_TRANSMITTANCE_BOOST = 0.25 * k;
+            // r_modelDebug (gfx.rs set_global): 1 no SSS, 2 no reflections, 3 both
+            int mdbg = int(round((trem_gfx - 1.0) * 100.0));
+            if (mdbg == 1 || mdbg == 3) {
+                SSS_STRENGTH = 0.0;
+                SSS_TRANSMITTANCE_BOOST = 0.0;
+            }
+            if (mdbg == 2 || mdbg == 3) {
+                RADIANCE = vec4(0.0);
+            }
         } else {
             ALBEDO = vec3(0.0);
             EMISSION = pow(clamp(rgb + c.rgb * emission, 0.0, 1.0), vec3(R_GAMMA_EXP)) * 1.4;
         }
-        ROUGHNESS = 0.5;
-        SPECULAR = 0.45;
+        ROUGHNESS = 0.7;
+        SPECULAR = lit0 ? 0.2 : 0.0;
+        int mdbg2 = int(round((trem_gfx - 1.0) * 100.0));
+        if (mdbg2 == 2 || mdbg2 == 3) {
+            SPECULAR = 0.0;
+        }
     }
 #else
     ALBEDO = pow(clamp(rgb + c.rgb * emission, 0.0, 1.0), vec3(R_GAMMA_EXP));

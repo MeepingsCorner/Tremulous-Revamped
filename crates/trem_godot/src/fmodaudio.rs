@@ -17,9 +17,8 @@ use crate::cmd::{Cvars, CVAR_ARCHIVE};
 /// s_hdSounds: the enhanced mode plays the high-band pack (tools/sfx_hd.py,
 /// user://sfx_hd) where it has a sound; vanilla always plays the originals.
 /// s_pathing: sound paths around corners (Steam Audio pathing, enhanced
-/// mode). Off by default: Steam Audio 4.8.1's path baker faults on these
-/// maps (an access violation inside phonon.dll, caught, but not safe).
-pub const FMOD_CVARS: &[(&str, &str)] = &[("s_fmod", "1"), ("s_occlusion", "-1"), ("s_reverb", "1"), ("s_hdSounds", "1"), ("s_pathing", "0")];
+/// mode); each map's probes are baked once in the background and cached.
+pub const FMOD_CVARS: &[(&str, &str)] = &[("s_fmod", "1"), ("s_occlusion", "-1"), ("s_reverb", "1"), ("s_hdSounds", "1"), ("s_pathing", "1")];
 
 /// `s_occlusion`: -1 follows the graphics mode (on in enhanced, off in
 /// vanilla, which has no occlusion), 0 always off, 1 always on.

@@ -107,6 +107,15 @@ typedef struct {
 static void voice_direct(Voice* v, float occlusion, const float* transmission);
 static void stop_pathing(void);
 
+static FILE* phonon_log;
+static void IPLCALL phonon_logcb(IPLLogLevel level, const char* message) {
+    if (!phonon_log) return;
+    static const char* names[] = {"info", "warning", "error", "debug"};
+    fprintf(phonon_log, "%s: %s\n", (unsigned)level < 4 ? names[level] : "?", message);
+    fflush(phonon_log);
+}
+
+
 static struct {
     int up;
     int enhanced;      /* ta_enhanced: limiter, doppler, reflections, pathing */
@@ -280,6 +289,15 @@ __declspec(dllexport) int ta_init(const wchar_t* dir, int sample_rate) {
     IPLContextSettings cs;
     memset(&cs, 0, sizeof(cs));
     cs.version = STEAMAUDIO_VERSION;
+    /* tests: TREM_PHONON_LOG=<file> turns on Steam Audio's API validation
+     * layer and writes its messages there */
+    {
+        char lp[MAX_PATH];
+        if (GetEnvironmentVariableA("TREM_PHONON_LOG", lp, sizeof(lp)) > 0 && (phonon_log = fopen(lp, "w")) != NULL) {
+            cs.flags = IPL_CONTEXTFLAGS_VALIDATION;
+            cs.logCallback = phonon_logcb;
+        }
+    }
     if (iplContextCreate(&cs, &S.ctx) != IPL_STATUS_SUCCESS) return fail("iplContextCreate", NULL);
     IPLAudioSettings as;
     as.samplingRate = sample_rate;
@@ -303,7 +321,7 @@ __declspec(dllexport) int ta_init(const wchar_t* dir, int sample_rate) {
     S.simset.maxNumSources = TA_VOICES + 2;
     S.simset.numThreads = 2;
     S.simset.rayBatchSize = 1;
-    S.simset.numVisSamples = 0;
+    S.simset.numVisSamples = 4; /* pathing's run-time visibility checks (validation: must be > 0) */
     S.simset.samplingRate = sample_rate;
     S.simset.frameSize = 1024;
     if (iplSimulatorCreate(S.ctx, &S.simset, &S.sim) != IPL_STATUS_SUCCESS) return fail("iplSimulatorCreate", NULL);
@@ -532,10 +550,17 @@ static void step_batch(BakeCtx* c) {
 /* the bake reads the scene: nothing else may simulate on it meanwhile (the
  * reflection thread and the direct simulation wait; sound plays on) */
 static volatile LONG bake_locked;
+/* Steam Audio 4.8.1 calls the progress callback without checking it for
+ * NULL (a call to address 0): always pass one. It records the progress. */
+static volatile LONG bake_permille;
+static void IPLCALL bake_progress(IPLfloat32 f, void* unused) {
+    (void)unused;
+    InterlockedExchange(&bake_permille, (LONG)(f * 1000.0f));
+}
 static void step_bake(BakeCtx* c) {
     EnterCriticalSection(&S.lock);
     InterlockedExchange(&bake_locked, 1);
-    iplPathBakerBake(S.ctx, c->bp, NULL, NULL);
+    iplPathBakerBake(S.ctx, c->bp, bake_progress, NULL);
     InterlockedExchange(&bake_locked, 0);
     LeaveCriticalSection(&S.lock);
 }
@@ -570,10 +595,12 @@ static DWORD WINAPI bake_thread(LPVOID unused) {
             gp.type = IPL_PROBEGENERATIONTYPE_UNIFORMFLOOR;
             gp.spacing = 3.0f;
             gp.height = 1.5f;
-            /* the unit cube onto the mesh bounds: scale, then translate (row-major) */
+            /* the volume over the mesh bounds: Steam Audio's unit cube is
+             * centred on the origin (not 0..1 as phonon.h says), so scale by
+             * the size and translate to the centre (row-major) */
             for (int k = 0; k < 3; k++) {
                 gp.transform.elements[k][k] = S.mesh_hi[k] - S.mesh_lo[k];
-                gp.transform.elements[k][3] = S.mesh_lo[k];
+                gp.transform.elements[k][3] = 0.5f * (S.mesh_lo[k] + S.mesh_hi[k]);
             }
             gp.transform.elements[3][3] = 1.0f;
             BakeCtx c;
@@ -693,8 +720,7 @@ __declspec(dllexport) int ta_set_scene(const float* verts, int nverts, const int
     }
     LeaveCriticalSection(&S.lock);
     if (!ok) fail("Steam Audio scene creation failed", NULL);
-    /* pathing is opt-in (s_pathing; no cache file = off): Steam Audio
-     * 4.8.1's path baker faults on these maps */
+    /* pathing: s_pathing (no cache file = off) */
     if (ok && ntris > 0 && !S.nopath && S.path_cache[0]) {
         InterlockedExchange(&S.path_state, 1);
         /* a large stack: the visibility graph build recurses deeply */
@@ -1011,9 +1037,9 @@ __declspec(dllexport) void ta_stats(char* buf, int len) {
     }
     char name[128] = "?";
     if (S.up && drivers > 0) FMOD_System_GetDriverInfo(S.sys, 0, name, sizeof(name), NULL, NULL, NULL, NULL);
-    _snprintf(buf, len - 1, "sounds %u loaded / %u failed, plays %u / %u failed, %d voices playing, master volume %.2f, output %s (%d devices), scene %s, pathing %s (%d probes, stage %ld, fault %ld code %08lx), limiter %s peak %.3f, enhanced %d, nan blocks %ld, direct runs %u, mean occlusion %.2f over %d, master peak %.3f, listener (%.1f %.1f %.1f) a source (%.1f %.1f %.1f) mesh (%.0f %.0f %.0f)-(%.0f %.0f %.0f), last error: %s",
+    _snprintf(buf, len - 1, "sounds %u loaded / %u failed, plays %u / %u failed, %d voices playing, master volume %.2f, output %s (%d devices), scene %s, pathing %s (%d probes, bake %ld/1000, stage %ld, fault %ld code %08lx), limiter %s peak %.3f, enhanced %d, nan blocks %ld, direct runs %u, mean occlusion %.2f over %d, master peak %.3f, listener (%.1f %.1f %.1f) a source (%.1f %.1f %.1f) mesh (%.0f %.0f %.0f)-(%.0f %.0f %.0f), last error: %s",
               S.loads, S.load_fails, S.plays, S.play_fails, playing, vol, name, drivers, S.have_scene ? "yes" : "no",
-              S.path_state == 2 ? "ready" : S.path_state == 1 ? "baking" : S.path_state == 3 ? "failed" : "off", S.num_probes, S.bake_stage, S.bake_fault, (unsigned long)S.bake_code,
+              S.path_state == 2 ? "ready" : S.path_state == 1 ? "baking" : S.path_state == 3 ? "failed" : "off", S.num_probes, bake_permille, S.bake_stage, S.bake_fault, (unsigned long)S.bake_code,
               lim_state, lim_peak, S.enhanced, S.nan_blocks,
               S.direct_runs, nocc ? occ / nocc : 1.0f, nocc, peak, S.listener[0], S.listener[1], S.listener[2], sp[0], sp[1], sp[2],
               S.mesh_lo[0], S.mesh_lo[1], S.mesh_lo[2], S.mesh_hi[0], S.mesh_hi[1], S.mesh_hi[2], g_err[0] ? g_err : "none");
@@ -1187,6 +1213,7 @@ __declspec(dllexport) void ta_update(void) {
             in.distanceAttenuationModel.type = IPL_DISTANCEATTENUATIONTYPE_DEFAULT;
             in.airAbsorptionModel.type = IPL_AIRABSORPTIONTYPE_DEFAULT;
             in.reverbScale[0] = in.reverbScale[1] = in.reverbScale[2] = 1.0f;
+            in.hybridReverbTransitionTime = 1.0f; in.hybridReverbOverlapPercent = 0.25f; /* validation: must be > 0 even unused */
             if (path) {
                 in.pathingProbes = S.probes;
                 in.visRadius = 0.5f;
@@ -1207,6 +1234,7 @@ __declspec(dllexport) void ta_update(void) {
             in.flags = IPL_SIMULATIONFLAGS_REFLECTIONS;
             in.source = sh.listener;
             in.reverbScale[0] = in.reverbScale[1] = in.reverbScale[2] = 1.0f;
+            in.hybridReverbTransitionTime = 1.0f; in.hybridReverbOverlapPercent = 0.25f; /* validation: must be > 0 even unused */
             in.distanceAttenuationModel.type = IPL_DISTANCEATTENUATIONTYPE_DEFAULT;
             in.airAbsorptionModel.type = IPL_AIRABSORPTIONTYPE_DEFAULT;
             iplSourceSetInputs(S.reverb_src, IPL_SIMULATIONFLAGS_REFLECTIONS, &in);

@@ -52,6 +52,11 @@ func _run() -> void:
 	await _shot("sss_%s_vanilla.png" % team)
 	game.exec("r_enhanced 1")
 	await _shot("sss_%s_enhanced.png" % team)
+	# r_modelDebug: 1 no SSS, 2 no reflections, 3 neither, 4 linear tone mapping
+	for d in [1, 2, 3, 4]:
+		game.exec("r_modelDebug %d" % d)
+		await _shot("sss_%s_dbg%d.png" % [team, d])
+	game.exec("r_modelDebug 0")
 	# leave the archived settings as they were
 	game.exec("cg_thirdPerson 0")
 	game.exec("cg_thirdPersonAngle 0")

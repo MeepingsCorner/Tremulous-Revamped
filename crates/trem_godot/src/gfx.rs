@@ -43,6 +43,7 @@ pub const GFX_CVARS: &[(&str, &str)] = &[
     ("r_upscale", "-1"),
     ("r_upscaleScale", "0.77"),
     ("r_dlightShadows", "4"),
+    ("r_modelDebug", "0"),
 ];
 
 /// The node group of every dynamic light (muzzle flashes, missiles,
@@ -193,8 +194,11 @@ impl GpuCaps {
     }
 }
 
-pub fn set_global(enhanced: bool) {
-    RenderingServer::singleton().global_shader_parameter_set(GLOBAL, &(if enhanced { 1.0f32 } else { 0.0 }).to_variant());
+/// `model_debug` (r_modelDebug, enhanced only) rides in the fraction: the
+/// model shader reads 1 = no subsurface scattering, 2 = no reflections, 3 both.
+pub fn set_global(enhanced: bool, model_debug: i32) {
+    let v = if enhanced { 1.0 + 0.01 * model_debug.clamp(0, 9) as f32 } else { 0.0 };
+    RenderingServer::singleton().global_shader_parameter_set(GLOBAL, &v.to_variant());
 }
 
 /// The vanilla environment's settings as build_level made them.
@@ -683,6 +687,7 @@ pub struct GfxRuntime {
     pub pending_fogs: Vec<crate::bspview::FogBox>,
     pub fog_nodes: Vec<Gd<godot::classes::FogVolume>>,
     pub upscale: (i32, f32),
+    pub model_debug: i32,
     pub shadow_max: usize,
 }
 
@@ -701,10 +706,15 @@ impl GfxRuntime {
         }
         let failed = self.rt.as_ref().is_some_and(|r| r.bind().failed());
         let mode = if enhanced && !failed && self.rt.is_some() { caps.rt_mode(rt_cvar) } else { RtMode::Off };
-        set_global(enhanced);
+        set_global(enhanced, self.model_debug);
         fx_set_enhanced(enhanced);
         if let (Some(env), Some(v)) = (self.env.as_mut(), self.vanilla.as_ref()) {
             configure_environment(env, enhanced, mode, v);
+        }
+        // r_modelDebug 4: the enhanced mode without AgX (linear tone mapping)
+        if let (Some(env), true) = (self.env.as_mut(), enhanced && self.model_debug == 4) {
+            env.set_tonemapper(ToneMapper::LINEAR);
+            env.set_tonemap_exposure(1.0);
         }
         let hide = enhanced && self.is_bsp;
         if let Some(s) = self.sun.as_mut() {
