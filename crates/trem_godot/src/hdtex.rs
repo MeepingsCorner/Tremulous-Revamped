@@ -165,6 +165,11 @@ pub fn get(key: &str) -> Option<HdTex> {
     STORE.with(|s| s.borrow_mut().as_mut().and_then(|h| h.get(key)))
 }
 
+/// Drop the loaded pack before the engine shuts down (TremGame::exit_tree).
+pub fn release() {
+    STORE.with(|s| s.borrow_mut().take());
+}
+
 pub fn active() -> bool {
     STORE.with(|s| s.borrow().is_some())
 }

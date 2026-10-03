@@ -30,7 +30,46 @@ pub const GLOBAL: &str = "trem_gfx";
 /// (name, default) of the port's graphics cvars (CVAR_ARCHIVE).
 /// r_rtBackend: 0 auto (from the GPU), 1 software, 2 hardware (where supported)
 /// r_hdTextures / r_hdPath ("" = user://hd) / r_hdMaxSize: the 4K pack (hdtex.rs)
-pub const GFX_CVARS: &[(&str, &str)] = &[("r_enhanced", "1"), ("r_rtMode", "-1"), ("r_rtBackend", "0"), ("r_hdTextures", "1"), ("r_hdPath", ""), ("r_hdMaxSize", "4096")];
+/// r_upscale: -1 auto (FSR 2 while ray / path tracing), 0 off, 1 always
+/// (enhanced only); r_upscaleScale: its render scale
+/// r_dlightShadows: how many dynamic lights cast shadows (enhanced only)
+pub const GFX_CVARS: &[(&str, &str)] = &[
+    ("r_enhanced", "1"),
+    ("r_rtMode", "-1"),
+    ("r_rtBackend", "0"),
+    ("r_hdTextures", "1"),
+    ("r_hdPath", ""),
+    ("r_hdMaxSize", "4096"),
+    ("r_upscale", "-1"),
+    ("r_upscaleScale", "0.77"),
+    ("r_dlightShadows", "4"),
+];
+
+/// The node group of every dynamic light (muzzle flashes, missiles,
+/// effects): enhanced mode gives the most important of them shadows.
+pub const DLIGHT_GROUP: &str = "trem_dlight";
+
+/// FSR 2 for this frame? -1 auto: while ray / path tracing (the expensive
+/// modes); 1: always in the enhanced mode; 0 / vanilla: never.
+pub fn upscale_on(r_upscale: i32, enhanced: bool, rt: RtMode) -> bool {
+    enhanced && (r_upscale > 0 || (r_upscale < 0 && rt != RtMode::Off))
+}
+
+/// The dynamic lights that get shadows: the `max` with the largest
+/// range / (1 + distance to the view), so near and big lights win.
+pub fn shadow_casters(lights: &[(f32, f32)], max: usize) -> Vec<usize> {
+    let mut idx: Vec<usize> = (0..lights.len()).collect();
+    let score = |i: usize| lights[i].1 / (1.0 + lights[i].0);
+    idx.sort_by(|&a, &b| score(b).partial_cmp(&score(a)).unwrap_or(std::cmp::Ordering::Equal));
+    idx.truncate(max);
+    idx
+}
+
+/// Godot FogMaterial density for a Q3 fog opaque at `dist` Quake units:
+/// transmittance e^(-density * d) reaches 2% at d = dist / 32 (Godot units).
+pub fn fog_density(dist: f32) -> f32 {
+    50f32.ln() / (dist / 32.0).max(0.05)
+}
 
 pub fn register_cvars(c: &mut Cvars) {
     for (n, v) in GFX_CVARS {
@@ -225,6 +264,15 @@ pub fn configure_environment(env: &mut Gd<Environment>, enhanced: bool, rt: RtMo
     env.set_ssr_fade_in(0.15);
     env.set_ssr_fade_out(2.0);
     env.set_ssr_depth_tolerance(0.3);
+    // volumetric fog: the fog brushes' volumes, and a faint haze the
+    // dynamic lights scatter in (light shafts from muzzle flashes, missiles)
+    env.set_volumetric_fog_enabled(true);
+    env.set_volumetric_fog_density(0.004);
+    env.set_volumetric_fog_albedo(Color::from_rgb(0.85, 0.85, 0.9));
+    env.set_volumetric_fog_anisotropy(0.35);
+    env.set_volumetric_fog_length(64.0);
+    env.set_volumetric_fog_sky_affect(0.0);
+    env.set_volumetric_fog_temporal_reprojection_enabled(true);
     env.set_adjustment_enabled(true);
     env.set_adjustment_brightness(1.0);
     env.set_adjustment_contrast(1.04);
@@ -238,6 +286,183 @@ pub fn configure_environment(env: &mut Gd<Environment>, enhanced: bool, rt: RtMo
 
 /// Surface response guessed from a texture's name (the data has no
 /// material maps): (roughness, specular, normal-map strength).
+/// Enhanced-mode material of a surface class (by texture name): metalness,
+/// a wet clearcoat sheen, and how strongly the close-range detail normal
+/// map applies; `base` is surface_props' (roughness, specular, bump).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SurfaceClass {
+    pub base: (f32, f32, f32),
+    pub metal: f32,
+    pub wet: f32,
+    pub detail: f32,
+}
+
+pub fn surface_class(name: &str) -> SurfaceClass {
+    let n = name.to_ascii_lowercase();
+    let has = |k: &[&str]| k.iter().any(|s| n.contains(s));
+    let base = surface_props(name);
+    let (metal, wet, detail) = if has(&["glass", "window", "screen", "monitor"]) {
+        (0.0, 0.0, 0.0)
+    } else if has(&["water", "slime", "liquid", "goo"]) {
+        (0.0, 0.8, 0.1)
+    } else if has(&["chrome", "steel", "shiny", "polish"]) {
+        (0.6, 0.0, 0.15)
+    } else if has(&["metal", "floor", "grate", "plate", "panel", "pipe", "trim", "base_", "human", "tech", "door", "rail"]) {
+        (0.35, 0.0, 0.25)
+    } else if has(&["organic", "alien", "creep", "flesh", "egg", "hive"]) {
+        (0.0, 0.55, 0.45)
+    } else if has(&["rock", "stone", "dirt", "ground", "concrete", "cement", "brick", "sand", "terrain", "cliff"]) {
+        (0.0, 0.0, 0.6)
+    } else if has(&["light", "lamp", "glow", "flare"]) {
+        (0.0, 0.0, 0.0)
+    } else {
+        (0.0, 0.0, 0.35)
+    };
+    SurfaceClass { base, metal, wet, detail }
+}
+
+/// A tileable detail normal map (256², several octaves of periodic value
+/// noise): the close-range relief that stands in for parallax mapping.
+pub fn detail_normal_rgba(size: usize) -> Vec<u8> {
+    let hash = |x: i64, y: i64, p: i64| -> f32 {
+        let (x, y) = (x.rem_euclid(p), y.rem_euclid(p));
+        let mut h = (x as u64).wrapping_mul(0x9E3779B97F4A7C15) ^ (y as u64).wrapping_mul(0xC2B2AE3D27D4EB4F);
+        h ^= h >> 29;
+        h = h.wrapping_mul(0xBF58476D1CE4E5B9);
+        h ^= h >> 32;
+        (h & 0xFFFF) as f32 / 65535.0
+    };
+    let noise = |u: f32, v: f32, p: i64| -> f32 {
+        let (x0, y0) = (u.floor(), v.floor());
+        let (fx, fy) = (u - x0, v - y0);
+        let (sx, sy) = (fx * fx * (3.0 - 2.0 * fx), fy * fy * (3.0 - 2.0 * fy));
+        let (x0, y0) = (x0 as i64, y0 as i64);
+        let a = hash(x0, y0, p) + (hash(x0 + 1, y0, p) - hash(x0, y0, p)) * sx;
+        let b = hash(x0, y0 + 1, p) + (hash(x0 + 1, y0 + 1, p) - hash(x0, y0 + 1, p)) * sx;
+        a + (b - a) * sy
+    };
+    let height = |x: f32, y: f32| -> f32 {
+        let mut h = 0.0;
+        let mut amp = 0.5;
+        for o in 0..4 {
+            let p = 8i64 << o; // lattice periods divide the tile: seamless
+            h += amp * noise(x / size as f32 * p as f32, y / size as f32 * p as f32, p);
+            amp *= 0.5;
+        }
+        h
+    };
+    let mut out = vec![0u8; size * size * 4];
+    for y in 0..size {
+        for x in 0..size {
+            let (fx, fy) = (x as f32, y as f32);
+            let dx = height(fx + 1.0, fy) - height(fx - 1.0, fy);
+            let dy = height(fx, fy + 1.0) - height(fx, fy - 1.0);
+            let n = [-dx * 6.0, -dy * 6.0, 1.0];
+            let l = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt();
+            let i = (y * size + x) * 4;
+            for k in 0..3 {
+                out[i + k] = ((n[k] / l * 0.5 + 0.5) * 255.0).round() as u8;
+            }
+            out[i + 3] = 255;
+        }
+    }
+    out
+}
+
+thread_local! {
+    static DETAIL: std::cell::RefCell<Option<Gd<ImageTexture>>> = const { std::cell::RefCell::new(None) };
+    /// particle materials: (material, alpha-blended smoke?) - switched with the mode
+    static FX_MATS: std::cell::RefCell<Vec<(Gd<godot::classes::StandardMaterial3D>, bool)>> = const { std::cell::RefCell::new(Vec::new()) };
+    static FX_HAZE: std::cell::RefCell<Vec<Gd<godot::classes::MeshInstance3D>>> = const { std::cell::RefCell::new(Vec::new()) };
+    static FX_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Drop the thread-local engine objects (TremGame::exit_tree).
+pub fn release_statics() {
+    DETAIL.with(|d| d.borrow_mut().take());
+    FX_MATS.with(|v| v.borrow_mut().clear());
+    FX_HAZE.with(|v| v.borrow_mut().clear());
+}
+
+/// The shared detail normal map (built once).
+pub fn detail_normal() -> Gd<ImageTexture> {
+    DETAIL.with(|d| {
+        d.borrow_mut()
+            .get_or_insert_with(|| {
+                let n = 256;
+                let img = Image::create_from_data(n as i32, n as i32, false, ImageFormat::RGBA8, &PackedByteArray::from(detail_normal_rgba(n))).expect("detail normal");
+                let mut img = img;
+                img.generate_mipmaps();
+                ImageTexture::create_from_image(&img).expect("detail texture")
+            })
+            .clone()
+    })
+}
+
+fn fx_apply(m: &mut Gd<godot::classes::StandardMaterial3D>, smoke: bool, on: bool) {
+    use godot::classes::base_material_3d::{Feature, ShadingMode, TextureParam};
+    // soft particles: fade where they meet the world instead of a hard cut
+    m.set_proximity_fade_enabled(on);
+    m.set_proximity_fade_distance(0.4);
+    if smoke {
+        // lit smoke: shaded by the scene's lights, with a floor of its own colour
+        m.set_shading_mode(if on { ShadingMode::PER_VERTEX } else { ShadingMode::UNSHADED });
+        m.set_feature(Feature::EMISSION, on);
+        if on {
+            if let Some(t) = m.get_texture(TextureParam::ALBEDO) {
+                m.set_texture(TextureParam::EMISSION, &t);
+            }
+            m.set_emission(Color::from_rgb(1.0, 1.0, 1.0));
+            m.set_emission_energy_multiplier(0.45);
+        }
+    }
+}
+
+/// A particle material (particles.rs) that follows the graphics mode.
+pub fn register_fx_material(mut m: Gd<godot::classes::StandardMaterial3D>, smoke: bool) {
+    fx_apply(&mut m, smoke, FX_ON.get());
+    FX_MATS.with(|v| v.borrow_mut().push((m, smoke)));
+}
+
+/// A heat-haze layer (flame particles), shown in the enhanced mode only.
+pub fn register_fx_haze(mut mi: Gd<godot::classes::MeshInstance3D>) {
+    mi.set_visible(FX_ON.get());
+    FX_HAZE.with(|v| v.borrow_mut().push(mi));
+}
+
+fn fx_set_enhanced(on: bool) {
+    if FX_ON.get() == on {
+        return;
+    }
+    FX_ON.set(on);
+    FX_MATS.with(|v| {
+        for (m, smoke) in v.borrow_mut().iter_mut() {
+            fx_apply(m, *smoke, on);
+        }
+    });
+    FX_HAZE.with(|v| {
+        let mut v = v.borrow_mut();
+        v.retain(|m| m.is_instance_valid());
+        for m in v.iter_mut() {
+            m.set_visible(on);
+        }
+    });
+}
+
+/// The heat haze over flame particles: the screen behind, wobbled.
+pub const HAZE_SHADER: &str = r#"
+shader_type spatial;
+render_mode unshaded, blend_mix, depth_draw_never, cull_disabled;
+uniform sampler2D screen : hint_screen_texture, filter_linear_mipmap;
+uniform sampler2D tex : filter_linear_mipmap;
+void fragment() {
+    float a = texture(tex, UV).a * COLOR.a;
+    vec2 off = vec2(sin(TIME * 21.0 + UV.y * 31.0), cos(TIME * 17.0 + UV.x * 29.0)) * 0.008 * a;
+    ALBEDO = textureLod(screen, SCREEN_UV + off, 0.0).rgb;
+    ALPHA = clamp(a * 1.4, 0.0, 0.9);
+}
+"#;
+
 pub fn surface_props(name: &str) -> (f32, f32, f32) {
     let n = name.to_ascii_lowercase();
     let has = |k: &[&str]| k.iter().any(|s| n.contains(s));
@@ -352,6 +577,30 @@ pub fn derive_maps_image(img: &Gd<Image>, want_normal: bool) -> (Option<Gd<Image
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn upscale_auto_only_with_ray_tracing_in_enhanced() {
+        use super::{upscale_on, RtMode};
+        assert!(upscale_on(-1, true, RtMode::Pathtrace));
+        assert!(!upscale_on(-1, true, RtMode::Off));
+        assert!(upscale_on(1, true, RtMode::Off));
+        assert!(!upscale_on(1, false, RtMode::Raytrace));
+        assert!(!upscale_on(0, true, RtMode::Raytrace));
+    }
+
+    #[test]
+    fn near_big_lights_get_the_shadows() {
+        // (distance, range)
+        let l = [(50.0, 6.0), (2.0, 9.0), (10.0, 6.0), (1.0, 2.0)];
+        assert_eq!(super::shadow_casters(&l, 2), vec![1, 3]);
+        assert!(super::shadow_casters(&l, 0).is_empty());
+    }
+
+    #[test]
+    fn fog_is_opaque_at_its_distance() {
+        let d = super::fog_density(512.0);
+        assert!(((-d * 16.0f32).exp() - 0.02).abs() < 1e-3);
+    }
+
     use super::*;
 
     #[test]
@@ -370,6 +619,33 @@ mod tests {
         assert_eq!(gl.rt_mode(2), RtMode::Off);
         assert_eq!(nv.rt_mode(2), RtMode::Pathtrace);
         assert_eq!(amd.rt_mode(0), RtMode::Off);
+    }
+
+    #[test]
+    fn surface_classes() {
+        assert!(super::surface_class("textures/atcs/floor_grate").metal > 0.2);
+        assert!(super::surface_class("textures/arachnid2/creep_wall").wet > 0.3);
+        assert_eq!(super::surface_class("textures/atcs/glass_1").detail, 0.0);
+    }
+
+    #[test]
+    fn detail_normal_tiles_seamlessly() {
+        let n = 128;
+        let d = super::detail_normal_rgba(n);
+        // across the seam (x = n-1 next to x = 0) neighbours differ no more
+        // than neighbours inside the tile do: no visible edge when repeated
+        let px = |x: usize, y: usize| [d[(y * n + x) * 4] as i32, d[(y * n + x) * 4 + 1] as i32];
+        let diff = |a: [i32; 2], b: [i32; 2]| (a[0] - b[0]).abs().max((a[1] - b[1]).abs());
+        let (mut seam, mut inner) = (0, 0);
+        for y in 0..n {
+            seam = seam.max(diff(px(n - 1, y), px(0, y)));
+            for x in 0..n - 1 {
+                inner = inner.max(diff(px(x, y), px(x + 1, y)));
+            }
+        }
+        assert!(seam <= inner, "seam {seam} vs inside {inner}");
+        // it has relief: not every normal points straight up
+        assert!(d.chunks(4).any(|p| (p[0] as i32 - 128).abs() > 10));
     }
 
     #[test]
@@ -403,6 +679,11 @@ pub struct GfxRuntime {
     pub sky: [f32; 3],
     /// the next map's ray tracer geometry (from the loader)
     pub pending_geom: Option<crate::bspview::RtGeometry>,
+    /// the next map's fog brushes, and the volumes made from them
+    pub pending_fogs: Vec<crate::bspview::FogBox>,
+    pub fog_nodes: Vec<Gd<godot::classes::FogVolume>>,
+    pub upscale: (i32, f32),
+    pub shadow_max: usize,
 }
 
 impl GfxRuntime {
@@ -421,6 +702,7 @@ impl GfxRuntime {
         let failed = self.rt.as_ref().is_some_and(|r| r.bind().failed());
         let mode = if enhanced && !failed && self.rt.is_some() { caps.rt_mode(rt_cvar) } else { RtMode::Off };
         set_global(enhanced);
+        fx_set_enhanced(enhanced);
         if let (Some(env), Some(v)) = (self.env.as_mut(), self.vanilla.as_ref()) {
             configure_environment(env, enhanced, mode, v);
         }
@@ -435,15 +717,31 @@ impl GfxRuntime {
                 l.set_visible(!hide);
             }
         }
+        for f in self.fog_nodes.iter_mut() {
+            if f.is_instance_valid() {
+                f.set_visible(enhanced);
+            }
+        }
+        let fsr = upscale_on(self.upscale.0, enhanced, mode);
         if let Some(vp) = self.view_vp.as_mut().filter(|v| v.is_instance_valid()) {
-            use godot::classes::viewport::{Msaa, ScreenSpaceAa};
+            use godot::classes::viewport::{Msaa, Scaling3DMode, ScreenSpaceAa};
             let orig = *self.view_msaa.get_or_insert((vp.get_msaa_3d(), vp.get_screen_space_aa()));
-            if mode != RtMode::Off {
+            if fsr {
+                // FSR 2 is temporal: it antialiases itself
                 vp.set_msaa_3d(Msaa::DISABLED);
-                vp.set_screen_space_aa(ScreenSpaceAa::SMAA);
+                vp.set_screen_space_aa(ScreenSpaceAa::DISABLED);
+                vp.set_scaling_3d_mode(Scaling3DMode::FSR2);
+                vp.set_scaling_3d_scale(self.upscale.1.clamp(0.5, 1.0));
             } else {
-                vp.set_msaa_3d(orig.0);
-                vp.set_screen_space_aa(orig.1);
+                vp.set_scaling_3d_mode(Scaling3DMode::BILINEAR);
+                vp.set_scaling_3d_scale(1.0);
+                if mode != RtMode::Off {
+                    vp.set_msaa_3d(Msaa::DISABLED);
+                    vp.set_screen_space_aa(ScreenSpaceAa::SMAA);
+                } else {
+                    vp.set_msaa_3d(orig.0);
+                    vp.set_screen_space_aa(orig.1);
+                }
             }
         }
         if let Some(rt) = self.rt.as_mut() {
@@ -457,6 +755,48 @@ impl GfxRuntime {
         }
         self.enhanced = enhanced;
         self.mode = mode;
+    }
+
+    /// The map's fog brushes as volumetric fog volumes (shown in the
+    /// enhanced mode only), children of `parent`.
+    pub fn build_fogs(&mut self, parent: &mut Gd<Node>) {
+        use godot::classes::{FogMaterial, FogVolume};
+        self.fog_nodes.retain(|f| f.is_instance_valid());
+        for mut f in self.fog_nodes.drain(..) {
+            f.queue_free();
+        }
+        for b in std::mem::take(&mut self.pending_fogs) {
+            let c = [0, 1, 2].map(|k| (b.mins[k] + b.maxs[k]) * 0.5);
+            let size = crate::geom::q2g_dir(&[b.maxs[0] - b.mins[0], b.maxs[1] - b.mins[1], b.maxs[2] - b.mins[2]]).abs() * crate::geom::SCALE;
+            let mut m = FogMaterial::new_gd();
+            m.set_density(fog_density(b.dist));
+            m.set_albedo(Color::from_rgb(b.color[0], b.color[1], b.color[2]));
+            // Q3 fog is not lit: a little of its own colour keeps it visible in the dark
+            m.set_emission(Color::from_rgb(b.color[0] * 0.15, b.color[1] * 0.15, b.color[2] * 0.15));
+            m.set_edge_fade(0.2);
+            let mut v = FogVolume::new_alloc();
+            v.set_size(size);
+            v.set_material(&m);
+            v.set_position(crate::geom::q2g(&c));
+            v.set_visible(self.enhanced);
+            parent.add_child(&v);
+            self.fog_nodes.push(v);
+        }
+    }
+
+    /// Enhanced mode: shadows for the `shadow_max` dynamic lights that
+    /// matter most; vanilla: none (r_dynamiclight lights cast no shadows).
+    pub fn shadow_budget(&self, tree: &mut Gd<godot::classes::SceneTree>, view: Vector3) {
+        let mut lights: Vec<Gd<godot::classes::OmniLight3D>> = tree.get_nodes_in_group(DLIGHT_GROUP).iter_shared().filter_map(|n| n.try_cast::<godot::classes::OmniLight3D>().ok()).filter(|l| l.is_visible_in_tree()).collect();
+        let max = if self.enhanced { self.shadow_max } else { 0 };
+        let info: Vec<(f32, f32)> = lights.iter().map(|l| (l.get_global_position().distance_to(view), l.get_param(godot::classes::light_3d::Param::RANGE))).collect();
+        let on = shadow_casters(&info, max);
+        for (i, l) in lights.iter_mut().enumerate() {
+            let want = on.contains(&i);
+            if l.has_shadow() != want {
+                l.set_shadow(want);
+            }
+        }
     }
 
     pub fn describe(&self) -> String {

@@ -2073,6 +2073,10 @@ mod render {
                     }
                 }
             }
+            // enhanced mode: soft particles, lit smoke (gfx.rs)
+            if matches!(info.blend, Blend::Add | Blend::Mix) {
+                crate::gfx::register_fx_material(m.clone(), info.blend == Blend::Mix);
+            }
             m
         }
 
@@ -2085,6 +2089,25 @@ mod render {
                 mi.set_material_override(&Self::material(lib, shader));
                 mi.set_cast_shadows_setting(ShadowCastingSetting::OFF);
                 self.root.add_child(&mi);
+                // enhanced mode: heat haze behind flame particles (the same
+                // quads, drawn first, bending the screen behind them)
+                if key.contains("flame") || key.contains("fire") {
+                    let mut sh = godot::classes::Shader::new_gd();
+                    sh.set_code(crate::gfx::HAZE_SHADER);
+                    let mut hm = godot::classes::ShaderMaterial::new_gd();
+                    hm.set_shader(&sh);
+                    hm.set_render_priority(-1);
+                    if let Some(t) = lib.texture(shader) {
+                        hm.set_shader_parameter("tex", &t.to_variant());
+                    }
+                    let mut haze = MeshInstance3D::new_alloc();
+                    haze.set_mesh(&mesh);
+                    haze.set_material_override(&hm);
+                    haze.set_cast_shadows_setting(ShadowCastingSetting::OFF);
+                    haze.set_scale(Vector3::splat(1.6));
+                    self.root.add_child(&haze);
+                    crate::gfx::register_fx_haze(haze);
+                }
                 self.layers.insert(key.clone(), Layer { mesh, _mi: mi, dirty: false });
             }
             self.layers.get_mut(&key).unwrap()
@@ -2152,6 +2175,7 @@ mod render {
             while self.lights.len() < lights.len().min(MAX_LIGHTS) {
                 let mut l = OmniLight3D::new_alloc();
                 l.set_shadow(false);
+                l.add_to_group(crate::gfx::DLIGHT_GROUP);
                 self.root.add_child(&l);
                 self.lights.push(l);
             }

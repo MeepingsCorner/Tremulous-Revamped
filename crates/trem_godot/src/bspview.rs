@@ -40,6 +40,12 @@ uniform float rough = 0.7;
 uniform float spec = 0.4;
 uniform float bump = 1.0;
 uniform float irr_scale = 1.0;
+// enhanced materials (gfx.rs surface_class): metalness, a wet clearcoat,
+// and the close-range detail normal map that stands in for parallax mapping
+uniform float metal = 0.0;
+uniform float wet = 0.0;
+uniform float detail_k = 0.0;
+uniform sampler2D detail : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 varying vec4 grid;
 void vertex() {
     grid = CUSTOM0;
@@ -77,10 +83,26 @@ void fragment() {
             NORMAL_MAP = tn;
             NORMAL_MAP_DEPTH = bump;
         }
+        // close range: fine relief (whiteout blend over the surface's own
+        // normal map), fading out by 12 units so distant walls stay calm
+        float near = 1.0 - smoothstep(4.0, 12.0, length(VERTEX));
+        if (detail_k > 0.0 && near > 0.0) {
+            vec3 base_n = has_nrm ? texture(nrm, UV).xyz * 2.0 - 1.0 : vec3(0.0, 0.0, 1.0);
+            vec3 dn = texture(detail, UV * 6.0).xyz * 2.0 - 1.0;
+            vec3 bn = normalize(vec3(base_n.xy + dn.xy * detail_k * near, base_n.z * dn.z));
+            NORMAL_MAP = bn * 0.5 + 0.5;
+            NORMAL_MAP_DEPTH = has_nrm ? bump : 1.0;
+        }
+        // cavity: dark texels (cracks, seams) take less of the baked light
+        float lum = dot(alb, vec3(0.3, 0.59, 0.11));
+        AO = mix(1.0, clamp(lum * 4.0, 0.55, 1.0), 0.35);
+        AO_LIGHT_AFFECT = 0.0;
         ALBEDO = alb;
         ROUGHNESS = rough;
         SPECULAR = spec;
-        METALLIC = 0.0;
+        METALLIC = metal;
+        CLEARCOAT = wet;
+        CLEARCOAT_ROUGHNESS = 0.15;
         IRRADIANCE = vec4(baked * k * irr_scale, 1.0);
         RADIANCE = vec4(baked * 0.3 * irr_scale, 1.0);
     }
@@ -221,6 +243,42 @@ fn tessellate(ctrl: &[V], w: usize, h: usize, out_v: &mut Vec<V>, out_i: &mut Ve
 
 /// Mesh builder for one BSP: lightmaps, shader-script images and the three
 /// world shaders are made once and shared by every model drawn from it.
+/// A fog brush (tr_bsp.c R_LoadFogs): its box in Quake units and the
+/// shader's `fogparms` colour and distance to opaque.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FogBox {
+    pub mins: [f32; 3],
+    pub maxs: [f32; 3],
+    pub color: [f32; 3],
+    pub dist: f32,
+}
+
+/// The fogs lump (dfog_t: shader[64], brushNum, visibleSide) as boxes: the
+/// first six sides of a fog brush are its axial planes, -x +x -y +y -z +z.
+pub fn fog_boxes(bsp: &Bsp, scripts: &HashMap<String, crate::assets::ShaderInfo>) -> Vec<FogBox> {
+    let Some(raw) = bsp.raw.get(&trem_sim::kernel::bsp::LUMP_FOGS) else { return Vec::new() };
+    let mut out = Vec::new();
+    for rec in raw.chunks_exact(72) {
+        let name: String = rec[..64].iter().take_while(|&&c| c != 0).map(|&c| c as char).collect();
+        let brush = i32::from_le_bytes([rec[64], rec[65], rec[66], rec[67]]);
+        let Some(b) = usize::try_from(brush).ok().and_then(|i| bsp.brushes.get(i)) else { continue };
+        if b.num_sides < 6 {
+            continue;
+        }
+        let dist = |k: i32| -> Option<f32> {
+            let side = bsp.brush_sides.get((b.first_side + k) as usize)?;
+            bsp.planes.get(side.plane as usize).map(|p| p[3])
+        };
+        let (Some(x0), Some(x1), Some(y0), Some(y1), Some(z0), Some(z1)) = (dist(0), dist(1), dist(2), dist(3), dist(4), dist(5)) else { continue };
+        let Some((color, d)) = scripts.get(&name.to_lowercase()).and_then(|i| i.fog) else { continue };
+        if d <= 0.0 {
+            continue;
+        }
+        out.push(FogBox { mins: [-x0, -y0, -z0], maxs: [x1, y1, z1], color, dist: d });
+    }
+    out
+}
+
 pub struct BspRender {
     script_images: HashMap<String, crate::assets::ShaderInfo>,
     lightmaps: Vec<Gd<ImageTexture>>,
@@ -239,6 +297,8 @@ pub struct BspRender {
     pub rt: RtGeometry,
     /// the same, unsplit, for the acoustic simulation (fmodaudio.rs)
     pub acoustic: crate::fmodaudio::AcousticMesh,
+    /// the map's fog brushes (enhanced mode: volumetric fog volumes)
+    pub fogs: Vec<FogBox>,
 }
 
 impl BspRender {
@@ -261,7 +321,14 @@ impl BspRender {
             grid: LightGrid::from_bsp(bsp),
             rt: RtGeometry::default(),
             acoustic: Default::default(),
+            fogs: Vec::new(),
         }
+        .with_fogs(bsp)
+    }
+
+    fn with_fogs(mut self, bsp: &Bsp) -> Self {
+        self.fogs = fog_boxes(bsp, &self.script_images);
+        self
     }
 
     /// The light map at (s, t) of light map `lm` (bilinear), or the vertex
@@ -453,10 +520,15 @@ impl BspRender {
             mat.set_shader_parameter("use_lm", &use_lm.to_variant());
             mat.set_shader_parameter("lm", &(if use_lm { self.lightmaps[lm as usize].clone() } else { self.white.clone() }).to_variant());
             if opaque {
-                let (rough, spec, bump) = crate::gfx::surface_props(&bsp.shaders[shader_num as usize].name);
+                let class = crate::gfx::surface_class(&bsp.shaders[shader_num as usize].name);
+                let (rough, spec, bump) = class.base;
                 mat.set_shader_parameter("rough", &rough.to_variant());
                 mat.set_shader_parameter("spec", &spec.to_variant());
                 mat.set_shader_parameter("bump", &bump.to_variant());
+                mat.set_shader_parameter("metal", &class.metal.to_variant());
+                mat.set_shader_parameter("wet", &class.wet.to_variant());
+                mat.set_shader_parameter("detail_k", &class.detail.to_variant());
+                mat.set_shader_parameter("detail", &crate::gfx::detail_normal().to_variant());
                 if let Some(n) = nrm.as_ref() {
                     mat.set_shader_parameter("nrm", &n.to_variant());
                     mat.set_shader_parameter("has_nrm", &true.to_variant());
@@ -638,6 +710,28 @@ impl LightGrid {
         let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
         let d = if l > 0.0 { [d[0] / l, d[1] / l, d[2] / l] } else { [0.0, 0.0, 1.0] };
         (amb, dir, d)
+    }
+}
+
+#[cfg(test)]
+mod fog_tests {
+    use super::*;
+    use trem_sim::kernel::bsp::{DBrush, DBrushSide};
+
+    #[test]
+    fn fog_brush_becomes_a_box() {
+        let mut bsp = Bsp::default();
+        // planes -x (dist 10 -> min x -10), +x 20, -y 5, +y 6, -z 1, +z 2
+        bsp.planes = vec![[-1.0, 0.0, 0.0, 10.0], [1.0, 0.0, 0.0, 20.0], [0.0, -1.0, 0.0, 5.0], [0.0, 1.0, 0.0, 6.0], [0.0, 0.0, -1.0, 1.0], [0.0, 0.0, 1.0, 2.0]];
+        bsp.brush_sides = (0..6).map(|i| DBrushSide { plane: i, shader: 0 }).collect();
+        bsp.brushes = vec![DBrush { first_side: 0, num_sides: 6, shader: 0 }];
+        let mut rec = vec![0u8; 72];
+        rec[..9].copy_from_slice(b"fog/green");
+        bsp.raw.insert(trem_sim::kernel::bsp::LUMP_FOGS, rec);
+        let mut scripts = HashMap::new();
+        scripts.insert("fog/green".to_string(), crate::assets::ShaderInfo { fog: Some(([0.1, 0.8, 0.2], 300.0)), ..Default::default() });
+        let f = fog_boxes(&bsp, &scripts);
+        assert_eq!(f, vec![FogBox { mins: [-10.0, -5.0, -1.0], maxs: [20.0, 6.0, 2.0], color: [0.1, 0.8, 0.2], dist: 300.0 }]);
     }
 }
 

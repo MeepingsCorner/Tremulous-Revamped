@@ -714,6 +714,7 @@ impl MissileVis {
         };
         let light = cfg.missile_dlight[mode].or(cfg.missile_dlight[0]).map(|c| {
             let mut l = godot::classes::OmniLight3D::new_alloc();
+            l.add_to_group(crate::gfx::DLIGHT_GROUP);
             l.set_color(Color::from_rgb(c[0], c[1], c[2]));
             l.set_param(godot::classes::light_3d::Param::RANGE, 6.0);
             l.set_param(godot::classes::light_3d::Param::ENERGY, 2.0);

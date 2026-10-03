@@ -14,7 +14,12 @@ use std::collections::HashMap;
 use crate::cmd::{Cvars, CVAR_ARCHIVE};
 
 /// (name, default) of the sound path's cvars (CVAR_ARCHIVE).
-pub const FMOD_CVARS: &[(&str, &str)] = &[("s_fmod", "1"), ("s_occlusion", "-1"), ("s_reverb", "1")];
+/// s_hdSounds: the enhanced mode plays the high-band pack (tools/sfx_hd.py,
+/// user://sfx_hd) where it has a sound; vanilla always plays the originals.
+/// s_pathing: sound paths around corners (Steam Audio pathing, enhanced
+/// mode). Off by default: Steam Audio 4.8.1's path baker faults on these
+/// maps (an access violation inside phonon.dll, caught, but not safe).
+pub const FMOD_CVARS: &[(&str, &str)] = &[("s_fmod", "1"), ("s_occlusion", "-1"), ("s_reverb", "1"), ("s_hdSounds", "1"), ("s_pathing", "0")];
 
 /// `s_occlusion`: -1 follows the graphics mode (on in enhanced, off in
 /// vanilla, which has no occlusion), 0 always off, 1 always on.
@@ -24,6 +29,34 @@ pub fn occlusion_on(s_occlusion: i32, enhanced: bool) -> bool {
         v if v < 0 => enhanced,
         _ => true,
     }
+}
+
+/// The player's own sounds, placed relative to the view in enhanced mode
+/// (vanilla plays them at the player's origin, or centred).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OwnSound {
+    /// firing, dry fire, weapon change: at the gun, ahead and to the right
+    Weapon,
+    /// footsteps, landing, splashes: at the feet
+    Feet,
+    /// taunt, pain, death, jump: centred (unspatialized)
+    Voice,
+    /// anything else of the player's: at the chest
+    Body,
+}
+
+/// Where an own sound plays: None = centred, else a point in Godot space
+/// from the view origin and basis (`fwd`, `right`, `up` unit vectors).
+pub fn own_sound_pos(kind: OwnSound, eye: [f32; 3], fwd: [f32; 3], right: [f32; 3], up: [f32; 3]) -> Option<[f32; 3]> {
+    // Godot units are 32 Quake units: the gun sits ~16 units ahead, 6 right
+    // and 6 down of the eye; the feet 50 below it (26 eye + 24 to the floor)
+    let (f, r, u) = match kind {
+        OwnSound::Voice => return None,
+        OwnSound::Weapon => (0.5, 0.2, -0.2),
+        OwnSound::Feet => (0.0, 0.0, -1.56),
+        OwnSound::Body => (0.0, 0.0, -0.8),
+    };
+    Some([0, 1, 2].map(|i| eye[i] + fwd[i] * f + right[i] * r + up[i] * u))
 }
 
 pub fn register_cvars(c: &mut Cvars) {
@@ -47,6 +80,30 @@ pub struct AcousticMesh {
     pub verts: Vec<[f32; 3]>,
     pub tris: Vec<[i32; 3]>,
     pub mats: Vec<i32>,
+}
+
+impl AcousticMesh {
+    /// FNV-1a over the geometry: names a map's pathing cache, and changes
+    /// whenever the map (or the acoustic mesh builder) does.
+    pub fn hash(&self) -> u64 {
+        let mut h: u64 = 0xcbf29ce484222325;
+        let mut eat = |b: &[u8]| {
+            for &x in b {
+                h = (h ^ x as u64).wrapping_mul(0x100000001b3);
+            }
+        };
+        for v in &self.verts {
+            for c in v {
+                eat(&c.to_le_bytes());
+            }
+        }
+        for t in &self.tris {
+            for i in t {
+                eat(&i.to_le_bytes());
+            }
+        }
+        h
+    }
 }
 
 /// The material of a texture name (trem_audio.c's table).
@@ -85,6 +142,8 @@ mod sys {
         pub voice_playing: unsafe extern "C" fn(i32) -> i32,
         pub listener: unsafe extern "C" fn(*const f32, *const f32, *const f32),
         pub options: unsafe extern "C" fn(i32, i32, f32),
+        pub enhanced: unsafe extern "C" fn(i32),
+        pub pathing_cache: unsafe extern "C" fn(*const c_char),
         pub update: unsafe extern "C" fn(),
         pub stats: unsafe extern "C" fn(*mut c_char, i32),
     }
@@ -123,6 +182,8 @@ mod sys {
             voice_playing: f!("ta_voice_playing"),
             listener: f!("ta_listener"),
             options: f!("ta_options"),
+            enhanced: f!("ta_enhanced"),
+            pathing_cache: f!("ta_pathing_cache"),
             update: f!("ta_update"),
             stats: f!("ta_stats"),
         })
@@ -143,6 +204,7 @@ pub struct FmodAudio {
     api: sys::Api,
     sounds: HashMap<String, i32>,
     options: (bool, bool, f32),
+    enhanced: Option<bool>,
 }
 
 impl FmodAudio {
@@ -155,7 +217,7 @@ impl FmodAudio {
         if unsafe { (api.init)(w.as_ptr(), sample_rate) } == 0 {
             return Err(sys::error(&api));
         }
-        Ok(FmodAudio { api, sounds: HashMap::new(), options: (true, true, -1.0) })
+        Ok(FmodAudio { api, sounds: HashMap::new(), options: (true, true, -1.0), enhanced: None })
     }
     #[cfg(not(windows))]
     pub fn open(_dir: &str, _sample_rate: i32) -> Result<Self, String> {
@@ -182,16 +244,21 @@ impl FmodAudio {
 
     /// Play a sound at `pos` (Godot space), or as the listener's own sound.
     /// Returns a voice handle.
-    pub fn play(&mut self, id: i32, pos: Option<[f32; 3]>, looped: bool, volume: f32) -> i32 {
+    /// `pos` None plays it unspatialized (vanilla's local sounds); `own`
+    /// marks the player's own positioned sounds, which are never occluded.
+    /// `big`: a loud sound (fire, impact, explosion), which gets its own
+    /// reflections in enhanced mode.
+    pub fn play(&mut self, id: i32, pos: Option<[f32; 3]>, own: bool, big: bool, looped: bool, volume: f32) -> i32 {
         #[cfg(windows)]
         {
             let p = pos.unwrap_or([0.0; 3]);
+            let kind = (if pos.is_none() { 1 } else if own { 2 } else { 0 }) | if big { 4 } else { 0 };
             // SAFETY: the API of trem_audio.c
-            unsafe { (self.api.play)(id, p.as_ptr(), pos.is_none() as i32, looped as i32, volume) }
+            unsafe { (self.api.play)(id, p.as_ptr(), kind, looped as i32, volume) }
         }
         #[cfg(not(windows))]
         {
-            let _ = (id, pos, looped, volume);
+            let _ = (id, pos, own, big, looped, volume);
             -1
         }
     }
@@ -234,6 +301,17 @@ impl FmodAudio {
         #[cfg(not(windows))]
         let _ = (pos, fwd, up);
     }
+    /// Enhanced-mode audio (limiter, doppler, reflections, pathing).
+    pub fn set_enhanced(&mut self, on: bool) {
+        if self.enhanced == Some(on) {
+            return;
+        }
+        self.enhanced = Some(on);
+        #[cfg(windows)]
+        unsafe {
+            (self.api.enhanced)(on as i32)
+        }
+    }
     pub fn set_options(&mut self, occlusion: bool, reverb: bool, master: f32) {
         if (occlusion, reverb, master) == self.options {
             return;
@@ -244,9 +322,21 @@ impl FmodAudio {
             (self.api.options)(occlusion as i32, reverb as i32, master)
         }
     }
-    pub fn set_scene(&mut self, m: &AcousticMesh) -> bool {
+    /// `cache_dir`: where the map's baked pathing probes are kept
+    /// (`<mesh hash>.probes`), so each map is baked once.
+    /// `cache_dir` None: no pathing for this scene.
+    pub fn set_scene(&mut self, m: &AcousticMesh, cache_dir: Option<&str>) -> bool {
         #[cfg(windows)]
         {
+            let file = match cache_dir {
+                Some(d) => {
+                    let _ = std::fs::create_dir_all(d);
+                    format!("{}/{:016x}.probes\0", d.trim_end_matches(['/', '\\']), m.hash())
+                }
+                None => "\0".to_string(),
+            };
+            // SAFETY: a NUL-terminated UTF-8 path; trem_audio.c copies it
+            unsafe { (self.api.pathing_cache)(file.as_ptr() as *const std::ffi::c_char) };
             let v: Vec<f32> = m.verts.iter().flat_map(|p| *p).collect();
             let t: Vec<i32> = m.tris.iter().flat_map(|p| *p).collect();
             // SAFETY: Steam Audio copies the mesh
@@ -254,7 +344,7 @@ impl FmodAudio {
         }
         #[cfg(not(windows))]
         {
-            let _ = m;
+            let _ = (m, cache_dir);
             false
         }
     }
@@ -268,7 +358,7 @@ impl FmodAudio {
     pub fn stats(&self) -> String {
         #[cfg(windows)]
         {
-            let mut buf = vec![0 as std::ffi::c_char; 1024];
+            let mut buf = vec![0 as std::ffi::c_char; 2048];
             // SAFETY: ta_stats writes a NUL-terminated string into the buffer
             unsafe {
                 (self.api.stats)(buf.as_mut_ptr(), buf.len() as i32);
@@ -309,6 +399,26 @@ mod tests {
         c.set("s_occlusion", "0"); // the player's own choice afterwards
         super::register_cvars(&mut c);
         assert_eq!(c.integer("s_occlusion"), 0);
+    }
+
+    #[test]
+    fn own_sounds_sit_at_gun_feet_or_centre() {
+        use super::{own_sound_pos, OwnSound};
+        let (e, f, r, u) = ([0.0, 2.0, 0.0], [0.0, 0.0, -1.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]);
+        assert_eq!(own_sound_pos(OwnSound::Voice, e, f, r, u), None);
+        let g = own_sound_pos(OwnSound::Weapon, e, f, r, u).unwrap();
+        assert!(g[0] > 0.0 && g[1] < 2.0 && g[2] < 0.0, "gun ahead, right, below: {g:?}");
+        let ft = own_sound_pos(OwnSound::Feet, e, f, r, u).unwrap();
+        assert!((ft[1] - 0.44).abs() < 1e-4);
+    }
+
+    #[test]
+    fn mesh_hash_names_the_geometry() {
+        let a = super::AcousticMesh { verts: vec![[0.0, 1.0, 2.0]], tris: vec![[0, 0, 0]], mats: vec![0] };
+        let mut b = super::AcousticMesh { verts: vec![[0.0, 1.0, 2.0]], tris: vec![[0, 0, 0]], mats: vec![0] };
+        assert_eq!(a.hash(), b.hash());
+        b.verts[0][1] = 1.5;
+        assert_ne!(a.hash(), b.hash());
     }
 
     #[test]

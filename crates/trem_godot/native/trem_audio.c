@@ -95,13 +95,35 @@ typedef struct {
     int active;
     unsigned gen;
     float occlusion; /* last value given to the spatializer (1 = clear) */
+    int own;         /* the player's own placed sound: never occluded, no doppler */
+    int big;         /* a loud sound (fire, impact, explosion): own reflections in enhanced mode */
+    IPLSource xsrc;  /* reflections + pathing: in the simulator only while needed */
+    int x_added;
+    float prev[3], vel[3]; /* for doppler: last position, velocity (Godot units / s) */
+    double prev_t;
+    float base_freq, doppler;
 } Voice;
 
 static void voice_direct(Voice* v, float occlusion, const float* transmission);
+static void stop_pathing(void);
 
 static struct {
     int up;
+    int enhanced;      /* ta_enhanced: limiter, doppler, reflections, pathing */
+    FMOD_DSP* limiter; /* on the master bus, bypassed in vanilla mode */
+    float lis_prev[3], lis_vel[3];
+    double lis_t;
+    /* sound pathing (enhanced): probes + baked paths per map, cached on disk */
+    char path_cache[MAX_PATH * 2]; /* ta_pathing_cache: the file for the next scene */
+    HANDLE bake_thread;
+    IPLProbeBatch probes;          /* set (under lock) once baked or loaded */
+    volatile LONG path_state;      /* 0 none, 1 baking, 2 ready, 3 failed */
+    int num_probes;
+    volatile LONG bake_stage;      /* the step the bake reached: 1 generate, 2 batch, 3 bake, 4 save, 5 done */
+    volatile LONG bake_fault;      /* the step an access violation stopped (0 none) */
+    volatile LONG bake_code;       /* its exception code (0xC0000005 access violation, 0xC00000FD stack overflow) */
     int nospat; /* tests: TREM_FMOD_NOSPAT=1 plays every sound unspatialized */
+    int nopath; /* tests: TREM_FMOD_NOPATH=1 bakes no pathing */
     int noreverb; /* tests: TREM_FMOD_NOREVERB=1 leaves the reverb send out */
     FMOD_CHANNEL* tone; /* tests: TREM_FMOD_TONE=1, 440 Hz at 0.5 for the first frames */
     int tone_frames;
@@ -187,6 +209,7 @@ static DWORD WINAPI reflection_thread(LPVOID unused) {
         if (!S.have_scene || !S.reflections) continue;
         EnterCriticalSection(&S.lock);
         iplSimulatorRunReflections(S.sim);
+        if (S.enhanced && S.path_state == 2) iplSimulatorRunPathing(S.sim);
         LeaveCriticalSection(&S.lock);
     }
     return 0;
@@ -238,6 +261,7 @@ __declspec(dllexport) int ta_init(const wchar_t* dir, int sample_rate) {
         char e[8];
         S.nospat = GetEnvironmentVariableA("TREM_FMOD_NOSPAT", e, sizeof(e)) > 0 && e[0] == '1';
         S.noreverb = GetEnvironmentVariableA("TREM_FMOD_NOREVERB", e, sizeof(e)) > 0 && e[0] == '1';
+        S.nopath = GetEnvironmentVariableA("TREM_FMOD_NOPATH", e, sizeof(e)) > 0 && e[0] == '1';
         S.tone_frames = (GetEnvironmentVariableA("TREM_FMOD_TONE", e, sizeof(e)) > 0 && e[0] == '1') ? 90 : 0;
         char tp[MAX_PATH];
         if (GetEnvironmentVariableA("TREM_FMOD_TRACE", tp, sizeof(tp)) > 0) S.trace = fopen(tp, "w");
@@ -268,7 +292,7 @@ __declspec(dllexport) int ta_init(const wchar_t* dir, int sample_rate) {
     if (iplHRTFCreate(S.ctx, &as, &hs, &S.hrtf) != IPL_STATUS_SUCCESS) return fail("iplHRTFCreate", NULL);
 
     memset(&S.simset, 0, sizeof(S.simset));
-    S.simset.flags = (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_REFLECTIONS);
+    S.simset.flags = (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_REFLECTIONS | IPL_SIMULATIONFLAGS_PATHING);
     S.simset.sceneType = IPL_SCENETYPE_DEFAULT;
     S.simset.reflectionType = IPL_REFLECTIONEFFECTTYPE_CONVOLUTION;
     S.simset.maxNumOcclusionSamples = 16;
@@ -329,10 +353,15 @@ __declspec(dllexport) int ta_init(const wchar_t* dir, int sample_rate) {
     /* the voices: one spatializer + one simulation source each */
     for (int i = 0; i < TA_VOICES; i++) {
         Voice* v = &S.v[i];
+        /* the direct (occlusion) source is always simulated; the extra one
+         * (reflections, pathing) only while its voice needs it: a source in
+         * the simulator without inputs must not be simulated */
         ss.flags = IPL_SIMULATIONFLAGS_DIRECT;
         if (iplSourceCreate(S.sim, &ss, &v->src) != IPL_STATUS_SUCCESS) return fail("iplSourceCreate", NULL);
         iplSourceAdd(v->src, S.sim);
-        v->handle = S.fAdd(v->src);
+        ss.flags = (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_REFLECTIONS | IPL_SIMULATIONFLAGS_PATHING);
+        if (iplSourceCreate(S.sim, &ss, &v->xsrc) != IPL_STATUS_SUCCESS) return fail("iplSourceCreate", NULL);
+        v->handle = S.fAdd(v->xsrc);
         if (FMOD_System_CreateDSPByPlugin(S.sys, S.spat_plugin, &v->dsp) != FMOD_OK) return fail("FMOD_System_CreateDSPByPlugin spatializer", NULL);
         FMOD_DSP_SetMeteringEnabled(v->dsp, 1, 1);
         FMOD_DSP_SetParameterInt(v->dsp, SPAT_SIMULATION_OUTPUTS_HANDLE, v->handle);
@@ -358,10 +387,28 @@ __declspec(dllexport) int ta_init(const wchar_t* dir, int sample_rate) {
         FMOD_DSP_SetParameterInt(v->dsp, SPAT_APPLY_TRANSMISSION, 2);
         voice_direct(v, 1.0f, NULL);
         FMOD_DSP_SetParameterBool(v->dsp, SPAT_APPLY_REFLECTIONS, 0);
+        FMOD_DSP_SetParameterBool(v->dsp, SPAT_APPLY_PATHING, 0);
+        FMOD_DSP_SetParameterBool(v->dsp, SPAT_PATHING_BINAURAL, 1);
+        FMOD_DSP_SetParameterFloat(v->dsp, SPAT_PATHING_MIXLEVEL, 1.0f);
+        FMOD_DSP_SetParameterFloat(v->dsp, SPAT_REFLECTIONS_MIXLEVEL, 0.8f);
         FMOD_DSP_SetParameterBool(v->dsp, SPAT_DIRECT_BINAURAL, 1);
         FMOD_DSP_SetParameterInt(v->dsp, SPAT_HRTF_INTERPOLATION, 1);
     }
     iplSimulatorCommit(S.sim);
+
+    /* enhanced mode: a limiter on the master bus, so many loud sounds at
+     * once (gunfire peaks at full scale) do not clip */
+    {
+        FMOD_CHANNELGROUP* master = NULL;
+        if (FMOD_System_GetMasterChannelGroup(S.sys, &master) == FMOD_OK &&
+            FMOD_System_CreateDSPByType(S.sys, FMOD_DSP_TYPE_LIMITER, &S.limiter) == FMOD_OK) {
+            FMOD_DSP_SetParameterFloat(S.limiter, FMOD_DSP_LIMITER_RELEASETIME, 50.0f);
+            FMOD_DSP_SetParameterFloat(S.limiter, FMOD_DSP_LIMITER_CEILING, -1.0f);
+            FMOD_DSP_SetParameterFloat(S.limiter, FMOD_DSP_LIMITER_MAXIMIZERGAIN, 0.0f);
+            FMOD_ChannelGroup_AddDSP(master, FMOD_CHANNELCONTROL_DSP_HEAD, S.limiter);
+            FMOD_DSP_SetBypass(S.limiter, 1);
+        }
+    }
 
     S.occlusion = 1;
     S.reflections = 1;
@@ -382,6 +429,7 @@ __declspec(dllexport) void ta_shutdown(void) {
         WaitForSingleObject(S.thread, 2000);
         CloseHandle(S.thread);
     }
+    stop_pathing();
     for (int i = 0; i < TA_VOICES; i++) {
         Voice* v = &S.v[i];
         if (v->ch) FMOD_Channel_Stop(v->ch);
@@ -390,6 +438,10 @@ __declspec(dllexport) void ta_shutdown(void) {
         if (v->src) {
             iplSourceRemove(v->src, S.sim);
             iplSourceRelease(&v->src);
+        }
+        if (v->xsrc) {
+            if (v->x_added) iplSourceRemove(v->xsrc, S.sim);
+            iplSourceRelease(&v->xsrc);
         }
     }
     if (S.reverb_dsp) FMOD_DSP_Release(S.reverb_dsp);
@@ -409,6 +461,184 @@ __declspec(dllexport) void ta_shutdown(void) {
 
 /* The map's geometry for occlusion, transmission and reflections (Godot
  * space). `mat`: per-triangle material index into the table below. */
+/* The file the next scene's pathing probes are cached in (UTF-8). */
+__declspec(dllexport) void ta_pathing_cache(const char* utf8_path) {
+    if (!utf8_path) return;
+    strncpy(S.path_cache, utf8_path, sizeof(S.path_cache) - 1);
+    S.path_cache[sizeof(S.path_cache) - 1] = 0;
+}
+
+static IPLBakedDataIdentifier path_id(void) {
+    IPLBakedDataIdentifier id;
+    memset(&id, 0, sizeof(id));
+    id.type = IPL_BAKEDDATATYPE_PATHING;
+    id.variation = IPL_BAKEDDATAVARIATION_DYNAMIC;
+    return id;
+}
+
+static int load_probes(IPLProbeBatch* out) {
+    FILE* f = S.path_cache[0] ? fopen(S.path_cache, "rb") : NULL;
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    int ok = 0;
+    IPLbyte* buf = n > 0 ? (IPLbyte*)malloc((size_t)n) : NULL;
+    if (buf && fread(buf, 1, (size_t)n, f) == (size_t)n) {
+        IPLSerializedObjectSettings so;
+        memset(&so, 0, sizeof(so));
+        so.data = buf;
+        so.size = (IPLsize)n;
+        IPLSerializedObject obj = NULL;
+        if (iplSerializedObjectCreate(S.ctx, &so, &obj) == IPL_STATUS_SUCCESS) {
+            ok = iplProbeBatchLoad(S.ctx, obj, out) == IPL_STATUS_SUCCESS;
+            iplSerializedObjectRelease(&obj);
+        }
+    }
+    free(buf);
+    fclose(f);
+    return ok;
+}
+
+static void save_probes(IPLProbeBatch batch) {
+    if (!S.path_cache[0]) return;
+    IPLSerializedObjectSettings so;
+    memset(&so, 0, sizeof(so));
+    IPLSerializedObject obj = NULL;
+    if (iplSerializedObjectCreate(S.ctx, &so, &obj) != IPL_STATUS_SUCCESS) return;
+    iplProbeBatchSave(batch, obj);
+    FILE* f = fopen(S.path_cache, "wb");
+    if (f) {
+        fwrite(iplSerializedObjectGetData(obj), 1, (size_t)iplSerializedObjectGetSize(obj), f);
+        fclose(f);
+    }
+    iplSerializedObjectRelease(&obj);
+}
+
+/* Steam Audio calls guarded by structured exception handling (MSVC): a fault
+ * in a bake step disables pathing instead of taking the game down. */
+typedef struct {
+    IPLProbeArray arr;
+    IPLProbeBatch batch;
+    IPLProbeGenerationParams* gp;
+    IPLPathBakeParams* bp;
+} BakeCtx;
+
+static void step_generate(BakeCtx* c) { iplProbeArrayGenerateProbes(c->arr, S.scene, c->gp); }
+static void step_batch(BakeCtx* c) {
+    iplProbeBatchAddProbeArray(c->batch, c->arr);
+    iplProbeBatchCommit(c->batch);
+}
+/* the bake reads the scene: nothing else may simulate on it meanwhile (the
+ * reflection thread and the direct simulation wait; sound plays on) */
+static volatile LONG bake_locked;
+static void step_bake(BakeCtx* c) {
+    EnterCriticalSection(&S.lock);
+    InterlockedExchange(&bake_locked, 1);
+    iplPathBakerBake(S.ctx, c->bp, NULL, NULL);
+    InterlockedExchange(&bake_locked, 0);
+    LeaveCriticalSection(&S.lock);
+}
+
+static int guarded(void (*f)(BakeCtx*), BakeCtx* c, LONG stage) {
+    InterlockedExchange(&S.bake_stage, stage);
+#ifdef _MSC_VER
+    __try {
+        f(c);
+    } __except (InterlockedExchange(&S.bake_code, (LONG)GetExceptionCode()), EXCEPTION_EXECUTE_HANDLER) {
+        InterlockedExchange(&S.bake_fault, stage);
+        if (InterlockedExchange(&bake_locked, 0)) LeaveCriticalSection(&S.lock);
+        return 0;
+    }
+#else
+    f(c);
+#endif
+    return 1;
+}
+
+/* Probes ~1.5 m above every floor, 3 m apart, and the paths between them:
+ * baked once per map in the background, then cached. */
+static DWORD WINAPI bake_thread(LPVOID unused) {
+    (void)unused;
+    IPLProbeBatch batch = NULL;
+    int ok = load_probes(&batch);
+    if (!ok) {
+        IPLProbeArray arr = NULL;
+        if (iplProbeArrayCreate(S.ctx, &arr) == IPL_STATUS_SUCCESS) {
+            IPLProbeGenerationParams gp;
+            memset(&gp, 0, sizeof(gp));
+            gp.type = IPL_PROBEGENERATIONTYPE_UNIFORMFLOOR;
+            gp.spacing = 3.0f;
+            gp.height = 1.5f;
+            /* the unit cube onto the mesh bounds: scale, then translate (row-major) */
+            for (int k = 0; k < 3; k++) {
+                gp.transform.elements[k][k] = S.mesh_hi[k] - S.mesh_lo[k];
+                gp.transform.elements[k][3] = S.mesh_lo[k];
+            }
+            gp.transform.elements[3][3] = 1.0f;
+            BakeCtx c;
+            memset(&c, 0, sizeof(c));
+            c.arr = arr;
+            c.gp = &gp;
+            int gen_ok = guarded(step_generate, &c, 1);
+            S.num_probes = gen_ok ? iplProbeArrayGetNumProbes(arr) : 0;
+            if (gen_ok && S.num_probes > 0 && iplProbeBatchCreate(S.ctx, &batch) == IPL_STATUS_SUCCESS && (c.batch = batch, guarded(step_batch, &c, 2))) {
+                IPLPathBakeParams bp;
+                memset(&bp, 0, sizeof(bp));
+                bp.scene = S.scene;
+                bp.probeBatch = batch;
+                bp.identifier = path_id();
+                bp.numSamples = 1;
+                bp.radius = 0.5f;
+                bp.threshold = 0.1f;
+                bp.visRange = 50.0f;
+                bp.pathRange = 100.0f;
+                bp.numThreads = 2;
+                c.bp = &bp;
+                ok = guarded(step_bake, &c, 3) && S.path_state == 1; /* not faulted, not cancelled */
+                if (ok) {
+                    InterlockedExchange(&S.bake_stage, 4);
+                    save_probes(batch);
+                    InterlockedExchange(&S.bake_stage, 5);
+                }
+            }
+            iplProbeArrayRelease(&arr);
+        }
+    }
+    if (ok && S.path_state == 1) {
+        EnterCriticalSection(&S.lock);
+        S.probes = batch;
+        S.num_probes = iplProbeBatchGetNumProbes(batch);
+        iplSimulatorAddProbeBatch(S.sim, batch);
+        iplSimulatorCommit(S.sim);
+        InterlockedExchange(&S.path_state, 2);
+        LeaveCriticalSection(&S.lock);
+    } else {
+        if (batch) iplProbeBatchRelease(&batch);
+        if (S.path_state == 1) InterlockedExchange(&S.path_state, 3);
+    }
+    return 0;
+}
+
+static void stop_pathing(void) {
+    if (S.bake_thread) {
+        InterlockedExchange(&S.path_state, 0);
+        iplPathBakerCancelBake(S.ctx);
+        WaitForSingleObject(S.bake_thread, INFINITE);
+        CloseHandle(S.bake_thread);
+        S.bake_thread = NULL;
+    }
+    EnterCriticalSection(&S.lock);
+    if (S.probes) {
+        iplSimulatorRemoveProbeBatch(S.sim, S.probes);
+        iplSimulatorCommit(S.sim);
+        iplProbeBatchRelease(&S.probes);
+    }
+    S.num_probes = 0;
+    InterlockedExchange(&S.path_state, 0);
+    LeaveCriticalSection(&S.lock);
+}
+
 __declspec(dllexport) int ta_set_scene(const float* verts, int nverts, const int* tris, int ntris, const int* mat) {
     static IPLMaterial materials[3] = {
         /* generic / concrete-ish */
@@ -419,6 +649,7 @@ __declspec(dllexport) int ta_set_scene(const float* verts, int nverts, const int
         {{0.13f, 0.20f, 0.24f}, 0.10f, {0.015f, 0.002f, 0.001f}},
     };
     if (!S.up) return 0;
+    stop_pathing(); /* the old scene's probes and any bake in progress */
     EnterCriticalSection(&S.lock);
     InterlockedExchange(&S.have_scene, 0);
     if (S.mesh) {
@@ -462,6 +693,13 @@ __declspec(dllexport) int ta_set_scene(const float* verts, int nverts, const int
     }
     LeaveCriticalSection(&S.lock);
     if (!ok) fail("Steam Audio scene creation failed", NULL);
+    /* pathing is opt-in (s_pathing; no cache file = off): Steam Audio
+     * 4.8.1's path baker faults on these maps */
+    if (ok && ntris > 0 && !S.nopath && S.path_cache[0]) {
+        InterlockedExchange(&S.path_state, 1);
+        /* a large stack: the visibility graph build recurses deeply */
+        S.bake_thread = CreateThread(NULL, 64u << 20, bake_thread, NULL, STACK_SIZE_PARAM_IS_A_RESERVATION, NULL);
+    }
     return ok;
 }
 
@@ -530,6 +768,31 @@ static int unpoison(FMOD_DSP* dsp) {
 }
 
 /* Occlusion and transmission for a voice (user-defined apply type). */
+static double now_s(void) {
+    LARGE_INTEGER f, c;
+    QueryPerformanceFrequency(&f);
+    QueryPerformanceCounter(&c);
+    return (double)c.QuadPart / (double)f.QuadPart;
+}
+
+/* Velocity from successive positions (smoothed, clamped to 60 units/s). */
+static void track(float* prev, float* vel, double* prev_t, const float* pos) {
+    double t = now_s();
+    double dt = t - *prev_t;
+    if (*prev_t > 0 && dt > 0.004 && dt < 0.5) {
+        for (int k = 0; k < 3; k++) {
+            float v = (float)((pos[k] - prev[k]) / dt);
+            if (v > 60.0f) v = 60.0f;
+            if (v < -60.0f) v = -60.0f;
+            vel[k] = vel[k] * 0.5f + v * 0.5f;
+        }
+    } else if (dt >= 0.5) {
+        vel[0] = vel[1] = vel[2] = 0.0f;
+    }
+    memcpy(prev, pos, sizeof(float) * 3);
+    *prev_t = t;
+}
+
 static void voice_direct(Voice* v, float occlusion, const float* transmission) {
     float t1[3] = {1.0f, 1.0f, 1.0f};
     const float* t = transmission ? transmission : t1;
@@ -542,8 +805,13 @@ static void voice_direct(Voice* v, float occlusion, const float* transmission) {
 
 /* Play sound `id`; `local`: the listener's own sound (no spatialization).
  * Returns a voice id (index | generation << 8) or -1. */
+/* local: 0 positioned, 1 unspatialized (vanilla local sounds), 2 the
+ * player's own positioned sound (never occluded, no doppler). */
 __declspec(dllexport) int ta_play(int id, const float* pos, int local, int loop, float volume) {
     if (!S.up || id < 0 || id >= S.nsounds) return -1;
+    int big = (local & 4) != 0;
+    int own = (local & 3) == 2;
+    local = (local & 3) == 1;
     int best = -1;
     for (int k = 0; k < TA_VOICES; k++) {
         int i = (S.next_voice + k) % TA_VOICES;
@@ -578,6 +846,18 @@ __declspec(dllexport) int ta_play(int id, const float* pos, int local, int loop,
     FMOD_Channel_SetVolume(ch, volume);
     v->ch = ch;
     v->local = local;
+    v->own = own;
+    v->big = big;
+    /* enhanced: pathing for every positioned sound once the map is baked,
+     * per-source reflections for the loud ones */
+    FMOD_DSP_SetParameterBool(v->dsp, SPAT_APPLY_PATHING, 0);
+    FMOD_DSP_SetParameterBool(v->dsp, SPAT_APPLY_REFLECTIONS, 0);
+    v->base_freq = 0.0f;
+    v->doppler = 1.0f;
+    FMOD_Channel_GetFrequency(ch, &v->base_freq);
+    v->vel[0] = v->vel[1] = v->vel[2] = 0.0f;
+    v->prev_t = 0;
+    if (pos) track(v->prev, v->vel, &v->prev_t, pos);
     v->active = 1;
     v->gen = (v->gen + 1) & 0x7fffff;
     if (pos) memcpy(v->pos, pos, sizeof(v->pos));
@@ -608,6 +888,7 @@ __declspec(dllexport) void ta_voice_set_pos(int h, const float* pos) {
     Voice* v = voice_of(h);
     if (!S.up || !v) return;
     memcpy(v->pos, pos, sizeof(v->pos));
+    track(v->prev, v->vel, &v->prev_t, pos);
 }
 
 __declspec(dllexport) void ta_voice_stop(int h) {
@@ -626,6 +907,7 @@ __declspec(dllexport) int ta_voice_playing(int h) {
 __declspec(dllexport) void ta_listener(const float* pos, const float* fwd, const float* up) {
     if (!S.up) return;
     memcpy(&S.listener[0], pos, 12);
+    track(S.lis_prev, S.lis_vel, &S.lis_t, pos);
     memcpy(&S.listener[3], fwd, 12);
     memcpy(&S.listener[6], up, 12);
     /* right = fwd x up */
@@ -634,6 +916,37 @@ __declspec(dllexport) void ta_listener(const float* pos, const float* fwd, const
     S.listener[11] = fwd[0] * up[1] - fwd[1] * up[0];
     FMOD_VECTOR p = fv(pos), f = fv(fwd), u = fv(up), vel = {0.0f, 0.0f, 0.0f};
     FMOD_System_Set3DListenerAttributes(S.sys, 0, &p, &vel, &f, &u);
+}
+
+__declspec(dllexport) void ta_enhanced(int on) {
+    if (!S.up) return;
+    S.enhanced = on;
+    if (S.limiter) FMOD_DSP_SetBypass(S.limiter, !on);
+}
+
+/* Doppler (enhanced): pitch from the source and listener velocities along
+ * the line between them; c = 343 m/s, Godot units are ~1 m. */
+static void doppler(void) {
+    for (int i = 0; i < TA_VOICES; i++) {
+        Voice* v = &S.v[i];
+        if (!v->active || !v->ch || v->base_freq <= 0.0f) continue;
+        float f = 1.0f;
+        if (S.enhanced && !v->local && !v->own) {
+            float u[3] = {S.listener[0] - v->pos[0], S.listener[1] - v->pos[1], S.listener[2] - v->pos[2]};
+            float d = sqrtf(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
+            if (d > 0.05f) {
+                float vs = (v->vel[0] * u[0] + v->vel[1] * u[1] + v->vel[2] * u[2]) / d;
+                float vl = (S.lis_vel[0] * u[0] + S.lis_vel[1] * u[1] + S.lis_vel[2] * u[2]) / d;
+                f = (343.0f - vl) / (343.0f - vs);
+                if (f < 0.5f) f = 0.5f;
+                if (f > 2.0f) f = 2.0f;
+            }
+        }
+        if (fabsf(f - v->doppler) > 0.001f) {
+            v->doppler = f;
+            FMOD_Channel_SetFrequency(v->ch, v->base_freq * f);
+        }
+    }
 }
 
 __declspec(dllexport) void ta_options(int occlusion, int reflections, float master) {
@@ -685,10 +998,23 @@ __declspec(dllexport) void ta_stats(char* buf, int len) {
         if (S.v[i].active && !S.v[i].local && voice_playing(&S.v[i])) sp = S.v[i].pos;
     float none[3] = {0.0f, 0.0f, 0.0f};
     if (!sp) sp = none;
+    const char* lim_state = "none";
+    float lim_peak = -1.0f;
+    if (S.limiter) {
+        FMOD_BOOL byp = 1;
+        FMOD_DSP_GetBypass(S.limiter, &byp);
+        lim_state = byp ? "bypassed" : "on";
+        FMOD_DSP_METERING_INFO lo;
+        memset(&lo, 0, sizeof(lo));
+        FMOD_DSP_SetMeteringEnabled(S.limiter, 0, 1);
+        if (FMOD_DSP_GetMeteringInfo(S.limiter, NULL, &lo) == FMOD_OK && lo.numchannels > 0) lim_peak = lo.peaklevel[0];
+    }
     char name[128] = "?";
     if (S.up && drivers > 0) FMOD_System_GetDriverInfo(S.sys, 0, name, sizeof(name), NULL, NULL, NULL, NULL);
-    _snprintf(buf, len - 1, "sounds %u loaded / %u failed, plays %u / %u failed, %d voices playing, master volume %.2f, output %s (%d devices), scene %s, nan blocks %ld, direct runs %u, mean occlusion %.2f over %d, master peak %.3f, listener (%.1f %.1f %.1f) a source (%.1f %.1f %.1f) mesh (%.0f %.0f %.0f)-(%.0f %.0f %.0f), last error: %s",
-              S.loads, S.load_fails, S.plays, S.play_fails, playing, vol, name, drivers, S.have_scene ? "yes" : "no", S.nan_blocks,
+    _snprintf(buf, len - 1, "sounds %u loaded / %u failed, plays %u / %u failed, %d voices playing, master volume %.2f, output %s (%d devices), scene %s, pathing %s (%d probes, stage %ld, fault %ld code %08lx), limiter %s peak %.3f, enhanced %d, nan blocks %ld, direct runs %u, mean occlusion %.2f over %d, master peak %.3f, listener (%.1f %.1f %.1f) a source (%.1f %.1f %.1f) mesh (%.0f %.0f %.0f)-(%.0f %.0f %.0f), last error: %s",
+              S.loads, S.load_fails, S.plays, S.play_fails, playing, vol, name, drivers, S.have_scene ? "yes" : "no",
+              S.path_state == 2 ? "ready" : S.path_state == 1 ? "baking" : S.path_state == 3 ? "failed" : "off", S.num_probes, S.bake_stage, S.bake_fault, (unsigned long)S.bake_code,
+              lim_state, lim_peak, S.enhanced, S.nan_blocks,
               S.direct_runs, nocc ? occ / nocc : 1.0f, nocc, peak, S.listener[0], S.listener[1], S.listener[2], sp[0], sp[1], sp[2],
               S.mesh_lo[0], S.mesh_lo[1], S.mesh_lo[2], S.mesh_hi[0], S.mesh_hi[1], S.mesh_hi[2], g_err[0] ? g_err : "none");
     buf[len - 1] = 0;
@@ -818,7 +1144,7 @@ __declspec(dllexport) void ta_update(void) {
         iplSimulatorSetSharedInputs(S.sim, (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_REFLECTIONS), &sh);
         for (int i = 0; i < TA_VOICES; i++) {
             Voice* v = &S.v[i];
-            if (!v->active || v->local) continue;
+            if (!v->active || v->local || v->own) continue;
             IPLSimulationInputs in;
             memset(&in, 0, sizeof(in));
             in.flags = IPL_SIMULATIONFLAGS_DIRECT;
@@ -835,6 +1161,46 @@ __declspec(dllexport) void ta_update(void) {
             in.numTransmissionRays = 2;
             iplSourceSetInputs(v->src, IPL_SIMULATIONFLAGS_DIRECT, &in);
         }
+        /* enhanced: the extra sources (reflections for loud sounds, paths
+         * around corners once the map is baked) join while needed */
+        int changed = 0;
+        int path_ok = S.path_state == 2 && S.probes;
+        for (int i = 0; i < TA_VOICES; i++) {
+            Voice* v = &S.v[i];
+            int refl = S.enhanced && S.reflections && v->big;
+            int path = S.enhanced && path_ok;
+            int want = v->active && !v->local && !v->own && voice_playing(v) && (refl || path);
+            if (want != v->x_added) {
+                if (want) iplSourceAdd(v->xsrc, S.sim);
+                else iplSourceRemove(v->xsrc, S.sim);
+                v->x_added = want;
+                changed = 1;
+            }
+            if (!want) continue;
+            IPLSimulationInputs in;
+            memset(&in, 0, sizeof(in));
+            in.flags = (IPLSimulationFlags)((refl ? IPL_SIMULATIONFLAGS_REFLECTIONS : 0) | (path ? IPL_SIMULATIONFLAGS_PATHING : 0));
+            in.source.origin = iv(v->pos);
+            in.source.ahead.z = -1.0f;
+            in.source.up.y = 1.0f;
+            in.source.right.x = 1.0f;
+            in.distanceAttenuationModel.type = IPL_DISTANCEATTENUATIONTYPE_DEFAULT;
+            in.airAbsorptionModel.type = IPL_AIRABSORPTIONTYPE_DEFAULT;
+            in.reverbScale[0] = in.reverbScale[1] = in.reverbScale[2] = 1.0f;
+            if (path) {
+                in.pathingProbes = S.probes;
+                in.visRadius = 0.5f;
+                in.visThreshold = 0.1f;
+                in.visRange = 50.0f;
+                in.pathingOrder = 1;
+                in.enableValidation = IPL_TRUE;
+                in.findAlternatePaths = IPL_TRUE;
+            }
+            iplSourceSetInputs(v->xsrc, in.flags, &in);
+            FMOD_DSP_SetParameterBool(v->dsp, SPAT_APPLY_REFLECTIONS, refl);
+            FMOD_DSP_SetParameterBool(v->dsp, SPAT_APPLY_PATHING, path);
+        }
+        if (changed) iplSimulatorCommit(S.sim);
         if (S.reverb_src) {
             IPLSimulationInputs in;
             memset(&in, 0, sizeof(in));
@@ -850,7 +1216,7 @@ __declspec(dllexport) void ta_update(void) {
             S.direct_runs++;
             for (int i = 0; i < TA_VOICES; i++) {
                 Voice* v = &S.v[i];
-                if (!v->active || v->local) continue;
+                if (!v->active || v->local || v->own) continue;
                 IPLSimulationOutputs out;
                 memset(&out, 0, sizeof(out));
                 iplSourceGetOutputs(v->src, IPL_SIMULATIONFLAGS_DIRECT, &out);
@@ -862,5 +1228,6 @@ __declspec(dllexport) void ta_update(void) {
     for (int i = 0; i < TA_VOICES; i++) {
         if (S.v[i].active && !voice_playing(&S.v[i])) S.v[i].active = 0;
     }
+    doppler();
     FMOD_System_Update(S.sys);
 }

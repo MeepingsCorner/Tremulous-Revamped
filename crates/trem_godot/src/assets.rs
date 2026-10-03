@@ -92,6 +92,8 @@ pub struct ShaderInfo {
     /// every image stage in order (model shaders draw the first two: an
     /// opaque base and a blended layer, e.g. the advanced marauder's skin)
     pub stages: Vec<StageInfo>,
+    /// `fogparms ( r g b ) distanceToOpaque`: a fog volume's colour and depth
+    pub fog: Option<([f32; 3], f32)>,
 }
 
 /// `tcMod` of a stage: 1 scale s t, 2 scroll s t (per second), 3 rotate
@@ -198,6 +200,15 @@ pub fn parse_shader_script(text: &str, out: &mut HashMap<String, ShaderInfo>) {
                     }
                 }
                 _ if depth == 0 => name = Some(t.to_string()),
+                _ if depth == 1 && lt == "fogparms" => {
+                    // fogparms ( r g b ) dist; the brackets may touch the numbers
+                    let nums: Vec<f32> = toks[i + 1..].iter().flat_map(|x| x.split(['(', ')'])).filter_map(|x| x.parse::<f32>().ok()).collect();
+                    if nums.len() >= 4 {
+                        info.fog = Some(([nums[0], nums[1], nums[2]], nums[3]));
+                    }
+                    i = toks.len();
+                    continue;
+                }
                 _ if depth == 1 => match lt.as_str() {
                     "qer_editorimage" => {
                         editor = toks.get(i + 1).cloned();
@@ -350,6 +361,14 @@ mod tests {
         assert_eq!(px(7, 15), &[255, 255, 255, 255]);
         assert_eq!(px(1, 1), &[32, 32, 32, 255]);
         assert_eq!(px(8, 9), &[32, 32, 32, 255]);
+    }
+
+    #[test]
+    fn fogparms_are_read() {
+        let mut m = HashMap::new();
+        parse_shader_script("textures/x/fog\n{\n surfaceparm fog\n fogparms ( 0.2 0.3 0.4 ) 512\n}\ntextures/x/fog2\n{\n fogparms (0.5 0.5 0.5) 1024\n}\n", &mut m);
+        assert_eq!(m["textures/x/fog"].fog, Some(([0.2, 0.3, 0.4], 512.0)));
+        assert_eq!(m["textures/x/fog2"].fog, Some(([0.5, 0.5, 0.5], 1024.0)));
     }
 
     #[test]

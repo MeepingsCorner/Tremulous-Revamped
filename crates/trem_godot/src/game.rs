@@ -89,6 +89,8 @@ struct MapLoad {
     rt_geom: Option<crate::bspview::RtGeometry>,
     /// the world's triangles for the acoustic simulation (fmodaudio.rs)
     acoustic: Option<crate::fmodaudio::AcousticMesh>,
+    /// the map's fog brushes (gfx.rs fog volumes)
+    fogs: Vec<crate::bspview::FogBox>,
     /// console lines to run once the map is up (rotation post commands)
     then: Vec<String>,
     /// devmap
@@ -253,6 +255,8 @@ pub struct TremGame {
     fmod_tried: bool,
     /// the next map's acoustic geometry
     fmod_scene: Option<crate::fmodaudio::AcousticMesh>,
+    /// FMOD voices that follow an entity (S_UpdateEntityPosition): (voice, entity)
+    fmod_attached: Vec<(i32, usize)>,
 }
 
 #[godot_api]
@@ -324,7 +328,16 @@ impl INode3D for TremGame {
             fmod: None,
             fmod_tried: false,
             fmod_scene: None,
+            fmod_attached: Vec::new(),
         }
+    }
+
+    /// Thread-local engine objects (the detail normal map, particle
+    /// materials) must go before the engine does: dropping a Gd after the
+    /// engine shut down panics.
+    fn exit_tree(&mut self) {
+        crate::gfx::release_statics();
+        crate::hdtex::release();
     }
 
     fn ready(&mut self) {
@@ -409,6 +422,10 @@ impl INode3D for TremGame {
             return;
         }
         self.fmod_frame();
+        if let Some(cam) = self.camera.as_ref().filter(|c| c.is_inside_tree()).map(|c| c.get_global_position()) {
+            let mut tree = self.base().get_tree();
+            self.gfx.shadow_budget(&mut tree, cam);
+        }
         if self.net_active() {
             self.net_process(delta);
             return;
@@ -1519,6 +1536,7 @@ impl TremGame {
             meshes: None,
             rt_geom: None,
             acoustic: None,
+            fogs: Vec::new(),
             brush: HashMap::new(),
             sky: None,
             sky_hd: None,
@@ -1649,6 +1667,7 @@ impl TremGame {
                 ld.meshes = Some(render.model(&ld.bsp, &mut ld.set, 0));
                 ld.rt_geom = Some(std::mem::take(&mut render.rt));
                 ld.acoustic = Some(std::mem::take(&mut render.acoustic));
+                ld.fogs = std::mem::take(&mut render.fogs);
                 ld.render = Some(render);
                 ld.info.media = 0.66;
             }
@@ -1742,6 +1761,7 @@ impl TremGame {
                 self.current = CurrentMap::Bsp(ld.paths.clone(), ld.name.clone());
                 let map = w.map;
                 self.gfx.pending_geom = ld.rt_geom.take();
+                self.gfx.pending_fogs = std::mem::take(&mut ld.fogs);
                 self.fmod_scene = ld.acoustic.take();
                 self.populate_world(w, map, ld.meshes.take(), ld.sessions.take());
                 self.brush_meshes = std::mem::take(&mut ld.brush);
@@ -2013,6 +2033,9 @@ impl TremGame {
                 self.gfx.fake_lights.push(l);
             }
         }
+        // the map's fog brushes as volumetric fog (enhanced mode)
+        let mut root: Gd<Node> = self.to_gd().upcast();
+        self.gfx.build_fogs(&mut root);
 
         // BSP world: prebuilt meshes; sheet world: brushes, one surface per material
         let is_bsp = bsp_meshes.is_some();
@@ -2116,6 +2139,8 @@ impl TremGame {
         let rt = self.client.cvars.find("r_rtMode").map(|v| v.string.trim().parse::<i32>().unwrap_or(-1)).unwrap_or(-1);
         let debug = self.client.cvars.integer("r_rtDebug");
         let backend = self.client.cvars.integer("r_rtBackend");
+        self.gfx.upscale = (self.client.cvars.integer("r_upscale"), self.client.cvars.value("r_upscaleScale"));
+        self.gfx.shadow_max = self.client.cvars.integer("r_dlightShadows").clamp(0, 16) as usize;
         self.gfx.apply(enhanced, rt, debug, backend);
     }
 
@@ -2145,7 +2170,9 @@ impl TremGame {
         }
         let Some(fm) = self.fmod.as_mut() else { return };
         if let Some(scene) = self.fmod_scene.take() {
-            if fm.set_scene(&scene) {
+            let cache = godot::classes::ProjectSettings::singleton().globalize_path("user://acoustics").to_string();
+            let pathing = self.client.cvars.integer("s_pathing") != 0;
+            if fm.set_scene(&scene, pathing.then_some(cache.as_str())) {
                 godot_print!("trem: acoustic scene: {} triangles", scene.tris.len());
             } else {
                 godot_warn!("trem: acoustic scene failed: {}", fm.error());
@@ -2165,6 +2192,20 @@ impl TremGame {
         let occ = crate::fmodaudio::occlusion_on(self.client.cvars.integer("s_occlusion"), self.client.cvars.integer("r_enhanced") != 0);
         let rev = self.client.cvars.integer("s_reverb") != 0;
         fm.set_options(occ, rev, master);
+        fm.set_enhanced(self.client.cvars.integer("r_enhanced") != 0);
+        // sounds follow their entity while they play (S_UpdateEntityPosition)
+        if let Some(w) = self.world.as_ref() {
+            self.fmod_attached.retain(|&(v, e)| {
+                if e >= w.ents.len() || !fm.playing(v) {
+                    return false;
+                }
+                let g = q2g(&crate::mapents::sound_origin(w, e));
+                fm.set_pos(v, [g.x, g.y, g.z]);
+                true
+            });
+        } else {
+            self.fmod_attached.clear();
+        }
         fm.update();
     }
 
@@ -2496,7 +2537,20 @@ impl TremGame {
             _ => None,
         };
         if let Some(p) = path {
-            self.play_sound(&p, &e.origin, false);
+            use crate::fmodaudio::OwnSound;
+            let mine = self.me.zip(self.world.as_ref()).map(|(m, w)| w.clients[m].ps.client_num) == Some(ent);
+            let kind = match e.event {
+                Event::Footstep | Event::FootstepMetal | Event::FootstepSquelch | Event::Footsplash | Event::Footwade | Event::Swim | Event::FallShort => OwnSound::Feet,
+                Event::FireWeapon | Event::FireWeapon2 | Event::FireWeapon3 | Event::Noammo | Event::ChangeWeapon => OwnSound::Weapon,
+                Event::Taunt | Event::Jump | Event::FallMedium | Event::FallFar | Event::Pain | Event::Death1 | Event::Death2 | Event::Death3 => OwnSound::Voice,
+                _ => OwnSound::Body,
+            };
+            let follow = usize::try_from(ent).ok().filter(|&i| self.world.as_ref().is_some_and(|w| i < w.ents.len()));
+            let big = matches!(
+                e.event,
+                Event::FireWeapon | Event::FireWeapon2 | Event::FireWeapon3 | Event::MissileHit | Event::MissileMiss | Event::MissileMissMetal | Event::BulletHitWall | Event::BulletHitFlesh | Event::HumanBuildableExplosion | Event::AlienBuildableExplosion
+            );
+            self.play_sound_big(&p, &e.origin, false, mine.then_some(kind), follow, big);
         }
     }
 
@@ -2519,8 +2573,10 @@ impl TremGame {
         l.set_color(Color::from_rgb(c[0], c[1], c[2]));
         l.set_param(LightParam::RANGE, 9.0);
         l.set_param(LightParam::ENERGY, 3.0);
-        // enhanced: the flash lights the lit world and casts shadows
-        l.set_shadow(self.gfx.enhanced);
+        // enhanced: the flash lights the lit world; gfx.rs's shadow budget
+        // decides whether it casts shadows
+        l.set_shadow(false);
+        l.add_to_group(crate::gfx::DLIGHT_GROUP);
         l.set_position(q2g(&p));
         self.base_mut().add_child(&l);
         self.flashes.push((l, 0.06));
@@ -2963,14 +3019,43 @@ impl TremGame {
     }
 
     fn play_sound(&mut self, paths: &str, origin: &[f32; 3], local: bool) {
+        self.play_sound_ex(paths, origin, local, None, None);
+    }
+
+    /// `own`: the player's own sound (placed at the gun / feet / centre in
+    /// enhanced mode); `ent`: the entity the sound follows while it plays.
+    fn play_sound_ex(&mut self, paths: &str, origin: &[f32; 3], local: bool, own: Option<crate::fmodaudio::OwnSound>, ent: Option<usize>) {
+        self.play_sound_big(paths, origin, local, own, ent, false);
+    }
+
+    /// `big`: weapon fire, impacts and explosions get their own reflections
+    /// (enhanced mode).
+    fn play_sound_big(&mut self, paths: &str, origin: &[f32; 3], local: bool, own: Option<crate::fmodaudio::OwnSound>, ent: Option<usize>, big: bool) {
+        let enhanced = self.client.cvars.integer("r_enhanced") != 0;
+        let view = self.camera.as_ref().filter(|c| c.is_inside_tree()).map(|c| c.get_global_transform());
+        // enhanced: the high-band sound pack (outside the pk3 search path)
+        let hd_root = (enhanced && self.client.cvars.integer("s_hdSounds") != 0).then(|| godot::classes::ProjectSettings::singleton().globalize_path("user://sfx_hd").to_string());
         // the FMOD + Steam Audio path (fmodaudio.rs) when it is up
         if let (Some(fm), Some(lib)) = (self.fmod.as_mut(), self.lib.as_mut()) {
             for p in paths.split('|') {
                 let key = p.to_lowercase();
-                let id = fm.sound(&key, || lib.pk3.read(p).map(|d| d.as_slice().to_vec()));
+                let hd = hd_root.as_ref().and_then(|r| fm.sound(&format!("hd:{key}"), || std::fs::read(format!("{r}/{key}")).ok()));
+                let id = hd.or_else(|| fm.sound(&key, || lib.pk3.read(p).map(|d| d.as_slice().to_vec())));
                 if let Some(id) = id {
-                    let pos = if local { None } else { let g = q2g(origin); Some([g.x, g.y, g.z]) };
-                    if fm.play(id, pos, false, 1.0) >= 0 {
+                    let g = q2g(origin);
+                    let (pos, own_placed) = match (local, own.filter(|_| enhanced), view) {
+                        (true, _, _) => (None, false),
+                        (false, Some(k), Some(t)) => {
+                            let (o, f, r, u) = (t.origin, -t.basis.col_c(), t.basis.col_a(), t.basis.col_b());
+                            (crate::fmodaudio::own_sound_pos(k, [o.x, o.y, o.z], [f.x, f.y, f.z], [r.x, r.y, r.z], [u.x, u.y, u.z]), true)
+                        }
+                        _ => (Some([g.x, g.y, g.z]), false),
+                    };
+                    let v = fm.play(id, pos, own_placed, big, false, 1.0);
+                    if v >= 0 {
+                        if let (Some(e), false, false) = (ent, local, own_placed) {
+                            self.fmod_attached.push((v, e));
+                        }
                         return;
                     }
                     break;
@@ -3177,7 +3262,7 @@ impl TremGame {
         }
         for s in self.cgv.transition_player_state(&ps) {
             let p = self.custom_sound(ps.client_num, &s);
-            self.play_sound(&p, &ps.origin, false);
+            self.play_sound_ex(&p, &ps.origin, false, Some(crate::fmodaudio::OwnSound::Voice), None);
         }
     }
 
@@ -3774,6 +3859,7 @@ impl TremGame {
                         meshes: None,
                         rt_geom: None,
                         acoustic: None,
+                        fogs: Vec::new(),
                         brush: HashMap::new(),
                         sky: None,
                         sky_hd: None,
@@ -3844,6 +3930,7 @@ impl TremGame {
         self.world = Some(view);
         self.me = None;
         self.gfx.pending_geom = ld.rt_geom.take();
+        self.gfx.pending_fogs = std::mem::take(&mut ld.fogs);
         self.fmod_scene = ld.acoustic.take();
         self.build_level(map, ld.meshes.take());
         self.brush_meshes = std::mem::take(&mut ld.brush);
