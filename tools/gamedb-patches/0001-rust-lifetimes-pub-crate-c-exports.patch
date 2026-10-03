@@ -1,0 +1,209 @@
+From c3da5dab613fcfef13c969f1ffdf4649d19ac05f Mon Sep 17 00:00:00 2001
+From: MeepingsCorner <MeepingsCorner@users.noreply.github.com>
+Date: Sun, 4 Oct 2026 00:45:47 +1000
+Subject: [PATCH] Index Rust lifetimes, raw strings, pub(crate) and C export
+ attributes
+
+- mask: a ' followed by an identifier not closed by ' is a lifetime or
+  label, not a char literal; 'a' and C multi-char 'RIFF' stay literals.
+  &'static str used to blank code up to the next ', mismatching braces
+  so every later function in the file vanished (70 of 159 in one file).
+- mask: Rust raw strings r".." / r#".."# / br##".."## are one literal.
+- wide header: accept a lifetime in a return type (-> &'static str).
+- headers: skip pub(crate)/pub(super), __declspec(..), __attribute__((..)).
+  pub(crate) fn f( was indexed as a function named pub taking crate.
+- selftest: four new checks (93/93).
+
+On a 563-file Rust+C tree: +643 real functions, 88 phantom 'pub' and
+2 phantom call-site entries removed, no real function lost.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016F56dCPHR8NvAW5WGDRyH8
+---
+ src/parse.rs    | 65 +++++++++++++++++++++++++++++++++++++++++++++++++
+ src/rx.rs       | 19 ++++++++++++++-
+ src/selftest.rs | 41 +++++++++++++++++++++++++++++++
+ 3 files changed, 124 insertions(+), 1 deletion(-)
+
+diff --git a/src/parse.rs b/src/parse.rs
+index a9480c0..09e4c8f 100644
+--- a/src/parse.rs
++++ b/src/parse.rs
+@@ -229,6 +229,29 @@ pub fn mask(s: &[char], blank_literals: bool) -> Vec<char> {
+                 out[i + 1] = ' ';
+                 i += 2;
+             }
++        } else if blank_literals && c == '\'' && is_lifetime(s, i) {
++            // Rust lifetime or loop label (`&'static str`, `'outer: loop`):
++            // not a literal, so it must not swallow the code up to the next `'`.
++            i += 1;
++        } else if blank_literals && c == '"' && raw_string_hashes(s, i).is_some() {
++            // Rust raw string `r"…"` / `r#"…"#` / `br##"…"##`: no escapes, ends
++            // at a `"` followed by the same number of `#`.
++            let hashes = raw_string_hashes(s, i).unwrap_or(0);
++            out[i] = ' ';
++            i += 1;
++            while i < n {
++                if s[i] == '"' && (1..=hashes).all(|k| i + k < n && s[i + k] == '#') {
++                    for k in 0..=hashes {
++                        out[i + k] = ' ';
++                    }
++                    i += hashes + 1;
++                    break;
++                }
++                if s[i] != '\n' {
++                    out[i] = ' ';
++                }
++                i += 1;
++            }
+         } else if blank_literals && (c == '"' || c == '\'') {
+             let q = c;
+             out[i] = ' ';
+@@ -254,6 +277,48 @@ pub fn mask(s: &[char], blank_literals: bool) -> Vec<char> {
+     out
+ }
+ 
++fn is_ident_char(c: char) -> bool {
++    c == '_' || c.is_alphanumeric()
++}
++
++/// `s[i]` is a `'` that opens a Rust lifetime or label rather than a char
++/// literal: an identifier follows and is not closed by another `'`.
++/// `'a'`, `'\n'` and C multi-character constants like `'RIFF'` stay literals.
++fn is_lifetime(s: &[char], i: usize) -> bool {
++    let n = s.len();
++    let first = if i + 1 < n { s[i + 1] } else { return false };
++    if !(first == '_' || first.is_alphabetic()) {
++        return false;
++    }
++    let mut j = i + 1;
++    while j < n && is_ident_char(s[j]) {
++        j += 1;
++    }
++    !(j < n && s[j] == '\'')
++}
++
++/// `s[i]` is the opening `"` of a Rust raw string; returns its `#` count.
++/// The prefix must be `r` or `br` that does not end a longer identifier.
++fn raw_string_hashes(s: &[char], i: usize) -> Option<usize> {
++    let mut j = i;
++    let mut hashes = 0;
++    while j > 0 && s[j - 1] == '#' {
++        j -= 1;
++        hashes += 1;
++    }
++    if j == 0 || s[j - 1] != 'r' {
++        return None;
++    }
++    j -= 1;
++    if j > 0 && s[j - 1] == 'b' {
++        j -= 1;
++    }
++    if j > 0 && is_ident_char(s[j - 1]) {
++        return None;
++    }
++    Some(hashes)
++}
++
+ /// Character ranges of each line, end-exclusive. Shared by src/masked/no_comments
+ /// because masking never adds or removes a newline.
+ pub fn line_ranges(s: &[char]) -> Vec<(usize, usize)> {
+diff --git a/src/rx.rs b/src/rx.rs
+index 0505816..7ea4386 100644
+--- a/src/rx.rs
++++ b/src/rx.rs
+@@ -137,6 +137,13 @@ pub fn match_header(s: &[char]) -> Option<(String, String)> {
+     loop {
+         let r = skip_ws(s, head);
+         match read_word(s, r) {
++            // `__declspec(dllexport)`, `__attribute__((visibility("default")))`:
++            // the modifier carries a parenthesised argument
++            // ... and so does Rust's restricted visibility: `pub(crate)`, `pub(super)`
++            Some((w, j)) if w == "__declspec" || w == "__attribute__" || w == "pub" => {
++                let a = skip_ws(s, j);
++                head = if a < s.len() && s[a] == '(' { close_paren(s, a)?.0 + 1 } else { j };
++            }
+             Some((w, j)) if is_modifier_tok(&w) => head = j,
+             _ => break,
+         }
+@@ -352,6 +359,8 @@ fn wide_gap(s: &[char], mut i: usize) -> Option<usize> {
+                 }
+             }
+             ':' | '&' | '*' | '<' | '>' | ',' | '.' | '?' | '~' | '[' | ']' | '@' => i += 1,
++            // a Rust lifetime in a return type: `-> &'static str`, `-> Foo<'a>`
++            '\'' if i + 1 < s.len() && is_word_start(s[i + 1]) => i += 1,
+             c if is_word(c) => {
+                 let (_, j) = read_word(s, i)?;
+                 i = j;
+@@ -393,7 +402,15 @@ fn wide_tail(s: &[char], i: usize) -> Option<(String, String)> {
+ }
+ 
+ pub fn match_wide_header(s: &[char]) -> Option<(String, String)> {
+-    let i0 = skip_ws(s, 0);
++    let mut i0 = skip_ws(s, 0);
++    // Rust `pub(crate) fn f(` / `pub(super) fn f(`: step over the restriction,
++    // or `pub` itself reads as a function named `pub` taking `crate`.
++    if let Some((w, j)) = read_word(s, i0) {
++        let a = skip_ws(s, j);
++        if w == "pub" && a < s.len() && s[a] == '(' {
++            i0 = skip_ws(s, close_paren(s, a)?.0 + 1);
++        }
++    }
+     let mut i = i0;
+     loop {
+         if i >= s.len() {
+diff --git a/src/selftest.rs b/src/selftest.rs
+index 7119762..11ceb96 100644
+--- a/src/selftest.rs
++++ b/src/selftest.rs
+@@ -289,6 +289,47 @@ pub fn run() -> i32 {
+             .all(|f| f.name == "f"),
+     );
+ 
++    // --- Rust: a lifetime is not a char literal, and a raw string is one literal.
++    // `&'static str` used to open a literal that ran to the next `'`, so the
++    // function's braces mismatched and every function after it vanished.
++    let rs_src = [
++        "fn a(t: u8) -> &'static str {",
++        "    let m: HashMap<&'static str, u8> = HashMap::new();",
++        "    'outer: loop { break 'outer; }",
++        "    if t == b'{' { return \"x\"; }",
++        "    match 'c' { '}' => \"y\", _ => \"z\" }",
++        "}",
++        "const S: &str = r#\"shader { \"quoted\" } \"#;",
++        "fn b<'a>(x: &'a str) -> &'a str {",
++        "    x",
++        "}",
++        "fn c() {",
++        "    let k = 'RIFF';",
++        "}",
++    ]
++    .join("\n");
++    let p = parse_source(&chars(&rs_src));
++    let span = |n: &str| p.funcs.iter().find(|f| f.name == n).map(|f| (f.start, f.end));
++    c.ok("rust: lifetimes and raw strings keep a, b, c", names(&p) == ["a", "b", "c"]);
++    c.ok("rust: a's body ends at its own brace", span("a") == Some((1, 6)));
++    c.ok("rust: b after a raw string with braces and quotes", span("b") == Some((8, 10)));
++    c.ok("rust: multi-char constant stays a literal", span("c") == Some((11, 13)));
++
++    // --- Rust: restricted visibility carries a parenthesised path
++    let p = parse_source(&chars(
++        "pub(crate) fn has_world(&self) -> bool {\n    true\n}\n\
++         pub(super) fn hud_world(&self) -> Option<&World> {\n    None\n}\n\
++         pub fn plain() {\n}\n",
++    ));
++    c.ok("rust: pub(crate) / pub(super) functions are indexed", names(&p) == ["has_world", "hud_world", "plain"]);
++
++    // --- C: an export attribute with an argument leads the declaration
++    let p = parse_source(&chars(
++        "__declspec(dllexport) int ta_play(int id, const float* pos) {\n  return 0;\n}\n\
++         __attribute__((visibility(\"default\"))) void ta_stop(void) {\n}\n",
++    ));
++    c.ok("c: __declspec(...) / __attribute__((...)) exports are indexed", names(&p) == ["ta_play", "ta_stop"]);
++
+     // --- decode: a non-UTF-8 source is reported, not silently mangled
+     let (s, note) = decode("void f(){}\n".as_bytes().to_vec());
+     c.ok(
+-- 
+2.43.0
+

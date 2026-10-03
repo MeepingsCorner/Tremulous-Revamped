@@ -36,6 +36,7 @@ mod avicap; // wt-b video capture
 mod gfx; // graphics modes (vanilla / enhanced)
 mod rt; // ray-traced effects of the enhanced mode
 mod fmodaudio; // FMOD + Steam Audio sound path
+mod hdtex; // 4K texture packs (enhanced mode)
 
 struct TremExtension;
 

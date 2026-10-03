@@ -119,6 +119,11 @@ fn blend_of(args: &[String]) -> Option<Blend> {
         [x] if x == "filter" => None,
         [s, d] if s == "gl_one" && d == "gl_one" => Some(Blend::Add),
         [s, d] if s == "gl_src_alpha" && d == "gl_one" => Some(Blend::Add),
+        // "screen" style (flame.shader's flames, sparks): adds light like GL_ONE GL_ONE
+        [s, d] if s == "gl_one" && d == "gl_one_minus_src_color" => Some(Blend::Add),
+        [s, d] if s == "gl_one_minus_dst_color" && d == "gl_one" => Some(Blend::Add),
+        // premultiplied alpha
+        [s, d] if s == "gl_one" && d == "gl_one_minus_src_alpha" => Some(Blend::Mix),
         [s, d] if s == "gl_src_alpha" && d == "gl_one_minus_src_alpha" => Some(Blend::Mix),
         _ => None,
     }
@@ -326,6 +331,16 @@ pub fn flat_texture(c: Color) -> Gd<ImageTexture> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// flame.shader's GL_ONE GL_ONE_MINUS_SRC_COLOR flames were drawn opaque
+    /// (black squares where bullets hit human structures)
+    #[test]
+    fn screen_blend_is_additive() {
+        let v = |a: &str, b: &str| blend_of(&[a.to_string(), b.to_string()]);
+        assert_eq!(v("GL_ONE", "GL_ONE_MINUS_SRC_COLOR"), Some(Blend::Add));
+        assert_eq!(v("GL_ONE_MINUS_DST_COLOR", "GL_ONE"), Some(Blend::Add));
+        assert_eq!(v("GL_ONE", "GL_ONE_MINUS_SRC_ALPHA"), Some(Blend::Mix));
+    }
     #[test]
     fn default_image_is_a_box() {
         let d = default_image_rgba();

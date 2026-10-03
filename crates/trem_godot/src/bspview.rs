@@ -28,6 +28,9 @@ const float R_GAMMA_EXP = 2.2 / 1.3;
 render_mode cull_disabled;
 global uniform float trem_gfx;
 uniform sampler2D tex : filter_linear_mipmap_anisotropic, repeat_enable;
+// the 4K pack's texture (enhanced mode only)
+uniform sampler2D tex_hd : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform bool has_hd = false;
 uniform sampler2D lm : filter_linear;
 uniform bool use_lm = false;
 uniform vec4 tint = vec4(1.0);
@@ -42,7 +45,7 @@ void vertex() {
     grid = CUSTOM0;
 }
 void fragment() {
-    vec4 t = texture(tex, UV) * tint;
+    vec4 t = ((trem_gfx > 0.5 && has_hd) ? texture(tex_hd, UV) : texture(tex, UV)) * tint;
     if (t.a < 0.5) { discard; }
     vec3 light = use_lm ? texture(lm, UV2).rgb : COLOR.rgb;
     // R_ColorShiftLightingBytes (mapOverBrightBits 2 - overBrightBits 1 = x2,
@@ -92,11 +95,13 @@ const float R_GAMMA_EXP = 2.2 / 1.3;
 render_mode unshaded, cull_disabled, blend_add, depth_draw_never;
 global uniform float trem_gfx;
 uniform sampler2D tex : filter_linear_mipmap, repeat_enable;
+uniform sampler2D tex_hd : filter_linear_mipmap, repeat_enable;
+uniform bool has_hd = false;
 uniform sampler2D lm : filter_linear;
 uniform bool use_lm = false;
 uniform vec4 tint = vec4(1.0);
 void fragment() {
-    vec4 t = texture(tex, UV) * tint;
+    vec4 t = ((trem_gfx > 0.5 && has_hd) ? texture(tex_hd, UV) : texture(tex, UV)) * tint;
     // enhanced: glows go over 1.0 so the bloom picks them up
     ALBEDO = pow(clamp(t.rgb, 0.0, 1.0), vec3(R_GAMMA_EXP)) * (trem_gfx > 0.5 ? 1.8 : 1.0);
 }
@@ -108,11 +113,13 @@ const float R_GAMMA_EXP = 2.2 / 1.3;
 render_mode unshaded, cull_disabled, blend_mix, depth_draw_never;
 global uniform float trem_gfx;
 uniform sampler2D tex : filter_linear_mipmap, repeat_enable;
+uniform sampler2D tex_hd : filter_linear_mipmap, repeat_enable;
+uniform bool has_hd = false;
 uniform sampler2D lm : filter_linear;
 uniform bool use_lm = false;
 uniform vec4 tint = vec4(1.0);
 void fragment() {
-    vec4 t = texture(tex, UV) * tint;
+    vec4 t = ((trem_gfx > 0.5 && has_hd) ? texture(tex_hd, UV) : texture(tex, UV)) * tint;
     vec3 light = use_lm ? texture(lm, UV2).rgb * 2.0 : vec3(1.0);
     vec3 c = trem_gfx > 0.5 ? pow(clamp(t.rgb, 0.0, 1.0), vec3(R_GAMMA_EXP)) * pow(light, vec3(R_GAMMA_EXP)) : pow(clamp(t.rgb * light, 0.0, 1.0), vec3(R_GAMMA_EXP));
     ALBEDO = c;
@@ -224,6 +231,8 @@ pub struct BspRender {
     tex_cache: HashMap<i32, Gd<ImageTexture>>,
     /// per shader: the generated normal map and the mean linear albedo (gfx.rs)
     derived: HashMap<i32, (Option<Gd<ImageTexture>>, [f32; 3])>,
+    /// per shader: the 4K pack's albedo (hdtex.rs), sampled in the enhanced mode
+    hd: HashMap<i32, Option<Gd<ImageTexture>>>,
     /// the light grid, for the enhanced mode's bumped baked light (CUSTOM0)
     grid: Option<LightGrid>,
     /// the world's opaque triangles for the ray tracer (model 0)
@@ -248,6 +257,7 @@ impl BspRender {
             white: flat_texture(Color::from_rgb(1.0, 1.0, 1.0)),
             tex_cache: HashMap::new(),
             derived: HashMap::new(),
+            hd: HashMap::new(),
             grid: LightGrid::from_bsp(bsp),
             rt: RtGeometry::default(),
             acoustic: Default::default(),
@@ -355,18 +365,24 @@ impl BspRender {
             let opaque = info.blend == crate::assets::Blend::Opaque;
             let script_images = &self.script_images;
             let derived = &mut self.derived;
+            let hd_cache = &mut self.hd;
             let tex = self
                 .tex_cache
                 .entry(shader_num)
                 .or_insert_with(|| {
                     let name = bsp.shaders[shader_num as usize].name.clone();
-                    let img = script_images.get(&name.to_lowercase()).and_then(|p| p.image.clone()).and_then(|p| load_image(pk3, &p)).or_else(|| load_image(pk3, &name));
-                    // the enhanced mode's generated maps (gfx.rs)
-                    let d = match img.as_ref() {
-                        Some(i) => crate::gfx::derive_maps(i, opaque),
-                        None => crate::gfx::DerivedMaps { normal: None, mean_linear: [0.3, 0.3, 0.32] },
+                    let script_img = script_images.get(&name.to_lowercase()).and_then(|p| p.image.clone());
+                    let img = script_img.as_ref().and_then(|p| load_image(pk3, p)).or_else(|| load_image(pk3, &name));
+                    // the 4K pack's texture (hdtex.rs): its normal map and
+                    // mean colour come with it; else the generated maps (gfx.rs)
+                    let hd = script_img.as_ref().and_then(|p| crate::hdtex::get(&crate::hdtex::key_of(p))).or_else(|| crate::hdtex::get(&crate::hdtex::key_of(&name)));
+                    let d = match (hd.as_ref(), img.as_ref()) {
+                        (Some(h), _) => crate::gfx::DerivedMaps { normal: if opaque { h.normal.clone() } else { None }, mean_linear: h.mean },
+                        (None, Some(i)) => crate::gfx::derive_maps(i, opaque),
+                        (None, None) => crate::gfx::DerivedMaps { normal: None, mean_linear: [0.3, 0.3, 0.32] },
                     };
                     derived.insert(shader_num, (d.normal, d.mean_linear));
+                    hd_cache.insert(shader_num, hd.map(|h| h.albedo));
                     match img.and_then(|i| ImageTexture::create_from_image(&i)) {
                         Some(t) => t,
                         None => flat_texture(Color::from_rgb(0.55, 0.55, 0.6)),
@@ -429,6 +445,10 @@ impl BspRender {
                 crate::assets::Blend::Opaque => &self.shader,
             });
             mat.set_shader_parameter("tex", &tex.to_variant());
+            if let Some(Some(hd)) = self.hd.get(&shader_num) {
+                mat.set_shader_parameter("tex_hd", &hd.to_variant());
+                mat.set_shader_parameter("has_hd", &true.to_variant());
+            }
             let use_lm = lm >= 0 && (lm as usize) < self.lightmaps.len();
             mat.set_shader_parameter("use_lm", &use_lm.to_variant());
             mat.set_shader_parameter("lm", &(if use_lm { self.lightmaps[lm as usize].clone() } else { self.white.clone() }).to_variant());
@@ -453,6 +473,13 @@ impl BspRender {
 }
 
 
+/// The 4K pack's six skybox faces (hdtex.rs), when it has all of them.
+pub fn sky_textures_hd(bsp: &Bsp, pk3: &mut Pk3Set) -> Option<Vec<Gd<godot::classes::Texture2D>>> {
+    let infos = pk3.shader_images();
+    let env = bsp.shaders.iter().filter(|s| s.surface_flags & SURF_SKY != 0).find_map(|s| infos.get(&s.name.to_lowercase()).and_then(|i| i.sky.clone()))?;
+    ["rt", "lf", "bk", "ft", "up", "dn"].iter().map(|suf| crate::hdtex::get(&crate::hdtex::key_of(&format!("{env}_{suf}"))).map(|h| h.albedo.upcast::<godot::classes::Texture2D>())).collect()
+}
+
 /// Six skybox images (rt, lf, bk, ft, up, dn) of the map's sky shader
 /// (`skyparms <env> ...` -> <env>_rt.tga ...), in Q3's axis order.
 pub fn sky_textures(bsp: &Bsp, pk3: &mut Pk3Set) -> Option<Vec<Gd<ImageTexture>>> {
@@ -469,25 +496,39 @@ pub fn sky_textures(bsp: &Bsp, pk3: &mut Pk3Set) -> Option<Vec<Gd<ImageTexture>>
 /// Sky shader reproducing tr_sky.c's box mapping (MakeSkyVec / st_to_vec).
 pub const SKY_SHADER: &str = r#"
 shader_type sky;
+global uniform float trem_gfx;
 uniform sampler2D rt : source_color, filter_linear;
 uniform sampler2D lf : source_color, filter_linear;
 uniform sampler2D bk : source_color, filter_linear;
 uniform sampler2D ft : source_color, filter_linear;
 uniform sampler2D up : source_color, filter_linear;
 uniform sampler2D dn : source_color, filter_linear;
+// the 4K pack's faces (enhanced mode)
+uniform bool has_hd = false;
+uniform sampler2D rt_hd : source_color, filter_linear_mipmap;
+uniform sampler2D lf_hd : source_color, filter_linear_mipmap;
+uniform sampler2D bk_hd : source_color, filter_linear_mipmap;
+uniform sampler2D ft_hd : source_color, filter_linear_mipmap;
+uniform sampler2D up_hd : source_color, filter_linear_mipmap;
+uniform sampler2D dn_hd : source_color, filter_linear_mipmap;
 vec4 face(sampler2D t, float s, float tt) {
+    return texture(t, vec2((s + 1.0) * 0.5, 1.0 - (tt + 1.0) * 0.5));
+}
+// Godot needs one function per sampler setting, so HD faces get their own.
+vec4 face_hd(sampler2D t, float s, float tt) {
     return texture(t, vec2((s + 1.0) * 0.5, 1.0 - (tt + 1.0) * 0.5));
 }
 void sky() {
     vec3 q = vec3(EYEDIR.x, -EYEDIR.z, EYEDIR.y);
     vec3 a = abs(q);
+    bool hd = has_hd && trem_gfx > 0.5;
     vec4 c;
     if (a.x >= a.y && a.x >= a.z) {
-        c = q.x > 0.0 ? face(rt, -q.y / a.x, q.z / a.x) : face(lf, q.y / a.x, q.z / a.x);
+        c = q.x > 0.0 ? (hd ? face_hd(rt_hd, -q.y / a.x, q.z / a.x) : face(rt, -q.y / a.x, q.z / a.x)) : (hd ? face_hd(lf_hd, q.y / a.x, q.z / a.x) : face(lf, q.y / a.x, q.z / a.x));
     } else if (a.y >= a.z) {
-        c = q.y > 0.0 ? face(bk, q.x / a.y, q.z / a.y) : face(ft, -q.x / a.y, q.z / a.y);
+        c = q.y > 0.0 ? (hd ? face_hd(bk_hd, q.x / a.y, q.z / a.y) : face(bk, q.x / a.y, q.z / a.y)) : (hd ? face_hd(ft_hd, -q.x / a.y, q.z / a.y) : face(ft, -q.x / a.y, q.z / a.y));
     } else {
-        c = q.z > 0.0 ? face(up, -q.y / a.z, -q.x / a.z) : face(dn, -q.y / a.z, q.x / a.z);
+        c = q.z > 0.0 ? (hd ? face_hd(up_hd, -q.y / a.z, -q.x / a.z) : face(up, -q.y / a.z, -q.x / a.z)) : (hd ? face_hd(dn_hd, -q.y / a.z, q.x / a.z) : face(dn, -q.y / a.z, q.x / a.z));
     }
     COLOR = c.rgb;
 }

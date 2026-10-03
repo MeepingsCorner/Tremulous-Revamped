@@ -27,6 +27,9 @@ global uniform float trem_gfx;
 uniform sampler2D pos_tex : filter_nearest;
 uniform sampler2D nrm_tex : filter_nearest;
 uniform sampler2D albedo_tex : filter_linear_mipmap, repeat_enable;
+// the 4K pack's texture (hdtex.rs), sampled in the enhanced mode
+uniform sampler2D albedo_hd : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform bool has_hd = false;
 uniform vec3 amb = vec3(0.5);
 uniform vec3 dcol = vec3(0.5);
 uniform vec3 ldir = vec3(0.3, 0.8, 0.5);
@@ -86,7 +89,8 @@ void vertex() {
     POSITION = PROJECTION_MATRIX * vec4(view_pos * depth_hack, 1.0);
 }
 void fragment() {
-    vec4 c = texture(albedo_tex, tcmods(UV, tc0_k, tc0_a, tc0_b, TIME)) * tint;
+    vec2 uv0 = tcmods(UV, tc0_k, tc0_a, tc0_b, TIME);
+    vec4 c = ((trem_gfx > 0.5 && has_hd) ? texture(albedo_hd, uv0) : texture(albedo_tex, uv0)) * tint;
     if (alpha_test && c.a < 0.5) { discard; }
     // RB_CalcDiffuseColor: ambient + directed * N.L from the light grid, in
     // gamma space with the x2 hardware overbright, then to linear
@@ -265,6 +269,14 @@ impl Library {
         };
         self.textures.insert(key, t.clone());
         t
+    }
+
+    /// The 4K pack's texture of an image / shader name (hdtex.rs).
+    pub fn texture_hd(&mut self, name: &str) -> Option<Gd<ImageTexture>> {
+        let key = name.to_lowercase().replace('\\', "/");
+        let stem = key.trim_end_matches(".tga").trim_end_matches(".jpg").to_string();
+        let img = self.shader_images.get(&stem).and_then(|i| i.image.clone());
+        img.and_then(|p| crate::hdtex::get(&crate::hdtex::key_of(&p))).or_else(|| crate::hdtex::get(&crate::hdtex::key_of(&stem))).map(|h| h.albedo)
     }
 
     pub fn skin(&mut self, path: &str) -> Rc<HashMap<String, String>> {
@@ -478,6 +490,10 @@ impl Library {
             mat.set_shader_parameter("alpha_test", &info.alpha_test.to_variant());
             mat.set_shader_parameter("nrm_tex", &s.nrm.to_variant());
             mat.set_shader_parameter("albedo_tex", &tex.to_variant());
+            if let Some(hd) = self.texture_hd(&img) {
+                mat.set_shader_parameter("albedo_hd", &hd.to_variant());
+                mat.set_shader_parameter("has_hd", &true.to_variant());
+            }
             // the first image stage's tcMods / rgbGen, and a blended second
             // stage over an opaque first (level2adv: the scrolling electric
             // pattern showing through adv.tga's transparent veins)

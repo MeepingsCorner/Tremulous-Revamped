@@ -82,6 +82,8 @@ struct MapLoad {
     meshes: Option<Vec<Gd<MeshInstance3D>>>,
     brush: crate::mapents::BrushMeshes,
     sky: Option<Vec<Gd<ImageTexture>>>,
+    /// the 4K pack's sky faces (hdtex.rs)
+    sky_hd: Option<Vec<Gd<godot::classes::Texture2D>>>,
     grid: Option<crate::bspview::LightGrid>,
     /// the world's triangles for the ray-traced effects (gfx.rs / rt.rs)
     rt_geom: Option<crate::bspview::RtGeometry>,
@@ -344,6 +346,14 @@ impl INode3D for TremGame {
         self.with_client(|c, g| c.startup(g));
         crate::gfx::register_cvars(&mut self.client.cvars);
         crate::fmodaudio::register_cvars(&mut self.client.cvars);
+        // the 4K pack is needed before the first map's textures load
+        {
+            let on = self.client.cvars.integer("r_hdTextures") != 0;
+            let path = self.client.cvars.find("r_hdPath").map(|v| v.string.clone()).unwrap_or_default();
+            let max = self.client.cvars.integer("r_hdMaxSize").clamp(256, 8192) as usize;
+            crate::hdtex::configure(on, &path, max);
+            godot_print!("trem: 4K texture pack {}", if crate::hdtex::active() { "found" } else { "not installed (tests/hd_build.tscn makes it)" });
+        }
         // Com_StartupVariable / Com_AddStartupCommands: +set and the other
         // "+" commands of the command line (+map / +devmap below)
         let startup = startup_commands();
@@ -1511,6 +1521,7 @@ impl TremGame {
             acoustic: None,
             brush: HashMap::new(),
             sky: None,
+            sky_hd: None,
             grid: None,
             then,
             cheats,
@@ -1664,6 +1675,7 @@ impl TremGame {
             5 => {
                 // the sky and the light grid
                 ld.sky = crate::bspview::sky_textures(&ld.bsp, &mut ld.set);
+                ld.sky_hd = crate::bspview::sky_textures_hd(&ld.bsp, &mut ld.set);
                 ld.grid = crate::bspview::LightGrid::from_bsp(&ld.bsp);
                 ld.render = None;
                 ld.info.media = 0.9;
@@ -1735,7 +1747,7 @@ impl TremGame {
                 self.brush_meshes = std::mem::take(&mut ld.brush);
                 self.lightgrid = ld.grid.take();
                 if let Some(sky) = ld.sky.take() {
-                    self.set_sky(sky);
+                    self.set_sky(sky, ld.sky_hd.take());
                 }
                 if ld.cheats {
                     self.set_cheats(true);
@@ -1750,13 +1762,19 @@ impl TremGame {
     }
 
     /// Replace the background colour with the map's Q3 skybox.
-    fn set_sky(&mut self, faces: Vec<Gd<ImageTexture>>) {
+    fn set_sky(&mut self, faces: Vec<Gd<ImageTexture>>, hd: Option<Vec<Gd<godot::classes::Texture2D>>>) {
         let mut sh = godot::classes::Shader::new_gd();
         sh.set_code(crate::bspview::SKY_SHADER);
         let mut mat = godot::classes::ShaderMaterial::new_gd();
         mat.set_shader(&sh);
         for (name, t) in ["rt", "lf", "bk", "ft", "up", "dn"].iter().zip(faces.iter()) {
             mat.set_shader_parameter(*name, &t.to_variant());
+        }
+        if let Some(hd) = hd.filter(|h| h.len() == 6) {
+            for (name, t) in ["rt_hd", "lf_hd", "bk_hd", "ft_hd", "up_hd", "dn_hd"].iter().zip(hd.iter()) {
+                mat.set_shader_parameter(*name, &t.to_variant());
+            }
+            mat.set_shader_parameter("has_hd", &true.to_variant());
         }
         // the sky's mean colour: the ray tracer's radiance for rays that leave the map
         let mut sum = [0f32; 3];
@@ -2089,6 +2107,11 @@ impl TremGame {
 
     /// r_enhanced / r_rtMode / r_rtDebug -> gfx.rs.
     fn apply_gfx(&mut self) {
+        // the 4K pack (hdtex.rs): its textures are loaded with each map
+        let hd_on = self.client.cvars.integer("r_hdTextures") != 0;
+        let hd_path = self.client.cvars.find("r_hdPath").map(|v| v.string.clone()).unwrap_or_default();
+        let hd_max = self.client.cvars.integer("r_hdMaxSize").clamp(256, 8192) as usize;
+        crate::hdtex::configure(hd_on, &hd_path, hd_max);
         let enhanced = self.client.cvars.integer("r_enhanced") != 0;
         let rt = self.client.cvars.find("r_rtMode").map(|v| v.string.trim().parse::<i32>().unwrap_or(-1)).unwrap_or(-1);
         let debug = self.client.cvars.integer("r_rtDebug");
@@ -2235,7 +2258,7 @@ impl TremGame {
         self.misc_client_frame(); // wt-misc: CL_CheckUserinfo, gamepad, console text
         // the graphics mode cvars (gfx.rs)
         let mut gfx_changed = false;
-        for n in ["r_enhanced", "r_rtMode", "r_rtDebug", "r_rtBackend"] {
+        for n in ["r_enhanced", "r_rtMode", "r_rtDebug", "r_rtBackend", "r_hdTextures", "r_hdPath", "r_hdMaxSize"] {
             gfx_changed |= self.client.cvars.take_modified(n);
         }
         if gfx_changed {
@@ -2947,11 +2970,13 @@ impl TremGame {
                 let id = fm.sound(&key, || lib.pk3.read(p).map(|d| d.as_slice().to_vec()));
                 if let Some(id) = id {
                     let pos = if local { None } else { let g = q2g(origin); Some([g.x, g.y, g.z]) };
-                    fm.play(id, pos, false, 1.0);
-                    return;
+                    if fm.play(id, pos, false, 1.0) >= 0 {
+                        return;
+                    }
+                    break;
                 }
             }
-            return;
+            // a sound FMOD cannot open or play: Godot's audio plays it
         }
         let Some(stream) = self.resolve_sound(paths) else { return };
         if let Some(a) = self.audio.as_mut() {
@@ -3751,6 +3776,7 @@ impl TremGame {
                         acoustic: None,
                         brush: HashMap::new(),
                         sky: None,
+                        sky_hd: None,
                         grid: None,
                         then: Vec::new(),
                         cheats: false,
@@ -3823,7 +3849,7 @@ impl TremGame {
         self.brush_meshes = std::mem::take(&mut ld.brush);
         self.lightgrid = ld.grid.take();
         if let Some(sky) = ld.sky.take() {
-            self.set_sky(sky);
+            self.set_sky(sky, ld.sky_hd.take());
         }
         match server_world {
             Some(w) => {
@@ -4190,6 +4216,14 @@ impl crate::clientcmd::ClientHost for TremGame {
             "port_removebot" => self.remove_bot(GString::from(a1)),
             "port_restart" => self.restart(),
             "port_gfx" => self.port_gfx(a1),
+            "s_fmodinfo" => {
+                let msg = match self.fmod.as_ref() {
+                    Some(f) => format!("FMOD + Steam Audio: {}\n", f.stats()),
+                    None => "FMOD sound path not running (s_fmod 0, or its DLLs missing): Godot audio\n".to_string(),
+                };
+                godot_print!("{}", msg.trim_end());
+                self.misc.con.print(&msg);
+            }
             _ => {}
         }
         let line = argv.join(" ");

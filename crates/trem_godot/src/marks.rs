@@ -111,7 +111,7 @@ fn blend_of_script(text: &str, name: &str) -> Option<MarkBlend> {
         if depth == 2 && stage == 1 && toks[0] == "blendfunc" && cur.as_deref() == Some(name) {
             let a: Vec<&str> = toks[1..].iter().map(|s| s.as_str()).collect();
             return Some(match a.as_slice() {
-                ["add"] | ["gl_one", "gl_one"] | ["gl_src_alpha", "gl_one"] => MarkBlend::Add,
+                ["add"] | ["gl_one", "gl_one"] | ["gl_src_alpha", "gl_one"] | ["gl_one", "gl_one_minus_src_color"] | ["gl_one_minus_dst_color", "gl_one"] => MarkBlend::Add,
                 ["filter"] | ["gl_dst_color", "gl_zero"] | ["gl_zero", "gl_src_color"] => MarkBlend::Filter,
                 ["gl_zero", "gl_one_minus_src_color"] => MarkBlend::Subtract,
                 _ => MarkBlend::Mix,
@@ -286,7 +286,7 @@ pub fn parse_mark_stages(text: &str, name: &str) -> Option<Vec<MarkStage>> {
                             "blendfunc" => {
                                 let a: Vec<&str> = toks[1..].iter().map(|s| s.as_str()).collect();
                                 st.blend = match a.as_slice() {
-                                    ["add"] | ["gl_one", "gl_one"] | ["gl_src_alpha", "gl_one"] => MarkBlend::Add,
+                                    ["add"] | ["gl_one", "gl_one"] | ["gl_src_alpha", "gl_one"] | ["gl_one", "gl_one_minus_src_color"] | ["gl_one_minus_dst_color", "gl_one"] => MarkBlend::Add,
                                     ["filter"] | ["gl_dst_color", "gl_zero"] | ["gl_zero", "gl_src_color"] => MarkBlend::Filter,
                                     ["gl_zero", "gl_one_minus_src_color"] => MarkBlend::Subtract,
                                     _ => MarkBlend::Mix,

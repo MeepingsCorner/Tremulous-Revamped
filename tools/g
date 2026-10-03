@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# tools/g - guarded gamedb wrapper (docs/TOKEN_METHOD.md §3, template §9.3).
+#   tools/g search NAME | strings TEXT | read NAME [--path P] | graph NAME ... | sql --sql Q ...
+# Every call: incremental index (ms when nothing changed) -> stats guard ->
+# query -> "@gen" on pointers, a footer when a result hits its cap, and an
+# explicit line instead of a silent empty.
+set -u
+ROOT="${GROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+GEN_FILE="$ROOT/.gamedb/gen"
+cmd="${1:-}"; [ -n "$cmd" ] || { sed -n '2,6p' "$0"; exit 2; }; shift
+
+out=$(gamedb index -r "$ROOT" 2>&1 | tail -1)
+reparsed=$(sed -n 's/.*indexed files=\([0-9]*\).*/\1/p' <<<"$out")
+gen=$(cat "$GEN_FILE" 2>/dev/null || echo 0)
+if [ "${reparsed:-0}" -gt 0 ]; then gen=$((gen + 1)); echo "$gen" > "$GEN_FILE"; fi
+grep -E "unreadable|lossy-decode" <<<"$out" | sed 's/^/WARN /'
+
+fns=$(gamedb stats -r "$ROOT" | sed -n 's/.*functions=\([0-9]*\).*/\1/p')
+if [ "${fns:-0}" -lt 100 ]; then echo "ERROR index near-empty (functions=${fns:-0}) under $ROOT"; exit 3; fi
+
+res=$(gamedb "$cmd" -r "$ROOT" "$@" 2>&1); rc=$?
+n=$(grep -c . <<<"$res")
+case "$cmd" in
+  search|strings|graph)
+    if [ "$n" -eq 0 ]; then echo "no match (gen $gen, functions $fns) - not a silent empty"; exit 0; fi
+    sed -E "s/^([^ ]+:[0-9]+-[0-9]+)/\1@$gen/" <<<"$res"
+    [ "$n" -ge 25 ] && echo "... result reached a cap ($n lines); narrow the query or add --path"
+    ;;
+  read)
+    echo "$res"
+    if grep -q "not indexed" <<<"$res"; then
+      echo "HINT the parser skipped this definition; fall back to: gfind ${1:-NAME} (and say so)"
+    fi
+    exit $rc ;;
+  *) echo "$res"; exit $rc ;;
+esac

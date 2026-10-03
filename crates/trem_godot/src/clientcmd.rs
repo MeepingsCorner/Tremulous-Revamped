@@ -165,8 +165,9 @@ const HOST_COMMANDS: &[&str] = &[
     "port_restart",
     "port_maps",
     "port_help",
-    // the graphics modes (gfx.rs)
+    // the graphics modes (gfx.rs), the FMOD sound path (fmodaudio.rs)
     "port_gfx",
+    "s_fmodinfo",
 ];
 
 /// ui_atoms.c `commands[]` handled by the menus (`UI_ConsoleCommand`).

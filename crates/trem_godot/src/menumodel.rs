@@ -95,6 +95,7 @@ fn blend_of(a: &[String]) -> StageBlend {
         [x, ..] if x == "blend" => StageBlend::Mix,
         [x, ..] if x == "filter" => StageBlend::Filter,
         [s, d, ..] if (s == "gl_one" || s == "gl_src_alpha") && d == "gl_one" => StageBlend::Add,
+        [s, d, ..] if (s == "gl_one" && d == "gl_one_minus_src_color") || (s == "gl_one_minus_dst_color" && d == "gl_one") => StageBlend::Add,
         [s, d, ..] if s == "gl_src_alpha" && d == "gl_one_minus_src_alpha" => StageBlend::Mix,
         [s, d, ..] if (s == "gl_dst_color" && d == "gl_zero") || (s == "gl_zero" && d == "gl_src_color") => StageBlend::Filter,
         _ => StageBlend::Opaque,

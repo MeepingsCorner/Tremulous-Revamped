@@ -94,15 +94,32 @@ typedef struct {
     int local;
     int active;
     unsigned gen;
+    float occlusion; /* last value given to the spatializer (1 = clear) */
 } Voice;
+
+static void voice_direct(Voice* v, float occlusion, const float* transmission);
 
 static struct {
     int up;
+    int nospat; /* tests: TREM_FMOD_NOSPAT=1 plays every sound unspatialized */
+    int noreverb; /* tests: TREM_FMOD_NOREVERB=1 leaves the reverb send out */
+    FMOD_CHANNEL* tone; /* tests: TREM_FMOD_TONE=1, 440 Hz at 0.5 for the first frames */
+    int tone_frames;
+    FILE* trace; /* tests: TREM_FMOD_TRACE=<file>, a line every 30 updates */
+    unsigned updates;
+    volatile LONG nan_blocks;   /* blocks in which a sanitiser replaced NaN/Inf */
+    int last_voice;
     HMODULE m_fmod, m_phonon, m_plugin;
     FMOD_SYSTEM* sys;
     unsigned plugin;
     unsigned spat_plugin, reverb_plugin;
     FMOD_DSP* reverb_dsp;
+    /* the voices play into `sfx`; a send of its mix feeds the reverb, whose
+     * (wet only) output joins the master mix */
+    FMOD_CHANNELGROUP* sfx;
+    FMOD_DSPCONNECTION* reverb_send;
+    unsigned plays, play_fails, loads, load_fails, direct_runs;
+    float mesh_lo[3], mesh_hi[3]; /* acoustic mesh bounds, Godot space */
     FMOD_SOUND* sounds[TA_SOUNDS];
     int nsounds;
     Voice v[TA_VOICES];
@@ -217,7 +234,22 @@ __declspec(dllexport) int ta_init(const wchar_t* dir, int sample_rate) {
     if ((r = FMOD_System_Create(&S.sys, FMOD_VERSION)) != FMOD_OK) return fail("FMOD_System_Create", FMOD_ErrorString(r));
     FMOD_System_SetSoftwareFormat(S.sys, sample_rate, FMOD_SPEAKERMODE_STEREO, 0);
     FMOD_System_SetDSPBufferSize(S.sys, 1024, 4);
-    if ((r = FMOD_System_Init(S.sys, 256, FMOD_INIT_NORMAL, NULL)) != FMOD_OK) return fail("FMOD_System_Init", FMOD_ErrorString(r));
+    {
+        char e[8];
+        S.nospat = GetEnvironmentVariableA("TREM_FMOD_NOSPAT", e, sizeof(e)) > 0 && e[0] == '1';
+        S.noreverb = GetEnvironmentVariableA("TREM_FMOD_NOREVERB", e, sizeof(e)) > 0 && e[0] == '1';
+        S.tone_frames = (GetEnvironmentVariableA("TREM_FMOD_TONE", e, sizeof(e)) > 0 && e[0] == '1') ? 90 : 0;
+        char tp[MAX_PATH];
+        if (GetEnvironmentVariableA("TREM_FMOD_TRACE", tp, sizeof(tp)) > 0) S.trace = fopen(tp, "w");
+    }
+    /* tests: TREM_FMOD_WAV=<file> writes the mix to a .wav instead of the device */
+    static char wav_path[MAX_PATH];
+    void* extra = NULL;
+    if (GetEnvironmentVariableA("TREM_FMOD_WAV", wav_path, sizeof(wav_path)) > 0) {
+        FMOD_System_SetOutput(S.sys, FMOD_OUTPUTTYPE_WAVWRITER);
+        extra = wav_path;
+    }
+    if ((r = FMOD_System_Init(S.sys, 256, FMOD_INIT_NORMAL, extra)) != FMOD_OK) return fail("FMOD_System_Init", FMOD_ErrorString(r));
     FMOD_System_Set3DSettings(S.sys, 1.0f, 1.0f, 1.0f);
 
     /* Steam Audio */
@@ -265,8 +297,10 @@ __declspec(dllexport) int ta_init(const wchar_t* dir, int sample_rate) {
         if ((r = FMOD_System_LoadPlugin(S.sys, path, &S.plugin, 0)) != FMOD_OK) return fail("FMOD_System_LoadPlugin phonon_fmod", FMOD_ErrorString(r));
     }
     S.spat_plugin = find_plugin("Spatializer");
-    S.reverb_plugin = find_plugin("Reverb");
+    S.reverb_plugin = S.noreverb ? 0 : find_plugin("Reverb");
     if (!S.spat_plugin) return fail("no Steam Audio Spatializer in phonon_fmod.dll", NULL);
+
+    if ((r = FMOD_System_CreateChannelGroup(S.sys, "sfx", &S.sfx)) != FMOD_OK) return fail("FMOD_System_CreateChannelGroup", FMOD_ErrorString(r));
 
     /* the listener-centric reverb */
     IPLSourceSettings ss;
@@ -275,10 +309,20 @@ __declspec(dllexport) int ta_init(const wchar_t* dir, int sample_rate) {
         iplSourceAdd(S.reverb_src, S.sim);
         S.fSetReverb(S.reverb_src);
         if (S.reverb_plugin && FMOD_System_CreateDSPByPlugin(S.sys, S.reverb_plugin, &S.reverb_dsp) == FMOD_OK) {
+            /* the Reverb effect outputs only the reverb: it is a return fed by
+             * a send, not an insert on the master (which would mute the mix) */
             FMOD_CHANNELGROUP* master = NULL;
+            FMOD_DSP *master_head = NULL, *sfx_head = NULL;
             FMOD_System_GetMasterChannelGroup(S.sys, &master);
+            FMOD_ChannelGroup_GetDSP(master, FMOD_CHANNELCONTROL_DSP_HEAD, &master_head);
+            FMOD_ChannelGroup_GetDSP(S.sfx, FMOD_CHANNELCONTROL_DSP_HEAD, &sfx_head);
             FMOD_DSP_SetParameterBool(S.reverb_dsp, REVERB_BINAURAL, 1);
-            FMOD_ChannelGroup_AddDSP(master, FMOD_CHANNELCONTROL_DSP_TAIL, S.reverb_dsp);
+            FMOD_DSP_SetMeteringEnabled(S.reverb_dsp, 0, 1);
+            if (master_head && sfx_head && FMOD_DSP_AddInput(master_head, S.reverb_dsp, NULL, FMOD_DSPCONNECTION_TYPE_STANDARD) == FMOD_OK &&
+                FMOD_DSP_AddInput(S.reverb_dsp, sfx_head, &S.reverb_send, FMOD_DSPCONNECTION_TYPE_SEND) == FMOD_OK) {
+                FMOD_DSP_SetActive(S.reverb_dsp, 1);
+                FMOD_DSPConnection_SetMix(S.reverb_send, 0.6f);
+            }
         }
     }
 
@@ -290,11 +334,29 @@ __declspec(dllexport) int ta_init(const wchar_t* dir, int sample_rate) {
         iplSourceAdd(v->src, S.sim);
         v->handle = S.fAdd(v->src);
         if (FMOD_System_CreateDSPByPlugin(S.sys, S.spat_plugin, &v->dsp) != FMOD_OK) return fail("FMOD_System_CreateDSPByPlugin spatializer", NULL);
+        FMOD_DSP_SetMeteringEnabled(v->dsp, 1, 1);
         FMOD_DSP_SetParameterInt(v->dsp, SPAT_SIMULATION_OUTPUTS_HANDLE, v->handle);
-        FMOD_DSP_SetParameterInt(v->dsp, SPAT_APPLY_DISTANCEATTENUATION, 1);
+        /* Apply types (steamaudio_fmod.h ParameterApplyType): 0 off,
+         * 1 simulation-defined, 2 user-defined. Distance and air absorption
+         * "simulation-defined" are computed by the plugin itself; occlusion
+         * and transmission would be read raw from the simulation outputs,
+         * which are 0 (fully blocked) until the direct simulation has run
+         * for the source - so they are user-defined here and fed by
+         * ta_update (voice_direct), starting unblocked. */
+        /* Steam Audio 4.8.1's spatializer defaults its direct mix level to
+         * 0 (the direct sound muted, only reflections audible): set it. */
+        FMOD_DSP_SetParameterFloat(v->dsp, SPAT_DIRECT_MIXLEVEL, 1.0f);
+        FMOD_DSP_SetParameterInt(v->dsp, SPAT_APPLY_DISTANCEATTENUATION, 2);
+        /* snd_dma.c S_SpatializeOrigin: full volume to SOUND_FULLVOLUME (80
+         * units), then linear to zero at 80 + 1/SOUND_ATTENUATE (1330); in
+         * Godot units (1/32) */
+        FMOD_DSP_SetParameterInt(v->dsp, SPAT_DISTANCEATTENUATION_ROLLOFFTYPE, 1);
+        FMOD_DSP_SetParameterFloat(v->dsp, SPAT_DISTANCEATTENUATION_MINDISTANCE, 80.0f / 32.0f);
+        FMOD_DSP_SetParameterFloat(v->dsp, SPAT_DISTANCEATTENUATION_MAXDISTANCE, 1330.0f / 32.0f);
         FMOD_DSP_SetParameterInt(v->dsp, SPAT_APPLY_AIRABSORPTION, 1);
-        FMOD_DSP_SetParameterInt(v->dsp, SPAT_APPLY_OCCLUSION, 1);
-        FMOD_DSP_SetParameterInt(v->dsp, SPAT_APPLY_TRANSMISSION, 1);
+        FMOD_DSP_SetParameterInt(v->dsp, SPAT_APPLY_OCCLUSION, 2);
+        FMOD_DSP_SetParameterInt(v->dsp, SPAT_APPLY_TRANSMISSION, 2);
+        voice_direct(v, 1.0f, NULL);
         FMOD_DSP_SetParameterBool(v->dsp, SPAT_APPLY_REFLECTIONS, 0);
         FMOD_DSP_SetParameterBool(v->dsp, SPAT_DIRECT_BINAURAL, 1);
         FMOD_DSP_SetParameterInt(v->dsp, SPAT_HRTF_INTERPOLATION, 1);
@@ -368,6 +430,16 @@ __declspec(dllexport) int ta_set_scene(const float* verts, int nverts, const int
     memset(&sc, 0, sizeof(sc));
     sc.type = IPL_SCENETYPE_DEFAULT;
     int ok = iplSceneCreate(S.ctx, &sc, &S.scene) == IPL_STATUS_SUCCESS;
+    for (int k = 0; k < 3; k++) {
+        S.mesh_lo[k] = 1e30f;
+        S.mesh_hi[k] = -1e30f;
+    }
+    for (int i = 0; i < nverts; i++)
+        for (int k = 0; k < 3; k++) {
+            float c = verts[i * 3 + k];
+            if (c < S.mesh_lo[k]) S.mesh_lo[k] = c;
+            if (c > S.mesh_hi[k]) S.mesh_hi[k] = c;
+        }
     if (ok && ntris > 0) {
         IPLStaticMeshSettings ms;
         ms.numVertices = nverts;
@@ -404,8 +476,10 @@ __declspec(dllexport) int ta_sound_load(const void* data, int len) {
     FMOD_RESULT r = FMOD_System_CreateSound(S.sys, (const char*)data, FMOD_OPENMEMORY | FMOD_CREATESAMPLE | FMOD_2D | FMOD_LOOP_OFF, &ex, &s);
     if (r != FMOD_OK) {
         fail("FMOD_System_CreateSound", FMOD_ErrorString(r));
+        S.load_fails++;
         return -1;
     }
+    S.loads++;
     S.sounds[S.nsounds] = s;
     return S.nsounds++;
 }
@@ -437,6 +511,35 @@ static void set_source_position(Voice* v) {
     FMOD_DSP_SetParameterData(v->dsp, SPAT_SOURCE_POSITION, &a, sizeof(a));
 }
 
+/* An effect whose output meter reads NaN / Inf has a poisoned internal
+ * state (HRTF filters, convolution reverb): every later mixed sample would be
+ * NaN and the output silent for good. Reset it; returns 1 if it was. */
+static int unpoison(FMOD_DSP* dsp) {
+    if (!dsp) return 0;
+    FMOD_DSP_METERING_INFO out;
+    memset(&out, 0, sizeof(out));
+    if (FMOD_DSP_GetMeteringInfo(dsp, NULL, &out) != FMOD_OK) return 0;
+    for (int c = 0; c < out.numchannels && c < 32; c++) {
+        if (!isfinite(out.peaklevel[c]) || !isfinite(out.rmslevel[c])) {
+            FMOD_DSP_Reset(dsp);
+            InterlockedIncrement(&S.nan_blocks);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Occlusion and transmission for a voice (user-defined apply type). */
+static void voice_direct(Voice* v, float occlusion, const float* transmission) {
+    float t1[3] = {1.0f, 1.0f, 1.0f};
+    const float* t = transmission ? transmission : t1;
+    v->occlusion = occlusion;
+    FMOD_DSP_SetParameterFloat(v->dsp, SPAT_OCCLUSION, occlusion);
+    FMOD_DSP_SetParameterFloat(v->dsp, SPAT_TRANSMISSION_LOW, t[0]);
+    FMOD_DSP_SetParameterFloat(v->dsp, SPAT_TRANSMISSION_MID, t[1]);
+    FMOD_DSP_SetParameterFloat(v->dsp, SPAT_TRANSMISSION_HIGH, t[2]);
+}
+
 /* Play sound `id`; `local`: the listener's own sound (no spatialization).
  * Returns a voice id (index | generation << 8) or -1. */
 __declspec(dllexport) int ta_play(int id, const float* pos, int local, int loop, float volume) {
@@ -462,8 +565,15 @@ __declspec(dllexport) int ta_play(int id, const float* pos, int local, int loop,
     /* a fresh start for the reused spatializer (no tail from the last sound) */
     FMOD_DSP_DisconnectAll(v->dsp, 1, 1);
     FMOD_DSP_Reset(v->dsp);
+    voice_direct(v, 1.0f, NULL);
     FMOD_CHANNEL* ch = NULL;
-    if (FMOD_System_PlaySound(S.sys, S.sounds[id], NULL, 1, &ch) != FMOD_OK) return -1;
+    FMOD_RESULT pr = FMOD_System_PlaySound(S.sys, S.sounds[id], S.sfx, 1, &ch);
+    if (pr != FMOD_OK) {
+        fail("FMOD_System_PlaySound", FMOD_ErrorString(pr));
+        S.play_fails++;
+        return -1;
+    }
+    S.plays++;
     FMOD_Channel_SetMode(ch, loop ? FMOD_LOOP_NORMAL : FMOD_LOOP_OFF);
     FMOD_Channel_SetVolume(ch, volume);
     v->ch = ch;
@@ -471,11 +581,19 @@ __declspec(dllexport) int ta_play(int id, const float* pos, int local, int loop,
     v->active = 1;
     v->gen = (v->gen + 1) & 0x7fffff;
     if (pos) memcpy(v->pos, pos, sizeof(v->pos));
-    if (!local) {
+    if (!local && pos) {
+        float dx = pos[0] - S.listener[0], dy = pos[1] - S.listener[1], dz = pos[2] - S.listener[2];
+        /* within 2 units (1/16 m) of the listener: as vanilla plays the
+         * listener's own sounds, unspatialized (and no zero-length direction
+         * reaches the HRTF) */
+        if (dx * dx + dy * dy + dz * dz < (2.0f / 32.0f) * (2.0f / 32.0f)) v->local = local = 1;
+    }
+    if (!local && !S.nospat) {
         set_source_position(v);
         FMOD_Channel_AddDSP(ch, 0, v->dsp);
     }
     FMOD_Channel_SetPaused(ch, 0);
+    S.last_voice = best;
     return best | (int)(v->gen << 8);
 }
 
@@ -527,15 +645,160 @@ __declspec(dllexport) void ta_options(int occlusion, int reflections, float mast
     if (FMOD_System_GetMasterChannelGroup(S.sys, &mg) == FMOD_OK) FMOD_ChannelGroup_SetVolume(mg, master);
     for (int i = 0; i < TA_VOICES; i++) {
         if (!S.v[i].dsp) continue;
-        FMOD_DSP_SetParameterInt(S.v[i].dsp, SPAT_APPLY_OCCLUSION, occlusion ? 1 : 0);
-        FMOD_DSP_SetParameterInt(S.v[i].dsp, SPAT_APPLY_TRANSMISSION, occlusion ? 1 : 0);
+        FMOD_DSP_SetParameterInt(S.v[i].dsp, SPAT_APPLY_OCCLUSION, occlusion ? 2 : 0);
+        FMOD_DSP_SetParameterInt(S.v[i].dsp, SPAT_APPLY_TRANSMISSION, occlusion ? 2 : 0);
     }
-    if (S.reverb_dsp) FMOD_DSP_SetBypass(S.reverb_dsp, reflections ? 0 : 1);
+    if (S.reverb_send) FMOD_DSPConnection_SetMix(S.reverb_send, reflections ? 0.6f : 0.0f);
+}
+
+/* Counters and the output's state for `s_fmodinfo`. */
+__declspec(dllexport) void ta_stats(char* buf, int len) {
+    int playing = 0;
+    for (int i = 0; i < TA_VOICES; i++) playing += voice_playing(&S.v[i]);
+    float vol = -1.0f;
+    FMOD_CHANNELGROUP* mg = NULL;
+    if (S.up && FMOD_System_GetMasterChannelGroup(S.sys, &mg) == FMOD_OK) FMOD_ChannelGroup_GetVolume(mg, &vol);
+    int drivers = 0;
+    if (S.up) FMOD_System_GetNumDrivers(S.sys, &drivers);
+    /* mean occlusion of the spatialized voices, and the master bus peak */
+    float occ = 0.0f;
+    int nocc = 0;
+    for (int i = 0; i < TA_VOICES; i++) {
+        if (S.v[i].active && !S.v[i].local && voice_playing(&S.v[i])) {
+            occ += S.v[i].occlusion;
+            nocc++;
+        }
+    }
+    float peak = -1.0f;
+    FMOD_DSP* head = NULL;
+    if (mg && FMOD_ChannelGroup_GetDSP(mg, FMOD_CHANNELCONTROL_DSP_HEAD, &head) == FMOD_OK) {
+        FMOD_DSP_METERING_INFO out;
+        memset(&out, 0, sizeof(out));
+        FMOD_DSP_SetMeteringEnabled(head, 0, 1);
+        if (FMOD_DSP_GetMeteringInfo(head, NULL, &out) == FMOD_OK && out.numchannels > 0) {
+            peak = 0.0f;
+            for (int c = 0; c < out.numchannels; c++) peak = out.peaklevel[c] > peak ? out.peaklevel[c] : peak;
+        }
+    }
+    const float* sp = NULL;
+    for (int i = 0; i < TA_VOICES && !sp; i++)
+        if (S.v[i].active && !S.v[i].local && voice_playing(&S.v[i])) sp = S.v[i].pos;
+    float none[3] = {0.0f, 0.0f, 0.0f};
+    if (!sp) sp = none;
+    char name[128] = "?";
+    if (S.up && drivers > 0) FMOD_System_GetDriverInfo(S.sys, 0, name, sizeof(name), NULL, NULL, NULL, NULL);
+    _snprintf(buf, len - 1, "sounds %u loaded / %u failed, plays %u / %u failed, %d voices playing, master volume %.2f, output %s (%d devices), scene %s, nan blocks %ld, direct runs %u, mean occlusion %.2f over %d, master peak %.3f, listener (%.1f %.1f %.1f) a source (%.1f %.1f %.1f) mesh (%.0f %.0f %.0f)-(%.0f %.0f %.0f), last error: %s",
+              S.loads, S.load_fails, S.plays, S.play_fails, playing, vol, name, drivers, S.have_scene ? "yes" : "no", S.nan_blocks,
+              S.direct_runs, nocc ? occ / nocc : 1.0f, nocc, peak, S.listener[0], S.listener[1], S.listener[2], sp[0], sp[1], sp[2],
+              S.mesh_lo[0], S.mesh_lo[1], S.mesh_lo[2], S.mesh_hi[0], S.mesh_hi[1], S.mesh_hi[2], g_err[0] ? g_err : "none");
+    buf[len - 1] = 0;
 }
 
 /* Once per frame: the simulation inputs, the direct simulation, FMOD. */
+/* tests: the spatializer's parameters as the loaded plugin defines them */
+static void trace_params(FMOD_DSP* dsp) {
+    int n = 0;
+    if (!S.trace || !dsp || FMOD_DSP_GetNumParameters(dsp, &n) != FMOD_OK) return;
+    for (int i = 0; i < n; i++) {
+        FMOD_DSP_PARAMETER_DESC* d = NULL;
+        if (FMOD_DSP_GetParameterInfo(dsp, i, &d) != FMOD_OK || !d) continue;
+        char vs[64] = "";
+        if (d->type == FMOD_DSP_PARAMETER_TYPE_FLOAT) {
+            float f = 0;
+            FMOD_DSP_GetParameterFloat(dsp, i, &f, NULL, 0);
+            _snprintf(vs, sizeof(vs) - 1, "float %.3f", f);
+        } else if (d->type == FMOD_DSP_PARAMETER_TYPE_INT) {
+            int v = 0;
+            FMOD_DSP_GetParameterInt(dsp, i, &v, NULL, 0);
+            _snprintf(vs, sizeof(vs) - 1, "int %d", v);
+        } else if (d->type == FMOD_DSP_PARAMETER_TYPE_BOOL) {
+            FMOD_BOOL v = 0;
+            FMOD_DSP_GetParameterBool(dsp, i, &v, NULL, 0);
+            _snprintf(vs, sizeof(vs) - 1, "bool %d", v);
+        } else {
+            _snprintf(vs, sizeof(vs) - 1, "data");
+        }
+        fprintf(S.trace, "param %d %s = %s\n", i, d->name, vs);
+    }
+    fflush(S.trace);
+}
+
+static void trace_line(void) {
+    float dsp = 0, stream = 0, geom = 0, upd = 0, total = 0;
+    FMOD_CPU_USAGE cu;
+    memset(&cu, 0, sizeof(cu));
+    FMOD_System_GetCPUUsage(S.sys, &cu);
+    dsp = cu.dsp; stream = cu.stream; geom = cu.geometry; upd = cu.update;
+    total = dsp + stream + geom + upd;
+    int real = 0, all = 0;
+    FMOD_System_GetChannelsPlaying(S.sys, &all, &real);
+    Voice* v = &S.v[S.last_voice];
+    float aud = -1, vol = -1;
+    FMOD_BOOL virt = 0, pl = 0;
+    if (v->ch) {
+        FMOD_Channel_GetAudibility(v->ch, &aud);
+        FMOD_Channel_IsVirtual(v->ch, &virt);
+        FMOD_Channel_GetVolume(v->ch, &vol);
+        FMOD_Channel_IsPlaying(v->ch, &pl);
+    }
+    float gv = -1;
+    FMOD_BOOL gm = 0, gp = 0;
+    FMOD_ChannelGroup_GetVolume(S.sfx, &gv);
+    FMOD_ChannelGroup_GetMute(S.sfx, &gm);
+    FMOD_ChannelGroup_GetPaused(S.sfx, &gp);
+    FMOD_CHANNELGROUP* mg = NULL;
+    FMOD_DSP* head = NULL;
+    float pk = -1;
+    if (FMOD_System_GetMasterChannelGroup(S.sys, &mg) == FMOD_OK && FMOD_ChannelGroup_GetDSP(mg, FMOD_CHANNELCONTROL_DSP_HEAD, &head) == FMOD_OK) {
+        FMOD_DSP_METERING_INFO out;
+        memset(&out, 0, sizeof(out));
+        FMOD_DSP_SetMeteringEnabled(head, 0, 1);
+        if (FMOD_DSP_GetMeteringInfo(head, NULL, &out) == FMOD_OK && out.numchannels > 0) pk = out.peaklevel[0];
+    }
+    float spin = -1, spout = -1;
+    if (v->dsp && !v->local) {
+        FMOD_DSP_METERING_INFO mi, mo;
+        memset(&mi, 0, sizeof(mi));
+        memset(&mo, 0, sizeof(mo));
+        if (FMOD_DSP_GetMeteringInfo(v->dsp, &mi, &mo) == FMOD_OK) {
+            spin = mi.numchannels ? mi.peaklevel[0] : -2;
+            spout = mo.numchannels ? mo.peaklevel[0] : -2;
+        }
+    }
+    unsigned int slen = 0;
+    float sfreq = 0;
+    FMOD_SOUND* snd = NULL;
+    if (v->ch && FMOD_Channel_GetCurrentSound(v->ch, &snd) == FMOD_OK && snd) {
+        FMOD_Sound_GetLength(snd, &slen, FMOD_TIMEUNIT_MS);
+        FMOD_Sound_GetDefaults(snd, &sfreq, NULL);
+    }
+    unsigned int posms = 0;
+    if (v->ch) FMOD_Channel_GetPosition(v->ch, &posms, FMOD_TIMEUNIT_MS);
+    fprintf(S.trace, "spat in %.4f out %.4f | sound %u ms at %u ms, %.0f Hz | ", spin, spout, slen, posms, sfreq);
+    fprintf(S.trace, "u%u t%lu cpu %.1f ch %d/%d real | voice %d playing %d virtual %d vol %.2f audib %.4f local %d | sfx vol %.2f mute %d pause %d | master peak %.4f | plays %u occl %.2f\n",
+            S.updates, GetTickCount(), total, all, real, S.last_voice, pl, virt, vol, aud, v->local, gv, gm, gp, pk, S.plays, v->occlusion);
+    fflush(S.trace);
+}
+
 __declspec(dllexport) void ta_update(void) {
     if (!S.up) return;
+    S.updates++;
+    for (int i = 0; i < TA_VOICES; i++)
+        if (S.v[i].active && !S.v[i].local) unpoison(S.v[i].dsp);
+    unpoison(S.reverb_dsp);
+    if (S.trace && S.updates == 1) trace_params(S.v[0].dsp);
+    if (S.trace && S.updates % 30 == 0) trace_line();
+    if (S.tone_frames > 0) {
+        if (!S.tone) {
+            FMOD_DSP* osc = NULL;
+            if (FMOD_System_CreateDSPByType(S.sys, FMOD_DSP_TYPE_OSCILLATOR, &osc) == FMOD_OK) {
+                FMOD_DSP_SetParameterInt(osc, FMOD_DSP_OSCILLATOR_TYPE, 0);
+                FMOD_DSP_SetParameterFloat(osc, FMOD_DSP_OSCILLATOR_RATE, 440.0f);
+                if (FMOD_System_PlayDSP(S.sys, osc, S.sfx, 0, &S.tone) == FMOD_OK) FMOD_Channel_SetVolume(S.tone, 0.5f);
+            }
+        }
+        if (--S.tone_frames == 0 && S.tone) FMOD_Channel_Stop(S.tone);
+    }
     for (int i = 0; i < TA_VOICES; i++) {
         Voice* v = &S.v[i];
         if (v->active && !v->local && voice_playing(v)) set_source_position(v);
@@ -582,7 +845,18 @@ __declspec(dllexport) void ta_update(void) {
             in.airAbsorptionModel.type = IPL_AIRABSORPTIONTYPE_DEFAULT;
             iplSourceSetInputs(S.reverb_src, IPL_SIMULATIONFLAGS_REFLECTIONS, &in);
         }
-        if (S.occlusion) iplSimulatorRunDirect(S.sim);
+        if (S.occlusion) {
+            iplSimulatorRunDirect(S.sim);
+            S.direct_runs++;
+            for (int i = 0; i < TA_VOICES; i++) {
+                Voice* v = &S.v[i];
+                if (!v->active || v->local) continue;
+                IPLSimulationOutputs out;
+                memset(&out, 0, sizeof(out));
+                iplSourceGetOutputs(v->src, IPL_SIMULATIONFLAGS_DIRECT, &out);
+                voice_direct(v, out.direct.occlusion, out.direct.transmission);
+            }
+        }
         LeaveCriticalSection(&S.lock);
     }
     for (int i = 0; i < TA_VOICES; i++) {

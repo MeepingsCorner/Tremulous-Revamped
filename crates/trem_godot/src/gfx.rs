@@ -29,7 +29,8 @@ pub const GLOBAL: &str = "trem_gfx";
 
 /// (name, default) of the port's graphics cvars (CVAR_ARCHIVE).
 /// r_rtBackend: 0 auto (from the GPU), 1 software, 2 hardware (where supported)
-pub const GFX_CVARS: &[(&str, &str)] = &[("r_enhanced", "1"), ("r_rtMode", "-1"), ("r_rtBackend", "0")];
+/// r_hdTextures / r_hdPath ("" = user://hd) / r_hdMaxSize: the 4K pack (hdtex.rs)
+pub const GFX_CVARS: &[(&str, &str)] = &[("r_enhanced", "1"), ("r_rtMode", "-1"), ("r_rtBackend", "0"), ("r_hdTextures", "1"), ("r_hdPath", ""), ("r_hdMaxSize", "4096")];
 
 pub fn register_cvars(c: &mut Cvars) {
     for (n, v) in GFX_CVARS {
@@ -270,6 +271,12 @@ pub struct DerivedMaps {
 /// Height from luminance -> 3x3 box blur -> Sobel -> normal. Small (<8 px)
 /// or flat images get no normal map.
 pub fn derive_maps(img: &Gd<Image>, want_normal: bool) -> DerivedMaps {
+    let (normal, mean_linear) = derive_maps_image(img, want_normal);
+    DerivedMaps { normal: normal.and_then(|i| ImageTexture::create_from_image(&i)), mean_linear }
+}
+
+/// `derive_maps` as Images (the HD texture builder compresses them).
+pub fn derive_maps_image(img: &Gd<Image>, want_normal: bool) -> (Option<Gd<Image>>, [f32; 3]) {
     let mut im = img.duplicate_resource();
     if im.is_compressed() {
         im.decompress();
@@ -282,7 +289,7 @@ pub fn derive_maps(img: &Gd<Image>, want_normal: bool) -> DerivedMaps {
     let data = im.get_data();
     let px = data.as_slice();
     if w == 0 || h == 0 || px.len() < w * h * 4 {
-        return DerivedMaps { normal: None, mean_linear: [0.5; 3] };
+        return (None, [0.5; 3]);
     }
     let mut sum = [0f64; 3];
     let mut lum = vec![0f32; w * h];
@@ -296,7 +303,7 @@ pub fn derive_maps(img: &Gd<Image>, want_normal: bool) -> DerivedMaps {
     let n = (w * h) as f64;
     let mean_linear = [0, 1, 2].map(|k| ((sum[k] / n) as f32).powf(R_GAMMA_EXP));
     if !want_normal || w < 8 || h < 8 {
-        return DerivedMaps { normal: None, mean_linear };
+        return (None, mean_linear);
     }
     // wrap-around sampling (the textures tile)
     let at = |v: &Vec<f32>, x: isize, y: isize| v[((y.rem_euclid(h as isize)) as usize) * w + (x.rem_euclid(w as isize)) as usize];
@@ -334,13 +341,13 @@ pub fn derive_maps(img: &Gd<Image>, want_normal: bool) -> DerivedMaps {
         }
     }
     if flat {
-        return DerivedMaps { normal: None, mean_linear };
+        return (None, mean_linear);
     }
-    let normal = Image::create_from_data(w as i32, h as i32, false, ImageFormat::RGB8, &PackedByteArray::from(out.as_slice())).and_then(|mut i| {
+    let normal = Image::create_from_data(w as i32, h as i32, false, ImageFormat::RGB8, &PackedByteArray::from(out.as_slice())).map(|mut i| {
         i.generate_mipmaps();
-        ImageTexture::create_from_image(&i)
+        i
     });
-    DerivedMaps { normal, mean_linear }
+    (normal, mean_linear)
 }
 
 #[cfg(test)]

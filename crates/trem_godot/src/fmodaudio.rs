@@ -14,7 +14,7 @@ use std::collections::HashMap;
 use crate::cmd::{Cvars, CVAR_ARCHIVE};
 
 /// (name, default) of the sound path's cvars (CVAR_ARCHIVE).
-pub const FMOD_CVARS: &[(&str, &str)] = &[("s_fmod", "1"), ("s_occlusion", "1"), ("s_reverb", "1")];
+pub const FMOD_CVARS: &[(&str, &str)] = &[("s_fmod", "1"), ("s_occlusion", "0"), ("s_reverb", "1")];
 
 pub fn register_cvars(c: &mut Cvars) {
     for (n, v) in FMOD_CVARS {
@@ -68,6 +68,7 @@ mod sys {
         pub listener: unsafe extern "C" fn(*const f32, *const f32, *const f32),
         pub options: unsafe extern "C" fn(i32, i32, f32),
         pub update: unsafe extern "C" fn(),
+        pub stats: unsafe extern "C" fn(*mut c_char, i32),
     }
 
     fn wide(s: &str) -> Vec<u16> {
@@ -105,6 +106,7 @@ mod sys {
             listener: f!("ta_listener"),
             options: f!("ta_options"),
             update: f!("ta_update"),
+            stats: f!("ta_stats"),
         })
     }
 
@@ -244,6 +246,21 @@ impl FmodAudio {
             (self.api.update)()
         }
     }
+    /// Counters, output device and last error (`s_fmodinfo`).
+    pub fn stats(&self) -> String {
+        #[cfg(windows)]
+        {
+            let mut buf = vec![0 as std::ffi::c_char; 1024];
+            // SAFETY: ta_stats writes a NUL-terminated string into the buffer
+            unsafe {
+                (self.api.stats)(buf.as_mut_ptr(), buf.len() as i32);
+                std::ffi::CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned()
+            }
+        }
+        #[cfg(not(windows))]
+        String::new()
+    }
+
     pub fn error(&self) -> String {
         #[cfg(windows)]
         {
