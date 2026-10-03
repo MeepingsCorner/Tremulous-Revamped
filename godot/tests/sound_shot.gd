@@ -39,6 +39,8 @@ func _run() -> void:
 		t += 0.5
 	print("sound: alive=", not game.get_hud().is_empty() and game.get_hud().alive, " after ", t, " s")
 	await _wait(1.0)
+	game.exec("s_occlusion")
+	game.exec("r_enhanced")
 	game.exec("s_fmodinfo")
 	game.exec("+attack")
 	await _wait(1.0)

@@ -30,6 +30,14 @@ pub fn register_cvars(c: &mut Cvars) {
     for (n, v) in FMOD_CVARS {
         c.get(n, v, CVAR_ARCHIVE);
     }
+    // One-time migration (s_soundCfgVersion 1): s_occlusion became -1 =
+    // auto (follow r_enhanced). Values archived before it were left by the
+    // sound tests (s_occlusion 0 / 1), not chosen by the player.
+    c.get("s_soundCfgVersion", "0", CVAR_ARCHIVE);
+    if c.integer("s_soundCfgVersion") < 1 {
+        c.set("s_occlusion", "-1");
+        c.set("s_soundCfgVersion", "1");
+    }
 }
 
 /// The map's triangles for the acoustic simulation (Godot space) and a
@@ -292,6 +300,17 @@ impl Drop for FmodAudio {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn archived_test_occlusion_is_migrated_once() {
+        let mut c = crate::cmd::Cvars::default();
+        c.set("s_occlusion", "1"); // as an old autogen.cfg leaves it
+        super::register_cvars(&mut c);
+        assert_eq!(c.integer("s_occlusion"), -1);
+        c.set("s_occlusion", "0"); // the player's own choice afterwards
+        super::register_cvars(&mut c);
+        assert_eq!(c.integer("s_occlusion"), 0);
+    }
+
     #[test]
     fn occlusion_follows_enhanced_on_auto() {
         assert!(super::occlusion_on(-1, true));
