@@ -1,0 +1,26 @@
+# sheet: buildables
+# version: 1
+# generator: table
+# index: by_id
+# requires: weapons
+# dense: BuildableId
+# target: crate::gen::buildables
+# owned_by: synthesizer
+# doctrine: D1,D2,D3,D5
+id	num	team	traj	bounce	build_points	stages	health	regen_rate	splash_damage	splash_radius	means_of_death	build_weapons	idle_anim	nextthink	build_time	usable	turret_range	turret_fire_speed	turret_proj	min_normal	invert_normal	creep_test	creep_size	dcc_test	transparent_test	unique_test	value	mins	maxs	z_offset	display_name	entity_name	model	model_scale	c_sym	ref_src
+eggpod	1	Aliens	Gravity	0.0	10	S1|S2|S3	250	8	50	100	Aspawn	abuild abuildupg	Idle1	100	15000	0	0	0	NULL	0.5	1	0	120	0	0	0	900	-15.0 -15.0 -15.0	15.0 15.0 15.0	0.0	Egg	team_alien_spawn	models/buildables/eggpod/eggpod.md3	1.0	BA_A_SPAWN	bg_misc.c:39
+overmind	2	Aliens	Gravity	0.0	0	S1|S2|S3	750	6	15	300	Aspawn	abuild abuildupg	Idle1	1000	30000	0	0	0	NULL	0.95	0	0	120	0	0	1	2700	-45.0 -45.0 -15.0	45.0 45.0 95.0	0.0	Overmind	team_alien_overmind	models/buildables/overmind/overmind.md3	1.0	BA_A_OVERMIND	bg_misc.c:74
+barricade	3	Aliens	Gravity	0.0	8	S1|S2|S3	300	14	50	100	Aspawn	abuild abuildupg	Idle1	100	20000	0	0	0	NULL	0.707	0	1	120	0	0	0	720	-35.0 -35.0 -15.0	35.0 35.0 60.0	0.0	Barricade	team_alien_barricade	models/buildables/barricade/barricade.md3	1.0	BA_A_BARRICADE	bg_misc.c:109
+acid_tube	4	Aliens	Gravity	0.0	8	S1|S2|S3	125	10	50	100	Aspawn	abuild abuildupg	Idle1	200	15000	0	0	0	NULL	0.0	1	1	120	0	0	0	720	-15.0 -15.0 -15.0	15.0 15.0 15.0	-8.5	Acid Tube	team_alien_acid_tube	models/buildables/acid_tube/acid_tube.md3	0.6	BA_A_ACIDTUBE	bg_misc.c:144
+trapper	5	Aliens	Gravity	0.0	8	S2|S3	50	6	15	100	Aspawn	abuildupg	Idle1	100	12000	0	400	1000	lockblob	0.0	1	1	30	0	1	0	720	-15.0 -15.0 -15.0	15.0 15.0 15.0	0.0	Trapper	team_alien_trapper	models/buildables/trapper/trapper.md3	1.0	BA_A_TRAPPER	bg_misc.c:179
+booster	6	Aliens	Gravity	0.0	12	S2|S3	150	8	50	100	Aspawn	abuildupg	Idle1	100	15000	0	0	0	NULL	0.707	0	1	120	0	1	0	1080	-26.0 -26.0 -9.0	26.0 26.0 9.0	0.0	Booster	team_alien_booster	models/buildables/booster/booster.md3	1.0	BA_A_BOOSTER	bg_misc.c:214
+hive	7	Aliens	Gravity	0.0	12	S3	125	10	30	200	Aspawn	abuildupg	Idle1	500	20000	0	0	0	hive	0.0	1	1	120	0	0	0	1080	-20.0 -20.0 -20.0	20.0 20.0 20.0	-10.0	Hive	team_alien_hive	models/buildables/hive/hive.md3	1.0	BA_A_HIVE	bg_misc.c:250
+telenode	8	Humans	Gravity	0.0	10	S1|S2|S3	310	0	50	100	Hspawn	ckit	Idle1	100	10000	0	0	0	NULL	0.95	0	0	0	0	1	0	2400	-40.0 -40.0 -4.0	40.0 40.0 6.0	0.0	Telenode	team_human_spawn	models/buildables/telenode/telenode.md3	1.0	BA_H_SPAWN	bg_misc.c:284
+mgturret	9	Humans	Gravity	0.0	8	S1|S2|S3	190	0	100	100	Hspawn	ckit	Idle1	50	10000	0	400	150	mgturret	0.95	0	0	0	0	1	0	1920	-25.0 -25.0 -20.0	25.0 25.0 20.0	0.0	Machinegun Turret	team_human_mgturret	models/buildables/mgturret/turret_base.md3	1.0	BA_H_MGTURRET	bg_misc.c:319
+tesla	10	Humans	Gravity	0.0	10	S3	220	0	50	100	Hspawn	ckit	Idle1	150	15000	0	200	250	teslagen	0.95	0	0	0	0	1	0	2400	-22.0 -22.0 -40.0	22.0 22.0 40.0	0.0	Tesla Generator	team_human_tesla	models/buildables/tesla/tesla.md3	1.0	BA_H_TESLAGEN	bg_misc.c:354
+arm	11	Humans	Gravity	0.0	10	S1|S2|S3	420	0	50	100	Hspawn	ckit	Idle1	100	10000	1	0	0	NULL	0.95	0	0	0	0	0	0	2400	-40.0 -40.0 -13.0	40.0 40.0 50.0	-2.0	Armoury	team_human_armoury	models/buildables/arm/arm.md3	1.0	BA_H_ARMOURY	bg_misc.c:389
+dcc	12	Humans	Gravity	0.0	8	S2|S3	190	0	50	100	Hspawn	ckit	Idle1	100	10000	0	0	0	NULL	0.95	0	0	0	0	0	0	1920	-35.0 -35.0 -13.0	35.0 35.0 47.0	0.0	Defence Computer	team_human_dcc	models/buildables/dcc/dcc.md3	1.0	BA_H_DCC	bg_misc.c:424
+medistat	13	Humans	Gravity	0.0	8	S1|S2|S3	190	0	50	100	Hspawn	ckit	Idle1	100	10000	0	0	0	NULL	0.95	0	0	0	0	1	0	1920	-35.0 -35.0 -7.0	35.0 35.0 4.0	0.0	Medistation	team_human_medistat	models/buildables/medistat/medistat.md3	1.0	BA_H_MEDISTAT	bg_misc.c:459
+reactor	14	Humans	Gravity	0.0	0	S1|S2|S3	930	0	200	300	Hspawn	ckit	Idle1	1000	20000	1	0	0	NULL	0.95	0	0	0	0	0	1	7200	-41.0 -41.0 -15.0	41.0 41.0 95.0	-2.0	Reactor	team_human_reactor	models/buildables/reactor/reactor.md3	0.85	BA_H_REACTOR	bg_misc.c:495
+repeater	15	Humans	Gravity	0.0	4	S1|S2|S3	250	0	50	100	Hspawn	ckit	Idle1	100	10000	1	0	0	NULL	0.95	0	0	0	0	0	0	960	-15.0 -15.0 -15.0	15.0 15.0 25.0	0.0	Repeater	team_human_repeater	models/buildables/repeater/repeater.md3	1.0	BA_H_REPEATER	bg_misc.c:530
+hovel	16	Aliens	Gravity	0.0	0	NULL	375	20	20	200	Aspawn	abuild abuildupg	Idle1	150	15000	1	0	0	NULL	0.95	0	1	120	0	0	1	0	-50.0 -50.0 -20.0	50.0 50.0 20.0	0.0	Hovel	team_alien_hovel	models/buildables/hovel/hovel.md3	1.0	BA_A_HOVEL	re/source11 bg_misc.c:283

@@ -1,0 +1,59 @@
+spawner_shot: team humans -> ok
+spawner_shot: class rifle -> ok
+spawner_shot: telenodes=2 eggpods=2 reactors=1 overminds=1
+actor: ent 0 origin=(1792,448,50) p11:10:0000 scale=1 z_offset=-2 parts=[in_tree=true vis=false pos=(56.00,1.51,-14.00) surfs=1/2] [in_tree=true vis=false pos=(56.00,1.79,-14.00) surfs=2/4] [in_tree=true vis=false pos=(56.01,2.30,-13.99) surfs=1/2] [in_tree=true vis=false pos=(55.89,2.05,-13.78) surfs=1/1]
+actor: ent 1 origin=(-1852,478,31) p3:1:0000 scale=1.2 z_offset=-5 parts=[in_tree=true vis=true pos=(-57.86,0.82,-14.94) surfs=1/1]
+actor: ent 2 origin=(-1945,118,-79) p3:1:0000 scale=1.2 z_offset=-5 parts=[in_tree=true vis=true pos=(-60.79,-2.63,-3.69) surfs=1/1]
+actor: ent 3 origin=(-1649,281,31) p3:1:0000 scale=1.2 z_offset=-5 parts=[in_tree=true vis=true pos=(-51.54,0.82,-8.77) surfs=1/1]
+actor: ent 4 origin=(-443,382,-104) p11:10:0000 scale=1 z_offset=-2 parts=[in_tree=true vis=true pos=(-13.86,-3.31,-11.93) surfs=1/2] [in_tree=true vis=true pos=(-13.86,-2.96,-11.95) surfs=2/4] [in_tree=true vis=true pos=(-13.82,-2.45,-11.97) surfs=1/2] [in_tree=true vis=true pos=(-14.05,-2.69,-12.07) surfs=1/1]
+actor: ent 5 origin=(-540,271,-104) p11:10:0000 scale=1 z_offset=-2 parts=[in_tree=true vis=true pos=(-16.89,-3.31,-8.48) surfs=1/2] [in_tree=true vis=true pos=(-16.88,-2.93,-8.50) surfs=2/4] [in_tree=true vis=true pos=(-16.82,-2.42,-8.55) surfs=1/2] [in_tree=true vis=true pos=(-17.05,-2.66,-8.65) surfs=1/1]
+actor: ent 6 origin=(1693,111,40) p11:10:0000 scale=1 z_offset=-2 parts=[in_tree=true vis=true pos=(52.91,1.19,-3.48) surfs=1/2] [in_tree=true vis=true pos=(52.92,1.58,-3.49) surfs=2/4] [in_tree=true vis=true pos=(52.96,2.09,-3.55) surfs=1/2] [in_tree=true vis=true pos=(52.73,1.84,-3.64) surfs=1/1]
+actor: ent 125 origin=(-1896,-304,31) bSome(AcidTube) scale=0.6 z_offset=-8.5 parts=[in_tree=true vis=true pos=(-59.25,0.71,9.50) surfs=3/3]
+actor: ent 126 origin=(-1904,-176,-113) bSome(AcidTube) scale=0.6 z_offset=-8.5 parts=[in_tree=true vis=true pos=(-59.50,-3.79,5.50) surfs=3/3]
+actor: ent 127 origin=(-1904,176,-113) bSome(AcidTube) scale=0.6 z_offset=-8.5 parts=[in_tree=true vis=true pos=(-59.50,-3.79,-5.50) surfs=3/3]
+actor: ent 128 origin=(1696,200,23) bSome(Medistat) scale=1 z_offset=0 parts=[in_tree=true vis=true pos=(53.00,0.72,-6.25) surfs=3/3]
+actor: ent 129 origin=(1616,200,29) bSome(Arm) scale=1 z_offset=-2 parts=[in_tree=true vis=true pos=(50.50,0.85,-6.25) surfs=5/5]
+actor: ent 130 origin=(1760,64,-108) bSome(Mgturret) scale=1 z_offset=0 parts=[in_tree=true vis=true pos=(55.00,-3.37,-2.00) surfs=1/1] [in_tree=true vis=true pos=(55.00,-3.37,-2.03) surfs=4/4] [in_tree=true vis=true pos=(55.00,-3.37,-2.03) surfs=1/1]
+actor: ent 131 origin=(1632,-256,36) bSome(Mgturret) scale=1 z_offset=0 parts=[in_tree=true vis=true pos=(51.00,1.13,8.00) surfs=1/1] [in_tree=true vis=true pos=(50.97,1.13,8.00) surfs=4/4] [in_tree=true vis=true pos=(50.97,1.13,8.00) surfs=1/1]
+actor: ent 132 origin=(1760,-64,-108) bSome(Mgturret) scale=1 z_offset=0 parts=[in_tree=true vis=true pos=(55.00,-3.37,2.00) surfs=1/1] [in_tree=true vis=true pos=(55.00,-3.37,1.97) surfs=4/4] [in_tree=true vis=true pos=(55.00,-3.37,1.97) surfs=1/1]
+actor: ent 133 origin=(-1680,-336,31) bSome(AcidTube) scale=0.6 z_offset=-8.5 parts=[in_tree=true vis=true pos=(-52.50,0.71,10.50) surfs=3/3]
+actor: ent 134 origin=(-1712,-176,-113) bSome(AcidTube) scale=0.6 z_offset=-8.5 parts=[in_tree=true vis=true pos=(-53.50,-3.79,5.50) surfs=3/3]
+actor: ent 135 origin=(-1712,176,-113) bSome(AcidTube) scale=0.6 z_offset=-8.5 parts=[in_tree=true vis=true pos=(-53.50,-3.79,-5.50) surfs=3/3]
+actor: ent 144 origin=(-1856,448,31) bSome(Eggpod) scale=1 z_offset=0 parts=[in_tree=true vis=true pos=(-58.00,0.97,-14.00) surfs=4/4]
+actor: ent 145 origin=(-1728,320,31) bSome(Eggpod) scale=1 z_offset=0 parts=[in_tree=true vis=true pos=(-54.00,0.97,-10.00) surfs=4/4]
+actor: ent 146 origin=(-1744,448,31) bSome(Overmind) scale=1 z_offset=0 parts=[in_tree=true vis=true pos=(-54.50,0.97,-14.00) surfs=3/3]
+actor: ent 147 origin=(1792,448,20) bSome(Telenode) scale=1 z_offset=0 parts=[in_tree=true vis=true pos=(56.00,0.63,-14.00) surfs=4/4]
+actor: ent 148 origin=(1664,320,20) bSome(Telenode) scale=1 z_offset=0 parts=[in_tree=true vis=true pos=(52.00,0.63,-10.00) surfs=4/4]
+actor: ent 149 origin=(1664,448,31) bSome(Reactor) scale=0.85 z_offset=-2 parts=[in_tree=true vis=true pos=(52.00,0.91,-14.00) surfs=6/6]
+spawner_shot: setviewpos 1682 448 30 0 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_0_0.png
+spawner_shot: setviewpos 1792 338 30 90 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_0_1.png
+spawner_shot: setviewpos 1902 448 30 180 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_0_2.png
+spawner_shot: setviewpos 1792 558 30 270 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_0_3.png
+spawner_shot: setviewpos 1554 320 30 0 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_1_0.png
+spawner_shot: setviewpos 1664 210 30 90 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_1_1.png
+spawner_shot: setviewpos 1774 320 30 180 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_1_2.png
+spawner_shot: setviewpos 1664 430 30 270 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_1_3.png
+spawner_shot: setviewpos -1966 448 41 0 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_0_0.png
+spawner_shot: setviewpos -1856 338 41 90 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_0_1.png
+spawner_shot: setviewpos -1746 448 41 180 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_0_2.png
+spawner_shot: setviewpos -1856 558 41 270 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_0_3.png
+spawner_shot: setviewpos -1838 320 41 0 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_1_0.png
+spawner_shot: setviewpos -1728 210 41 90 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_1_1.png
+spawner_shot: setviewpos -1618 320 41 180 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_1_2.png
+spawner_shot: setviewpos -1728 430 41 270 -> ok
+spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_1_3.png

@@ -1,0 +1,274 @@
+# sheet: plan
+# version: 1
+# generator: none
+# key: sheet,id
+# owned_by: architect
+sheet	id	kind	priority	notes
+classes	spectator	ClassMovement	1	movement golden-traced
+classes	builder	ClassMovement	1	movement golden-traced
+classes	builderupg	ClassMovement	1	movement shares verified code paths
+classes	level0	ClassMovement	1	movement golden-traced
+classes	level1	ClassMovement	1	movement golden-traced
+classes	level1upg	ClassMovement	1	movement shares verified code paths
+classes	level2	ClassMovement	1	movement golden-traced
+classes	level2upg	ClassMovement	1	movement shares verified code paths
+classes	level3	ClassMovement	1	movement golden-traced
+classes	level3upg	ClassMovement	1	movement shares verified code paths
+classes	level4	ClassMovement	1	movement golden-traced
+classes	human_base	ClassMovement	1	movement golden-traced
+classes	human_bsuit	ClassMovement	1	movement golden-traced
+weapons	level0	WeaponFire	1	auto-bite, not a fire event
+weapons	level1	WeaponFire	1	NULL
+weapons	level1upg	WeaponFire	1	NULL
+weapons	level2	WeaponFire	1	NULL
+weapons	level2upg	WeaponFire	1	NULL
+weapons	level3	WeaponFire	1	NULL
+weapons	level3upg	WeaponFire	1	NULL
+weapons	level4	WeaponFire	1	NULL
+weapons	blaster	WeaponFire	1	NULL
+weapons	rifle	WeaponFire	1	NULL
+weapons	psaw	WeaponFire	1	NULL
+weapons	shotgun	WeaponFire	1	NULL
+weapons	lgun	WeaponFire	1	NULL
+weapons	mdriver	WeaponFire	1	NULL
+weapons	chaingun	WeaponFire	1	NULL
+weapons	flamer	WeaponFire	1	NULL
+weapons	prifle	WeaponFire	1	NULL
+weapons	lcannon	WeaponFire	1	NULL
+weapons	grenade	WeaponFire	1	NULL
+weapons	lockblob	WeaponFire	1	NULL
+weapons	hive	WeaponFire	1	NULL
+weapons	teslagen	WeaponFire	1	NULL
+weapons	mgturret	WeaponFire	1	NULL
+weapons	abuild	WeaponFire	1	NULL
+weapons	abuildupg	WeaponFire	1	NULL
+weapons	ckit	WeaponFire	1	NULL
+upgrades	larmour	Upgrade	2	NULL
+upgrades	helmet	Upgrade	2	NULL
+upgrades	medkit	Upgrade	2	NULL
+upgrades	battpack	Upgrade	2	NULL
+upgrades	jetpack	Upgrade	2	NULL
+upgrades	bsuit	Upgrade	2	NULL
+upgrades	gren	Upgrade	2	NULL
+upgrades	ammo	Upgrade	2	NULL
+buildables	eggpod	BuildableThink	1	NULL
+buildables	overmind	BuildableThink	1	NULL
+buildables	barricade	BuildableThink	1	NULL
+buildables	acid_tube	BuildableThink	1	NULL
+buildables	trapper	BuildableThink	1	NULL
+buildables	booster	BuildableThink	1	NULL
+buildables	hive	BuildableThink	1	NULL
+buildables	telenode	BuildableThink	1	NULL
+buildables	mgturret	BuildableThink	1	NULL
+buildables	tesla	BuildableThink	1	NULL
+buildables	arm	BuildableThink	1	NULL
+buildables	dcc	BuildableThink	1	NULL
+buildables	medistat	BuildableThink	1	NULL
+buildables	reactor	BuildableThink	1	NULL
+buildables	repeater	BuildableThink	1	NULL
+entity_spawns	func_bobbing	EntitySpawn	2	NULL
+entity_spawns	func_button	EntitySpawn	2	NULL
+entity_spawns	func_door	EntitySpawn	2	NULL
+entity_spawns	func_door_model	EntitySpawn	2	NULL
+entity_spawns	func_door_rotating	EntitySpawn	2	NULL
+entity_spawns	func_group	EntitySpawn	2	NULL
+entity_spawns	func_pendulum	EntitySpawn	2	NULL
+entity_spawns	func_plat	EntitySpawn	2	NULL
+entity_spawns	func_rotating	EntitySpawn	2	NULL
+entity_spawns	func_static	EntitySpawn	2	NULL
+entity_spawns	func_timer	EntitySpawn	2	NULL
+entity_spawns	func_train	EntitySpawn	2	NULL
+entity_spawns	info_alien_intermission	EntitySpawn	2	NULL
+entity_spawns	info_human_intermission	EntitySpawn	2	NULL
+entity_spawns	info_notnull	EntitySpawn	2	NULL
+entity_spawns	info_null	EntitySpawn	2	NULL
+entity_spawns	info_player_deathmatch	EntitySpawn	2	NULL
+entity_spawns	info_player_intermission	EntitySpawn	2	NULL
+entity_spawns	info_player_start	EntitySpawn	2	NULL
+entity_spawns	light	EntitySpawn	2	NULL
+entity_spawns	misc_anim_model	EntitySpawn	2	NULL
+entity_spawns	misc_light_flare	EntitySpawn	2	NULL
+entity_spawns	misc_model	EntitySpawn	2	NULL
+entity_spawns	misc_particle_system	EntitySpawn	2	NULL
+entity_spawns	misc_portal_camera	EntitySpawn	2	NULL
+entity_spawns	misc_portal_surface	EntitySpawn	2	NULL
+entity_spawns	misc_teleporter_dest	EntitySpawn	2	NULL
+entity_spawns	path_corner	EntitySpawn	2	NULL
+entity_spawns	target_alien_win	EntitySpawn	2	NULL
+entity_spawns	target_delay	EntitySpawn	2	NULL
+entity_spawns	target_human_win	EntitySpawn	2	NULL
+entity_spawns	target_hurt	EntitySpawn	2	NULL
+entity_spawns	target_kill	EntitySpawn	2	NULL
+entity_spawns	target_location	EntitySpawn	2	NULL
+entity_spawns	target_position	EntitySpawn	2	NULL
+entity_spawns	target_print	EntitySpawn	2	NULL
+entity_spawns	target_push	EntitySpawn	2	NULL
+entity_spawns	target_relay	EntitySpawn	2	NULL
+entity_spawns	target_rumble	EntitySpawn	2	NULL
+entity_spawns	target_score	EntitySpawn	2	NULL
+entity_spawns	target_speaker	EntitySpawn	2	NULL
+entity_spawns	target_teleporter	EntitySpawn	2	NULL
+entity_spawns	trigger_always	EntitySpawn	2	NULL
+entity_spawns	trigger_ammo	EntitySpawn	2	NULL
+entity_spawns	trigger_buildable	EntitySpawn	2	NULL
+entity_spawns	trigger_class	EntitySpawn	2	NULL
+entity_spawns	trigger_equipment	EntitySpawn	2	NULL
+entity_spawns	trigger_gravity	EntitySpawn	2	NULL
+entity_spawns	trigger_heal	EntitySpawn	2	NULL
+entity_spawns	trigger_hurt	EntitySpawn	2	NULL
+entity_spawns	trigger_multiple	EntitySpawn	2	NULL
+entity_spawns	trigger_push	EntitySpawn	2	NULL
+entity_spawns	trigger_stage	EntitySpawn	2	NULL
+entity_spawns	trigger_teleport	EntitySpawn	2	NULL
+entity_spawns	trigger_win	EntitySpawn	2	NULL
+client_commands	a	ClientCommand	2	NULL
+client_commands	build	ClientCommand	2	NULL
+client_commands	buy	ClientCommand	2	NULL
+client_commands	callteamvote	ClientCommand	2	NULL
+client_commands	callvote	ClientCommand	2	NULL
+client_commands	class	ClientCommand	2	NULL
+client_commands	damage	ClientCommand	2	NULL
+client_commands	deconstruct	ClientCommand	2	NULL
+client_commands	destroy	ClientCommand	2	NULL
+client_commands	follow	ClientCommand	2	NULL
+client_commands	follownext	ClientCommand	2	NULL
+client_commands	followprev	ClientCommand	2	NULL
+client_commands	give	ClientCommand	2	NULL
+client_commands	god	ClientCommand	2	NULL
+client_commands	ignore	ClientCommand	2	NULL
+client_commands	itemact	ClientCommand	2	NULL
+client_commands	itemdeact	ClientCommand	2	NULL
+client_commands	itemtoggle	ClientCommand	2	NULL
+client_commands	kill	ClientCommand	2	NULL
+client_commands	levelshot	ClientCommand	2	NULL
+client_commands	listmaps	ClientCommand	2	NULL
+client_commands	m	ClientCommand	2	NULL
+client_commands	mt	ClientCommand	2	NULL
+client_commands	noclip	ClientCommand	2	NULL
+client_commands	notarget	ClientCommand	2	NULL
+client_commands	reload	ClientCommand	2	NULL
+client_commands	say	ClientCommand	2	NULL
+client_commands	say_area	ClientCommand	2	NULL
+client_commands	say_team	ClientCommand	2	NULL
+client_commands	score	ClientCommand	2	NULL
+client_commands	sell	ClientCommand	2	NULL
+client_commands	setviewpos	ClientCommand	2	NULL
+client_commands	team	ClientCommand	2	NULL
+client_commands	teamvote	ClientCommand	2	NULL
+client_commands	test	ClientCommand	2	NULL
+client_commands	unignore	ClientCommand	2	NULL
+client_commands	vote	ClientCommand	2	NULL
+client_commands	vsay	ClientCommand	2	NULL
+client_commands	vsay_local	ClientCommand	2	NULL
+client_commands	vsay_team	ClientCommand	2	NULL
+client_commands	where	ClientCommand	2	NULL
+admin_commands	adjustban	AdminCommand	3	NULL
+admin_commands	adminhelp	AdminCommand	3	NULL
+admin_commands	admintest	AdminCommand	3	NULL
+admin_commands	allowbuild	AdminCommand	3	NULL
+admin_commands	allready	AdminCommand	3	NULL
+admin_commands	ban	AdminCommand	3	NULL
+admin_commands	builder	AdminCommand	3	NULL
+admin_commands	buildlog	AdminCommand	3	NULL
+admin_commands	cancelvote	AdminCommand	3	NULL
+admin_commands	changemap	AdminCommand	3	NULL
+admin_commands	denybuild	AdminCommand	3	NULL
+admin_commands	kick	AdminCommand	3	NULL
+admin_commands	listadmins	AdminCommand	3	NULL
+admin_commands	listlayouts	AdminCommand	3	NULL
+admin_commands	listplayers	AdminCommand	3	NULL
+admin_commands	lock	AdminCommand	3	NULL
+admin_commands	mute	AdminCommand	3	NULL
+admin_commands	namelog	AdminCommand	3	NULL
+admin_commands	nextmap	AdminCommand	3	NULL
+admin_commands	passvote	AdminCommand	3	NULL
+admin_commands	pause	AdminCommand	3	NULL
+admin_commands	putteam	AdminCommand	3	NULL
+admin_commands	readconfig	AdminCommand	3	NULL
+admin_commands	rename	AdminCommand	3	NULL
+admin_commands	restart	AdminCommand	3	NULL
+admin_commands	revert	AdminCommand	3	NULL
+admin_commands	setlevel	AdminCommand	3	NULL
+admin_commands	showbans	AdminCommand	3	NULL
+admin_commands	spec999	AdminCommand	3	NULL
+admin_commands	time	AdminCommand	3	NULL
+admin_commands	unban	AdminCommand	3	NULL
+admin_commands	unlock	AdminCommand	3	NULL
+admin_commands	unmute	AdminCommand	3	NULL
+systems	bots_think	System	1	NULL
+systems	client_think	System	1	NULL
+systems	run_entities	System	1	NULL
+systems	client_end_frame	System	1	NULL
+systems	unlagged_store	System	1	NULL
+systems	count_spawns	System	1	NULL
+systems	build_points	System	1	NULL
+systems	stages	System	1	NULL
+systems	spawn_clients	System	1	NULL
+systems	avg_players	System	1	NULL
+systems	update_zaps	System	1	NULL
+systems	exit_rules	System	1	NULL
+systems	check_votes	System	1	NULL
+systems	log_flush	System	1	NULL
+maps	arena	Map	1	NULL
+features	bsp_loader	Feature	2	IBSP v46 + CM_LoadMap collision half (patches, inline models): hashes vs re/harness/cm_ref
+features	patch_collision	Feature	2	240k queries on the 8 maps bit-identical to the original
+features	bsp_world	Feature	2	every classname through the entity_spawns sheet
+features	movers	Feature	2	pusher, doors, plats, buttons, trains, rotating/bobbing/pendulum
+features	triggers	Feature	2	g_trigger.c, g_target.c, g_misc.c
+features	bp_zones	Feature	2	repeater build-point zones and queues
+features	decon_marking	Feature	2	g_markDeconstruct 3: mark, replace on build
+features	spawn_queue	Feature	2	NULL
+features	evolve	Feature	2	NULL
+features	armoury	Feature	2	buy/sell
+features	build	Feature	2	blueprint + build_fire
+features	stages	Feature	2	NULL
+features	locational_damage	Feature	2	damage_regions sheet
+features	spectator_follow	Feature	2	NULL
+features	intermission	Feature	2	ExitLevel loads g_nextMap, else advances the map rotation (dec022), else restarts
+features	votes	Feature	2	kick/mute/denybuild/allowbuild run the admin commands (dec026)
+features	pvs_areas	Feature	2	NULL
+features	world_effects	Feature	2	P_WorldEffects + G_SetClientSound
+features	location	Feature	2	no stock map places target_location
+features	chat	Feature	2	with G_CensorString / G_FloodLimited and admin chat (dec026)
+features	timelimit	Feature	2	g_timelimit 0 by default in the sandbox
+features	map_rotation	Feature	2	maprotation.cfg from the data folders; host keeps state (dec022)
+features	bisphere_trace	Feature	2	light flare REALFADE lateral fraction (dec024)
+features	admin	Feature	2	host player is the top admin, GUID-only bans (dec026)
+features	namelog	Feature	2	NULL
+features	server_console	Feature	2	host console as a dedicated console (dec026)
+features	layouts	Feature	2	layouts/<map>/<name>.dat via user:// and the pk3s
+features	build_log	Feature	2	NULL
+features	name_cleaning	Feature	2	NULL
+features	inactivity	Feature	2	g_inactivity 0 (off) by default
+features	flood_censor	Feature	2	g_censorship empty by default
+features	session	Feature	2	host keeps per-slot session strings
+features	bots	Feature	2	new (dec015, dec028). Done when, 3 bots a side, on the sheet arena and the 8 official maps: in a 10-min match both teams kill >=3 enemies, deaths to the map <=10% of all deaths (0 on arena), no bot stuck >35 s, <=5 /kill, aliens evolve and humans buy, both teams damage the enemy's structures; and 2 bots of either team alone with the credit cap damage the enemy's structures (>=100 health) within 5 min, spending credits, <=2 map deaths, no bot stuck >35 s. Balance over 6 seeds per official map (dec036): neither team wins >67% of a map's runs or >60% of all runs, matches last >=480 s on average (>=360 s on every map). Evidence crates/trem_sim/tests/bots.rs (official maps: --ignored, release)
+features	warmup	Feature	2	g_doWarmup 0 by default; SP_worldspawn's CS_WARMUP and the Warmup: log line, CG_DrawWarmup in the HUD
+features	userinfo_name	Feature	2	the local player's name cvar at connect and on change (CL_CheckUserinfo), rename limits, namelog, ClientRename
+features	determinism	Feature	2	seeded LCG shared with oracle (dec013)
+features	net_huffman	Feature	2	adaptive Huffman of the OOB connect and every netchan message: bit-exact vs re/harness/net_ref (re/traces/net.sha256)
+features	net_msg	Feature	2	bit streams, entityState/playerState netField deltas, keyed usercmd deltas: bit-exact vs net_ref
+features	net_chan	Feature	2	sequences, qport, fragments, loopback: bit-exact vs net_ref
+features	net_ip	Feature	2	non-blocking UDP per source, broadcast, NET_QueuePacket's packet delay
+features	server	Feature	2	connectionless queries, challenges, connect, gamestate, configstrings, rcon, downloads, timeouts, heartbeats
+features	snapshots	Feature	2	PVS/area culled entity lists delta'd against the acked frame, rate control
+features	client	Feature	2	CA_* states, gamestate/snapshot parsing, usercmd packets, server time drift
+features	prediction	Feature	2	snapshot interpolation, Pmove prediction with error decay, events; within tolerance at 0 and 224 ms ping
+features	unlagged	Feature	2	rewind of the other players to the shooter's command time (dec034)
+features	ip_bans	Feature	2	GUID or IP/CIDR bans, namelog addresses (dec034)
+features	server_browser	Feature	2	localservers broadcast, getservers to the masters, pings, featured labels; Godot ui via trap_LAN (dec035)
+features	guid	Feature	2	cl_guid = MD5 of the qkey (RFC 1321 vectors)
+features	dedicated_server	Feature	2	cargo run -p trem_sim --example dedicated -- +map atcs; headless Godot: godot --headless --path godot -- +set dedicated 1 +map atcs (godot/tests/a_dl_shot.gd joins it, dec037)
+features	pure_checksums	Feature	2	FS_LoadZipFile's checksum / pure_checksum over the zip CRCs with Com_BlockChecksum (md4.c): data-1.1.0.pk3 hashed against re/harness/pak_ref (re/traces/pak.sha256)
+features	pure_server	Feature	2	sv_pure 1: sv_paks / sv_referencedPaks, the client's restricted search path and cp reply, SV_VerifyPaks_f refusing a forged cp
+features	pk3_download	Feature	2	CL_InitDownloads / CL_NextDownload (com_downloadPrompt, cl_allowDownload) / CL_ParseDownload into fs_homepath / CL_DownloadsComplete's FS_Restart and donedl against SV_WriteDownloadToClient's referenced paks; Godot: user://base, godot/tests/a_dl_shot.gd
+features	demos	Feature	2	record / stoprecord / demo / timedemo / cl_autoRecordDemo, demos/<name>.dm_71; playback gives back every recorded snapshot; Godot: user://demos, godot/tests/a_demo_shot.gd
+features	ipv6	Feature	2	ipv6 sockets (IPV6_V6ONLY), net_enabled family priority, [addr]:port parsing and printing, NET_JoinMulticast6 LAN scan (socket tests skip without ipv6 on the host)
+features	voip	Feature	2	Opus voice over protocol 71 (clc/svc_voipOpus) with the bundled libopus 1.1; capture, targets, ignore/gain/muteall, VAD, meter; two clients over UDP at 35 dB SNR
+features	video_capture	Feature	2	video / stopvideo: MJPEG or raw BGR AVI with PCM audio at cl_aviFrameRate; RIFF tree and idx1 checked, ffprobe when installed
+features	master_list	Feature	2	getservers 71 full empty (master.tremulous.net reads the protocol first), getserversExt for ipv6 masters; heartbeat, getinfo challenge from the master's out port, list, ping, join against a darklegion tremulous-master stand-in
+features	vanilla_wire	Feature	2	1.1.0's entityStateFields / playerStateFields deltas, Com_HashKey usercmd keys, CL_Netchan_Encode / CL_Netchan_Decode and the checksum-less netchan, hashed against re/harness/msg69_ref (re/source11 compiled natively, re/traces/msg69.sha256)
+features	vanilla_client	Feature	2	protocol 69 connections: getchallenge / challengeResponse / connect protocol 69, gamestate, snapshots kept as 1.1 delta bases and handed to the cgame through v11.rs, usercmds and commands through v11.rs, pure cp, UDP downloads, disconnect; end to end against a real 1.1.0 tremded (sv_pure 0 and 1)
+features	net_modes	Feature	2	cl_netProtocol Auto (getinfo first, 71 without an answer) / 71 / 69, connect -1|-69|-71; the browser asks the masters for 71 and 69, merges the lists, takes 1.1.0 infoResponses without gamename, tags 1.1 / 1.3 servers, filters them (ui_browserProtocol) and joins each with its protocol
+features	vanilla_game_data	Feature	2	1.1.0 numbering (from the compiled 1.1.0 headers) and encodings of playerState, entities, events, configstrings, server and client commands, usercmds mapped to the legacy client; the hovel and the advanced construction kit drawn
+features	vanilla_prediction	Feature	2	1.1.0's movement byte-exact against re/harness/pmove11_ref over scenarios11.tsv; the cgame predicts with it (no prediction misses against 1.1 movement)

@@ -1,0 +1,24 @@
+# sheet: classes11
+# version: 1
+# generator: table
+# index: by_id
+# requires: classes,weapons11
+# dense: Class11Id
+# target: crate::gen::classes11
+# owned_by: synthesizer
+# doctrine: D1,D2,D3,D5
+# notes: player classes of Tremulous 1.1.0 (bg_misc.c bg_classList with data-1.1.0.pk3 overrides/classes); re/harness/synth_v11.py (dec041)
+id	num	legacy	team	stages	health	fall_damage	regen_rate	abilities	start_weapon	build_dist	fov	bob	bob_cycle	steptime	speed	acceleration	air_acceleration	friction	stop_speed	jump_magnitude	knockback_scale	children	cost	value	mins	maxs	crouch_maxs	dead_mins	dead_maxs	viewheight	crouch_viewheight	z_offset	display_name	model	model_scale	skin	shadow_scale	hud	c_sym	ref_src
+spectator	0	spectator	None	S1|S2|S3	0	0.0	0	NULL	NULL	0.0	90	0.0	1.0	0	600.0	10.0	1.0	6.0	100.0	270.0	1.0	NULL	0	0	-15.0 -15.0 -15.0	15.0 15.0 15.0	15.0 15.0 15.0	-15.0 -15.0 -15.0	15.0 15.0 15.0	0	0	0.0	Spectator	NULL	1.0	NULL	1.0	NULL	PCL_NONE	bg_misc.c:1460
+builder	1	builder	Aliens	S1|S2|S3	50	0.2	2	Takesfalldamage|Fovwarps|Aliensense	abuild	95.0	80	0.001	2.0	150	0.8	10.0	1.0	6.0	100.0	195.0	1.0	builderupg level0	0	200	-20.0 -20.0 -20.0	20.0 20.0 20.0	20.0 20.0 20.0	-20.0 -20.0 -4.0	20.0 20.0 4.0	0	0	0.0	Granger	builder	1.0	default	1.0	alien_builder_hud	PCL_ALIEN_BUILDER0	bg_misc.c:1498
+builderupg	2	builderupg	Aliens	S2|S3	75	0.0	3	Wallclimber|Fovwarps|Aliensense	abuildupg	105.0	110	0.001	2.0	100	1.0	10.0	1.0	6.0	100.0	270.0	1.0	level0	0	250	-25.0 -25.0 -25.0	25.0 25.0 25.0	25.0 25.0 25.0	-25.0 -25.0 -4.0	25.0 25.0 4.0	0	0	0.0	Advanced Granger	builder	1.25	advanced	1.25	alien_builder_hud	PCL_ALIEN_BUILDER0_UPG	bg_misc.c:1536
+level0	3	level0	Aliens	S1|S2|S3	25	0.0	1	Wallclimber|Noweapondrift|Fovwarps|Aliensense	level0	0.0	140	0.0	2.5	25	1.3	10.0	1.0	6.0	400.0	250.0	2.0	level1	0	175	-15.0 -15.0 -15.0	15.0 15.0 15.0	15.0 15.0 15.0	-15.0 -15.0 -15.0	15.0 15.0 15.0	0	0	-8.0	Dretch	level0	1.0	default	0.3	alien_general_hud	PCL_ALIEN_LEVEL0	bg_misc.c:1574
+level1	4	level1	Aliens	S1|S2|S3	75	0.0	2	Wallclimber|Noweapondrift|Fovwarps|Aliensense	level1	0.0	120	0.001	1.8	60	1.25	10.0	1.0	6.0	300.0	270.0	1.2	level2 level1upg	1	225	-18.0 -18.0 -18.0	18.0 18.0 18.0	18.0 18.0 18.0	-18.0 -18.0 -4.0	18.0 18.0 4.0	0	0	0.0	Basilisk	level1	1.0	default	1.0	alien_general_hud	PCL_ALIEN_LEVEL1	bg_misc.c:1613
+level1upg	5	level1upg	Aliens	S2|S3	100	0.0	3	Wallclimber|Noweapondrift|Fovwarps|Aliensense	level1upg	0.0	120	0.001	1.8	60	1.25	10.0	1.0	6.0	300.0	270.0	1.1	level2	1	275	-21.0 -21.0 -21.0	21.0 21.0 21.0	21.0 21.0 21.0	-21.0 -21.0 -4.666	21.0 21.0 4.666	0	0	0.0	Advanced Basilisk	level1	1.1666	upgrade	1.0	alien_general_hud	PCL_ALIEN_LEVEL1_UPG	bg_misc.c:1652
+level2	6	level2	Aliens	S1|S2|S3	150	0.0	4	Noweapondrift|Fovwarps|Aliensense|Walljumper	level2	0.0	90	0.001	1.5	80	1.2	10.0	2.0	6.0	100.0	400.0	0.8	level3 level2upg	1	350	-25.0 -25.0 -22.0	25.0 25.0 16.0	25.0 25.0 16.0	-25.0 -25.0 -4.0	25.0 25.0 4.0	10	10	0.0	Marauder	level2	1.0	default	1.0	alien_general_hud	PCL_ALIEN_LEVEL2	bg_misc.c:1691
+level2upg	7	level2upg	Aliens	S2|S3	175	0.0	5	Noweapondrift|Fovwarps|Aliensense|Walljumper	level2upg	0.0	90	0.001	1.5	80	1.2	10.0	2.0	6.0	100.0	400.0	0.7	level3	1	450	-26.0 -26.0 -24.0	26.0 26.0 18.0	26.0 26.0 18.0	-26.0 -26.0 -4.0	26.0 26.0 4.0	12	12	0.0	Advanced Marauder	level2	1.1	adv	1.0	alien_general_hud	PCL_ALIEN_LEVEL2_UPG	bg_misc.c:1730
+level3	8	level3	Aliens	S1|S2|S3	200	0.0	6	Noweapondrift|Fovwarps|Aliensense	level3	0.0	110	0.0005	1.3	90	1.1	10.0	1.0	6.0	200.0	270.0	0.5	level4 level3upg	1	500	-26.0 -26.0 -23.0	26.0 26.0 32.0	26.0 26.0 32.0	-26.0 -26.0 -4.0	26.0 26.0 4.0	24	24	0.0	Dragoon	level3	1.0	default	1.0	alien_general_hud	PCL_ALIEN_LEVEL3	bg_misc.c:1769
+level3upg	9	level3upg	Aliens	S3	250	0.0	7	Noweapondrift|Fovwarps|Aliensense	level3upg	0.0	110	0.0005	1.3	90	1.1	10.0	1.0	6.0	200.0	270.0	0.4	level4	1	600	-32.0 -32.0 -29.0	32.0 32.0 38.0	32.0 32.0 38.0	-32.0 -32.0 -4.0	32.0 32.0 4.0	27	27	0.0	Advanced Dragoon	level3	1.25	adv	1.0	alien_general_hud	PCL_ALIEN_LEVEL3_UPG	bg_misc.c:1808
+level4	10	level4	Aliens	S3	400	0.0	7	Noweapondrift|Fovwarps|Aliensense	level4	0.0	90	0.001	1.1	100	1.2	10.0	1.0	6.0	100.0	170.0	0.1	NULL	2	800	-32.0 -32.0 -22.0	32.0 32.0 70.0	32.0 32.0 70.0	-32.0 -32.0 -34.0	32.0 32.0 34.0	35	35	0.0	Tyrant	level4	1.0	default	2.0	alien_general_hud	PCL_ALIEN_LEVEL4	bg_misc.c:1847
+human_base	11	human_base	Humans	S1|S2|S3	100	1.0	0	Takesfalldamage|Canuseladders	NULL	110.0	90	0.002	1.0	100	1.0	10.0	1.0	6.0	100.0	220.0	1.0	NULL	0	0	-15.0 -15.0 -24.0	15.0 15.0 32.0	15.0 15.0 16.0	-15.0 -15.0 -4.0	15.0 15.0 4.0	26	12	-2.0	Human	human_base	1.0	default	1.0	human_hud	PCL_HUMAN	bg_misc.c:1886
+human_bsuit	12	human_bsuit	Humans	S1|S2|S3	0	0.0	0	NULL	NULL	0.0	0	0.0	1.0	0	1.0	1.0	1.0	1.0	1.0	270.0	1.0	NULL	0	0	0.0 0.0 0.0	0.0 0.0 0.0	0.0 0.0 0.0	0.0 0.0 0.0	0.0 0.0 0.0	0	0	0.0	bsuit	human_bsuit	1.0	default	1.0	bsuit	PCL_HUMAN_BSUIT	bg_misc.c:1927

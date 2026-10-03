@@ -1,0 +1,38 @@
+# sheet: scenarios11
+# version: 1
+# generator: table
+# index: by_id
+# requires: classes11,weapons11,upgrades11
+# owned_by: verifier
+# notes: Tremulous 1.1.0 golden-trace scenarios (dec041) for re/harness/pmove11_ref.c and crate::kernel::pmove11. script tokens as scenarios.tsv plus m<int> (set STAT_MISC), s<int> (STAT_STATE |=), c<int> (STAT_STATE &= ~) before every tick of the token: the server-side charge / boost state 1.1's pmove reads
+id	class	weapon	items	origin	yaw	pm_type	ps_state	msec	script
+h_walk	human_base	rifle	NULL	-1200.0 -700.0 40.0	0.0	Normal	NULL	16	30*f0 60*f127 20*f0
+h_strafe_jump	human_base	rifle	NULL	-1200.0 -700.0 40.0	0.0	Normal	NULL	8	20*f127 40*f127r127u127y90 40*f127r-127u127y-90 20*f0
+h_wall_slide	human_base	rifle	NULL	-1300.0 -900.0 40.0	300.0	Normal	NULL	16	90*f127r64
+h_ramp_platform	human_base	rifle	NULL	-500.0 0.0 40.0	0.0	Normal	NULL	16	120*f127 30*f127u127
+h_crouch	human_base	rifle	NULL	-1200.0 -700.0 40.0	45.0	Normal	NULL	16	20*u-127 40*f127u-127 20*f127
+h_boost	human_base	rifle	NULL	-1300.0 600.0 40.0	0.0	Normal	NULL	33	150*f127s8 50*f127c8
+h_ladder	human_base	rifle	NULL	0.0 -960.0 40.0	270.0	Normal	NULL	16	20*f127 120*f127u127 30*f0
+h_fall_balcony	human_base	rifle	NULL	0.0 900.0 200.0	270.0	Normal	NULL	16	80*f127
+h_rifle_fire	human_base	rifle	NULL	-1200.0 -700.0 40.0	0.0	Normal	NULL	16	10*f0 120*b1 30*f0
+h_switch_blaster	human_base	rifle	NULL	-1200.0 -700.0 40.0	0.0	Normal	NULL	16	10*f0 5*b4w9 40*f0 20*b1 5*b4w10 40*f0
+h_chaingun_bsuit	human_base	chaingun	bsuit	-1200.0 -700.0 40.0	0.0	Normal	NULL	16	10*f0 80*b1p3 10*f0u-127
+h_lcannon	human_base	lcannon	NULL	-1200.0 -700.0 40.0	0.0	Normal	NULL	16	10*f0 20*b1m150 1*f0m150 30*f0m0 20*b1m255 20*f0m0 10*b32 20*f0
+h_jetpack	human_base	rifle	jetpack	-1200.0 -700.0 40.0	0.0	Jetpack	NULL	16	60*u127f64 40*f127u-127 30*u127
+h_jetpack_toggle	human_base	rifle	jetpack	-1200.0 -700.0 40.0	0.0	Normal	NULL	16	10*f0 3*b4w37 20*f0 3*b4w37 10*f0
+h_noclip	human_base	rifle	NULL	-1200.0 -700.0 40.0	0.0	Noclip	NULL	16	40*f127u127 20*f0
+h_grabbed	human_base	rifle	NULL	-1200.0 -700.0 40.0	0.0	Grabbed	NULL	16	20*f127y200 10*f0
+h_ckit	human_base	ckit	NULL	-1200.0 -700.0 40.0	0.0	Normal	NULL	16	10*f0 10*b1 10*b32 20*f0
+h_ackit	human_base	ackit	larmour helmet	-1200.0 -700.0 40.0	0.0	Normal	NULL	16	10*f0 10*b1 10*b32 20*f127
+a_dretch_wallwalk	level0	level0	NULL	-900.0 -880.0 40.0	270.0	Normal	Nonsegmodel	16	40*f127u-127 120*f127u-127p-60 80*f127u-127y40 40*f0
+a_dretch_bite	level0	level0	NULL	-900.0 -880.0 40.0	270.0	Normal	Nonsegmodel	16	10*f0 20*b1 10*f127u127
+a_basilisk_ceiling	level1	level1	NULL	600.0 -600.0 40.0	0.0	Normal	Nonsegmodel	16	30*f127u-127 100*f127u-127p-120 100*f127u-127 60*f0
+a_basilisk_toggle	level1upg	level1upg	NULL	-900.0 -880.0 40.0	270.0	Normal	Nonsegmodel|Wallclimbingtoggle	16	30*f127 2*u-127 60*f127 2*u-127 30*f127 10*b32
+a_marauder_walljump	level2	level2	NULL	-1300.0 -880.0 40.0	270.0	Normal	Nonsegmodel	16	30*f127 15*f127u127 30*f127r127u127y-80 30*f0
+a_marauder_upg	level2upg	level2upg	NULL	-1300.0 -880.0 40.0	270.0	Normal	Nonsegmodel	16	20*f127u127 20*r-127u127 10*b32 10*b1
+a_dragoon_pounce	level3	level3	NULL	-1100.0 0.0 40.0	0.0	Normal	Nonsegmodel	16	10*f0 60*b32m700 1*f0m700 80*f0 5*b1m0 20*f0
+a_dragoon_upg	level3upg	level3upg	NULL	-1100.0 0.0 40.0	0.0	Normal	Nonsegmodel	16	10*f0 40*b4 30*b32m800 1*f0m800 60*f127
+a_tyrant_charge	level4	level4	NULL	-1100.0 -500.0 60.0	0.0	Normal	Nonsegmodel	16	20*f127 40*f127b32m1500 60*f127s8192m1200 40*f127c8192m0 20*b1 30*f0
+a_granger	builder	abuild	NULL	-1000.0 300.0 40.0	90.0	Normal	Nonsegmodel	16	60*f127 20*f127u127 40*f127r127 10*b32
+a_adv_granger	builderupg	abuildupg	NULL	-900.0 -880.0 40.0	270.0	Normal	Nonsegmodel	16	40*f127u-127 60*f127u-127p-40 40*f0 10*b4
+s_spectator_fly	spectator	NULL	NULL	0.0 0.0 300.0	30.0	Spectator	NULL	16	60*f127u127 60*r127p40 30*f0

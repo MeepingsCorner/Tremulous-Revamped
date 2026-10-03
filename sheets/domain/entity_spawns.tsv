@@ -1,0 +1,64 @@
+# sheet: entity_spawns
+# version: 1
+# generator: table
+# index: by_id
+# requires: -
+# target: crate::gen::entity_spawns
+# owned_by: kernel-author
+# notes: the spawns[] table of G_CallSpawn (g_spawn.c:217) as a fn table; ids are classnames (lower case)
+id	spawn	status	ref_src
+func_bobbing	crate::kernel::mover::sp_func_bobbing	Done	g_mover.c:2404
+func_button	crate::kernel::mover::sp_func_button	Done	g_mover.c:1931
+func_door	crate::kernel::mover::sp_func_door	Done	g_mover.c:1397
+func_door_model	crate::kernel::mover::sp_func_door_model	Done	g_mover.c:1610
+func_door_rotating	crate::kernel::mover::sp_func_door_rotating	Done	g_mover.c:1497
+func_group	crate::kernel::trigger::sp_free	Done	g_misc.c:35
+func_pendulum	crate::kernel::mover::sp_func_pendulum	Done	g_mover.c:2453
+func_plat	crate::kernel::mover::sp_func_plat	Done	g_mover.c:1843
+func_rotating	crate::kernel::mover::sp_func_rotating	Done	g_mover.c:2356
+func_static	crate::kernel::mover::sp_func_static	Done	g_mover.c:2327
+func_timer	crate::kernel::trigger::sp_func_timer	Done	g_trigger.c:461
+func_train	crate::kernel::mover::sp_func_train	Done	g_mover.c:2280
+info_alien_intermission	crate::kernel::spawn::info_intermission	Done	g_client.c:71
+info_human_intermission	crate::kernel::spawn::info_intermission	Done	g_client.c:78
+info_notnull	crate::kernel::trigger::sp_target_position	Done	g_misc.c:45
+info_null	crate::kernel::trigger::sp_free	Done	g_misc.c:35
+info_player_deathmatch	crate::kernel::spawn::info_player_deathmatch	Done	g_client.c:38
+info_player_intermission	crate::kernel::spawn::info_intermission	Done	g_client.c:64
+info_player_start	crate::kernel::spawn::info_player_start	Done	g_client.c:55
+light	crate::kernel::trigger::sp_free	Done	g_misc.c:59
+misc_anim_model	crate::kernel::trigger::sp_misc_anim_model	Done	g_misc.c:323
+misc_light_flare	crate::kernel::trigger::sp_misc_light_flare	Done	g_misc.c:413
+misc_model	crate::kernel::trigger::sp_free	Done	g_misc.c:136
+misc_particle_system	crate::kernel::trigger::sp_misc_particle_system	Done	g_misc.c:277
+misc_portal_camera	crate::kernel::trigger::sp_misc_portal_camera	Done	g_misc.c:233
+misc_portal_surface	crate::kernel::trigger::sp_misc_portal_surface	Done	g_misc.c:207
+misc_teleporter_dest	crate::kernel::trigger::sp_nothing	Done	g_misc.c:124
+path_corner	crate::kernel::mover::sp_path_corner	Done	g_mover.c:2206
+target_alien_win	crate::kernel::trigger::sp_target_alien_win	Done	g_target.c:421
+target_delay	crate::kernel::trigger::sp_target_delay	Done	g_target.c:44
+target_human_win	crate::kernel::trigger::sp_target_human_win	Done	g_target.c:442
+target_hurt	crate::kernel::trigger::sp_target_hurt	Done	g_target.c:466
+target_kill	crate::kernel::trigger::sp_target_kill	Done	g_target.c:279
+target_location	crate::kernel::trigger::sp_target_location	Done	g_target.c:300
+target_position	crate::kernel::trigger::sp_target_position	Done	g_target.c:287
+target_print	crate::kernel::trigger::sp_target_print	Done	g_target.c:109
+target_push	crate::kernel::trigger::sp_target_push	Done	g_trigger.c:244
+target_relay	crate::kernel::trigger::sp_target_relay	Done	g_target.c:260
+target_rumble	crate::kernel::trigger::sp_target_rumble	Done	g_target.c:387
+target_score	crate::kernel::trigger::sp_target_score	Done	g_target.c:72
+target_speaker	crate::kernel::trigger::sp_target_speaker	Done	g_target.c:151
+target_teleporter	crate::kernel::trigger::sp_target_teleporter	Done	g_target.c:220
+trigger_always	crate::kernel::trigger::sp_trigger_always	Done	g_trigger.c:139
+trigger_ammo	crate::kernel::trigger::sp_trigger_ammo	Done	g_trigger.c:1134
+trigger_buildable	crate::kernel::trigger::sp_trigger_buildable	Done	g_trigger.c:650
+trigger_class	crate::kernel::trigger::sp_trigger_class	Done	g_trigger.c:787
+trigger_equipment	crate::kernel::trigger::sp_trigger_equipment	Done	g_trigger.c:930
+trigger_gravity	crate::kernel::trigger::sp_trigger_gravity	Done	g_trigger.c:997
+trigger_heal	crate::kernel::trigger::sp_trigger_heal	Done	g_trigger.c:1057
+trigger_hurt	crate::kernel::trigger::sp_trigger_hurt	Done	g_trigger.c:398
+trigger_multiple	crate::kernel::trigger::sp_trigger_multiple	Done	g_trigger.c:102
+trigger_push	crate::kernel::trigger::sp_trigger_push	Done	g_trigger.c:213
+trigger_stage	crate::kernel::trigger::sp_trigger_stage	Done	g_trigger.c:521
+trigger_teleport	crate::kernel::trigger::sp_trigger_teleport	Done	g_trigger.c:320
+trigger_win	crate::kernel::trigger::sp_trigger_win	Done	g_trigger.c:542

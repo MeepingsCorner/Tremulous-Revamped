@@ -1,0 +1,42 @@
+# sheet: admin_commands
+# version: 1
+# generator: table
+# index: by_id
+# requires: -
+# target: crate::gen::admin_commands
+# owned_by: kernel-author
+# notes: the g_admin_cmds[] table of g_admin.c:37 as a fn table (dec026); flag is the permission G_admin_permission checks
+id	handler	silent	flag	function	syntax	status	ref_src
+adjustban	crate::kernel::admin::cmd_adjustban	0	ban	change the IP address mask, duration or reason of a ban.  mask is prefixed with '/'.  duration is specified as numbers followed by units  'w' (weeks), 'd' (days), 'h' (hours) or 'm' (minutes), or seconds if  no unit is specified.  if the duration is preceded by a + or -, the ban duration will be extended or shortened by the specified amount	[^3ban#^7] (^5/mask^7) (^5duration^7) (^5reason^7)	Done	g_admin.c:1809
+adminhelp	crate::kernel::admin::cmd_adminhelp	1	adminhelp	display admin commands available to you or help on a specific command	(^5command^7)	Done	g_admin.c:2404
+admintest	crate::kernel::admin::cmd_admintest	0	admintest	display your current admin level	NULL	Done	g_admin.c:2486
+allowbuild	crate::kernel::admin::cmd_denybuild	0	denybuild	restore a player's ability to build	[^3name|slot#^7]	Done	g_admin.c:2090
+allready	crate::kernel::admin::cmd_allready	0	allready	makes everyone ready in intermission	NULL	Done	g_admin.c:2507
+ban	crate::kernel::admin::cmd_ban	0	ban	ban a player by IP and GUID with an optional expiration time and reason. duration is specified as numbers followed by units 'w' (weeks), 'd' (days), 'h' (hours) or 'm' (minutes), or seconds if no units are specified	[^3name|slot#|IP(/mask)^7] (^5duration^7) (^5reason^7)	Done	g_admin.c:1591
+builder	crate::kernel::admin::cmd_builder	1	builder	show who built a structure	NULL	Done	g_admin.c:2968
+buildlog	crate::kernel::admin::cmd_buildlog	0	buildlog	show buildable log	(^5name|slot#^7) (^5id^7)	Done	g_admin.c:3075
+cancelvote	crate::kernel::admin::cmd_endvote	0	cancelvote	cancel a vote taking place	(^5a|h^7)	Done	g_admin.c:2534
+changemap	crate::kernel::admin::cmd_changemap	0	changemap	load a map (and optionally force layout)	[^3mapname^7] (^5layout^7)	Done	g_admin.c:1987
+denybuild	crate::kernel::admin::cmd_denybuild	0	denybuild	take away a player's ability to build	[^3name|slot#^7]	Done	g_admin.c:2090
+kick	crate::kernel::admin::cmd_kick	0	kick	kick a player with an optional reason	[^3name|slot#^7] (^5reason^7)	Done	g_admin.c:1540
+listadmins	crate::kernel::admin::cmd_listadmins	1	listadmins	display a list of all server admins and their levels	(^5name^7) (^5start admin#^7)	Done	g_admin.c:2153
+listlayouts	crate::kernel::admin::cmd_listlayouts	1	listlayouts	display a list of all available layouts for a map	(^5mapname^7)	Done	g_admin.c:2184
+listplayers	crate::kernel::admin::cmd_listplayers	1	listplayers	display a list of players, their client numbers and their levels	NULL	Done	g_admin.c:2223
+lock	crate::kernel::admin::cmd_lock	0	lock	lock a team to prevent anyone from joining it	[^3a|h^7]	Done	g_admin.c:2915
+mute	crate::kernel::admin::cmd_mute	0	mute	mute a player	[^3name|slot#^7]	Done	g_admin.c:2032
+namelog	crate::kernel::admin::cmd_namelog	1	namelog	display a list of names used by recently connected players	(^5name|IP(/mask)^7) (start namelog#)	Done	g_admin.c:2810
+nextmap	crate::kernel::admin::cmd_nextmap	0	nextmap	go to the next map in the cycle	NULL	Done	g_admin.c:2736
+passvote	crate::kernel::admin::cmd_endvote	0	passvote	pass a vote currently taking place	(^5a|h^7)	Done	g_admin.c:2534
+pause	crate::kernel::admin::cmd_pause	0	pause	Pause (or unpause) the game.	NULL	Done	g_admin.c:3036
+putteam	crate::kernel::admin::cmd_putteam	0	putteam	move a player to a specified team	[^3name|slot#^7] [^3h|a|s^7]	Done	g_admin.c:1941
+readconfig	crate::kernel::admin::cmd_readconfig	0	readconfig	reloads the admin config file and refreshes permission flags	NULL	Done	g_admin.c:1040
+rename	crate::kernel::admin::cmd_rename	0	rename	rename a player	[^3name|slot#^7] [^3new name^7]	Done	g_admin.c:2596
+restart	crate::kernel::admin::cmd_restart	0	restart	restart the current map (optionally using named layout or keeping/switching teams)	(^5layout^7) (^5keepteams|switchteams|keepteamslock|switchteamslock^7)	Done	g_admin.c:2648
+revert	crate::kernel::admin::cmd_revert	0	revert	revert buildables to a given time	[^3id^7]	Done	g_admin.c:3196
+setlevel	crate::kernel::admin::cmd_setlevel	0	setlevel	sets the admin level of a player	[^3name|slot#|admin#^7] [^3level^7]	Done	g_admin.c:1285
+showbans	crate::kernel::admin::cmd_showbans	1	showbans	display a (partial) list of active bans	(^5name|IP(/mask)^7) (^5start at ban#^7)	Done	g_admin.c:2370
+spec999	crate::kernel::admin::cmd_spec999	0	spec999	move 999 pingers to the spectator team	NULL	Done	g_admin.c:2571
+time	crate::kernel::admin::cmd_time	1	time	show the current local server time	NULL	Done	g_admin.c:1266
+unban	crate::kernel::admin::cmd_unban	0	ban	unbans a player specified by the slot as seen in showbans	[^3ban#^7]	Done	g_admin.c:1763
+unlock	crate::kernel::admin::cmd_lock	0	lock	unlock a locked team	[^3a|h^7]	Done	g_admin.c:2915
+unmute	crate::kernel::admin::cmd_mute	0	mute	unmute a muted player	[^3name|slot#^7]	Done	g_admin.c:2032

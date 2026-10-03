@@ -1,0 +1,17 @@
+# sheet: work
+# version: 1
+# generator: none
+# owned_by: integrator
+id	sheet	row_range	role	agent	state	ts	evidence
+t0001	re/symbols	cm_*	kernel	claude	done	2026-10-01T00:00Z	crates/trem_sim/tests/parity.rs
+t0002	re/symbols	pm_*	kernel	claude	done	2026-10-01T00:00Z	re/traces/arena.sha256
+t0003	weapon_behaviors	*	kernel	claude	done	2026-10-01T00:00Z	crates/trem_sim/tests/game.rs
+t0004	buildable_behaviors	*	kernel	claude	done	2026-10-01T00:00Z	crates/trem_sim/tests/game.rs
+t0005	kernel	client,team,bot	kernel	claude	done	2026-10-01T12:00Z	crates/trem_sim/tests/game.rs
+t0006	kernel	bsp	kernel	claude	done	2026-10-01T14:00Z	crates/trem_sim/tests/bsp.rs
+t0007	re/symbols	cm_patch*	kernel	claude	done	2026-10-01T22:00Z	crates/trem_sim/tests/patch.rs
+t0008	features	bots	kernel	claude	open	2026-10-01T14:00Z	NULL
+t0009	features	models-anims-sounds	godot	claude	done	2026-10-01T18:00Z	crates/trem_godot/src/md3.rs
+t0010	kernel	spawn,mover,trigger,physics	kernel	claude	done	2026-10-01T22:00Z	crates/trem_sim/tests/movers.rs
+t0011	kernel	client,vote,cmds,team	kernel	claude	done	2026-10-01T23:00Z	crates/trem_sim/tests/game.rs
+t0012	features	cgame-fx-hud	godot	claude	done	2026-10-01T23:30Z	crates/trem_godot/src/particles.rs

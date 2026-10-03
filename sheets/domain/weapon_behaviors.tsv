@@ -1,0 +1,33 @@
+# sheet: weapon_behaviors
+# version: 1
+# generator: table
+# requires: weapons,missiles
+# target: crate::gen::weapon_behaviors
+# owned_by: kernel-author
+# notes: FireWeapon/2/3 switch (g_weapon.c:1435-1640) as a fn table; per-weapon constants are columns, logic stays in kernel::weapon (MDD 7.4)
+id	fire1	fire2	fire3	range	width	height	spread	damage	mod	missile	status	ref_src
+level1	crate::kernel::weapon::melee_attack	crate::kernel::weapon::noop	NULL	64.0	10.0	10.0	NULL	32	Level1Claw	NULL	Done	g_weapon.c:1525
+level1upg	crate::kernel::weapon::melee_attack	crate::kernel::weapon::poison_cloud	NULL	67.0	10.0	10.0	NULL	32	Level1Claw	NULL	Done	g_weapon.c:1529
+level2	crate::kernel::weapon::melee_attack	NULL	NULL	80.0	14.0	14.0	NULL	40	Level2Claw	NULL	Done	g_weapon.c:1541
+level2upg	crate::kernel::weapon::melee_attack	crate::kernel::weapon::area_zap_fire	NULL	82.0	14.0	14.0	NULL	40	Level2Claw	NULL	Done	g_weapon.c:1545
+level3	crate::kernel::weapon::melee_attack	NULL	NULL	80.0	12.0	12.0	NULL	80	Level3Claw	NULL	Done	g_weapon.c:1533
+level3upg	crate::kernel::weapon::melee_attack	NULL	crate::kernel::weapon::missile_fire	83.0	12.0	12.0	NULL	80	Level3Claw	bounceball	Done	g_weapon.c:1537
+level4	crate::kernel::weapon::melee_attack	NULL	NULL	100.0	14.0	20.0	NULL	100	Level4Claw	NULL	Done	g_weapon.c:1549
+blaster	crate::kernel::weapon::missile_fire	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	blaster	Done	g_weapon.c:1554
+rifle	crate::kernel::weapon::bullet_fire	NULL	NULL	NULL	NULL	NULL	200	5	Machinegun	NULL	Done	g_weapon.c:1557
+psaw	crate::kernel::weapon::pain_saw_fire	NULL	NULL	64.0	0.0	8.0	NULL	11	Painsaw	NULL	Done	g_weapon.c:1584
+shotgun	crate::kernel::weapon::shotgun_fire	NULL	NULL	98304.0	NULL	NULL	700	5	Shotgun	NULL	Done	g_weapon.c:1560
+lgun	crate::kernel::weapon::instant_fire	NULL	NULL	NULL	NULL	NULL	NULL	9	Lasgun	NULL	Done	g_weapon.c:1581
+mdriver	crate::kernel::weapon::instant_fire	NULL	NULL	NULL	NULL	NULL	NULL	40	Mdriver	NULL	Done	g_weapon.c:1575
+chaingun	crate::kernel::weapon::bullet_fire	NULL	NULL	NULL	NULL	NULL	900	6	Chaingun	NULL	Done	g_weapon.c:1563
+flamer	crate::kernel::weapon::flamer_fire	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	flame	Done	g_weapon.c:1566
+prifle	crate::kernel::weapon::missile_fire	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	pulse	Done	g_weapon.c:1569
+lcannon	crate::kernel::weapon::lcannon_fire	crate::kernel::weapon::lcannon_fire2	NULL	NULL	NULL	NULL	NULL	NULL	NULL	lcannon	Done	g_weapon.c:1578
+grenade	crate::kernel::weapon::missile_fire	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	grenade	Done	g_weapon.c:1587
+lockblob	crate::kernel::weapon::missile_fire	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	lockblob	Done	g_weapon.c:1591
+hive	crate::kernel::weapon::missile_fire	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	hive	Done	g_weapon.c:1594
+teslagen	crate::kernel::weapon::tesla_fire	NULL	NULL	NULL	NULL	NULL	NULL	10	Teslagen	NULL	Done	g_weapon.c:1597
+mgturret	crate::kernel::weapon::bullet_fire	NULL	NULL	NULL	NULL	NULL	200	8	Mgturret	NULL	Done	g_weapon.c:1600
+abuild	crate::kernel::weapon::build_fire	crate::kernel::weapon::cancel_build_fire	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Done	g_weapon.c:1604
+abuildupg	crate::kernel::weapon::build_fire	crate::kernel::weapon::cancel_build_fire	crate::kernel::weapon::missile_fire	NULL	NULL	NULL	NULL	NULL	NULL	slowblob	Done	g_weapon.c:1605
+ckit	crate::kernel::weapon::build_fire	crate::kernel::weapon::cancel_build_fire	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	Done	g_weapon.c:1608

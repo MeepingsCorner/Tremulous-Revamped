@@ -1,0 +1,27 @@
+# sheet: map_entities
+# version: 1
+# generator: table
+# requires: maps,buildables
+# target: crate::gen::map_entities
+# owned_by: level-design
+id	map	kind	team	buildable	origin	yaw
+a_overmind	arena	Buildable	Aliens	overmind	-1300.0 0.0 64.0	0.0
+a_egg_n	arena	Buildable	Aliens	eggpod	-1150.0 260.0 64.0	0.0
+a_egg_s	arena	Buildable	Aliens	eggpod	-1150.0 -260.0 64.0	0.0
+a_egg_w	arena	Buildable	Aliens	eggpod	-1400.0 400.0 64.0	0.0
+a_acid	arena	Buildable	Aliens	acid_tube	-800.0 200.0 64.0	0.0
+a_booster	arena	Buildable	Aliens	booster	-1400.0 -450.0 64.0	0.0
+a_acid_n	arena	Buildable	Aliens	acid_tube	-1040.0 330.0 64.0	0.0
+a_acid_s	arena	Buildable	Aliens	acid_tube	-1040.0 -330.0 64.0	0.0
+a_hive	arena	Buildable	Aliens	hive	-1250.0 -150.0 64.0	0.0
+h_reactor	arena	Buildable	Humans	reactor	1300.0 0.0 64.0	180.0
+h_node_n	arena	Buildable	Humans	telenode	1150.0 260.0 64.0	180.0
+h_node_s	arena	Buildable	Humans	telenode	1150.0 -260.0 64.0	180.0
+h_node_e	arena	Buildable	Humans	telenode	1400.0 400.0 64.0	180.0
+h_armoury	arena	Buildable	Humans	arm	1380.0 -420.0 64.0	180.0
+h_medi	arena	Buildable	Humans	medistat	1050.0 -600.0 64.0	180.0
+h_turret_n	arena	Buildable	Humans	mgturret	820.0 220.0 64.0	180.0
+h_turret_s	arena	Buildable	Humans	mgturret	820.0 -220.0 64.0	180.0
+spec_start	arena	PlayerStart	None	NULL	0.0 0.0 400.0	0.0
+a_intermission	arena	Intermission	Aliens	NULL	-1100.0 0.0 300.0	0.0
+h_intermission	arena	Intermission	Humans	NULL	1100.0 0.0 300.0	180.0

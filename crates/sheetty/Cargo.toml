@@ -1,0 +1,10 @@
+[package]
+name = "sheetty"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Spreadsheet Method: TSV sheet book parser, preflight, overlap engine and Rust emitter"
+
+[dependencies]
+petgraph = "0.8"
+phf_codegen = "0.14"

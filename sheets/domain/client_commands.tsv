@@ -1,0 +1,50 @@
+# sheet: client_commands
+# version: 1
+# generator: table
+# index: by_id
+# requires: -
+# target: crate::gen::client_commands
+# owned_by: kernel-author
+# notes: the cmds[] table of ClientCommand (g_cmds.c:3076) as a fn table; flags are the CMD_* gates
+id	flags	handler	status	ref_src
+a	Message|Intermission	crate::kernel::cmds::admin_msg	Done	g_cmds.c:3354
+build	Team|Living	crate::kernel::cmds::build	Done	g_cmds.c:2390
+buy	Human|Living	crate::kernel::cmds::buy	Done	g_cmds.c:2128
+callteamvote	Message|Team	crate::kernel::cmds::callvote	Done	g_cmds.c:1157
+callvote	Message	crate::kernel::cmds::callvote	Done	g_cmds.c:1157
+class	Team	crate::kernel::cmds::class	Done	g_cmds.c:1650
+damage	Cheat|Living	crate::kernel::cmds::damage	Done	g_cmds.c:3009
+deconstruct	Team|Living	crate::kernel::cmds::destroy	Done	g_cmds.c:1835
+destroy	Cheat|Team|Living	crate::kernel::cmds::destroy	Done	g_cmds.c:1835
+follow	Spec	crate::kernel::cmds::follow	Done	g_cmds.c:2733
+follownext	Spec	crate::kernel::cmds::follow_cycle	Done	g_cmds.c:2795
+followprev	Spec	crate::kernel::cmds::follow_cycle	Done	g_cmds.c:2795
+give	Cheat|Team|Living	crate::kernel::cmds::give	Done	g_cmds.c:390
+god	Cheat|Team|Living	crate::kernel::cmds::god	Done	g_cmds.c:488
+ignore	NULL	crate::kernel::cmds::ignore	Done	g_cmds.c:2819
+itemact	Human|Living	crate::kernel::cmds::item_act	Done	g_cmds.c:1970
+itemdeact	Human|Living	crate::kernel::cmds::item_deact	Done	g_cmds.c:2013
+itemtoggle	Human|Living	crate::kernel::cmds::item_toggle	Done	g_cmds.c:2034
+kill	Team|Living	crate::kernel::cmds::kill	Done	g_cmds.c:570
+levelshot	Cheat	crate::kernel::cmds::unavailable	Dropped	g_cmds.c:556
+listmaps	Message|Intermission	crate::kernel::cmds::listmaps	Done	g_cmds.c:2902
+m	Message|Intermission	crate::kernel::cmds::private_message	Done	g_cmds.c:2970
+mt	Message|Intermission	crate::kernel::cmds::private_message	Done	g_cmds.c:2970
+noclip	CheatTeam	crate::kernel::cmds::noclip	Done	g_cmds.c:534
+notarget	Cheat|Team|Living	crate::kernel::cmds::notarget	Done	g_cmds.c:512
+reload	Human|Living	crate::kernel::cmds::reload	Done	g_cmds.c:2492
+say	Message|Intermission	crate::kernel::cmds::say	Done	g_cmds.c:997
+say_area	Message|Team|Living	crate::kernel::cmds::say_area	Done	g_cmds.c:951
+say_team	Message|Intermission	crate::kernel::cmds::say	Done	g_cmds.c:997
+score	Intermission	crate::kernel::cmds::nothing	Replaced	g_cmds.c:3105
+sell	Human|Living	crate::kernel::cmds::sell	Done	g_cmds.c:2253
+setviewpos	CheatTeam	crate::kernel::cmds::setviewpos	Done	g_cmds.c:1571
+team	NULL	crate::kernel::cmds::team	Done	g_cmds.c:598
+teamvote	Team	crate::kernel::cmds::vote	Done	g_cmds.c:1527
+test	Cheat	crate::kernel::cmds::nothing	Done	g_cmds.c:2991
+unignore	NULL	crate::kernel::cmds::ignore	Done	g_cmds.c:2819
+vote	NULL	crate::kernel::cmds::vote	Done	g_cmds.c:1527
+vsay	Message|Intermission	crate::kernel::cmds::unavailable	Dropped	g_cmds.c:1052
+vsay_local	Message|Intermission	crate::kernel::cmds::unavailable	Dropped	g_cmds.c:1052
+vsay_team	Message|Intermission	crate::kernel::cmds::unavailable	Dropped	g_cmds.c:1052
+where	NULL	crate::kernel::cmds::where_	Done	g_cmds.c:1142

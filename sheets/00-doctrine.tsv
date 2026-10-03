@@ -1,0 +1,22 @@
+# sheet: doctrine
+# version: 1
+# generator: none
+# owned_by: architect
+id	key	value	notes
+d01	project	tremulous-godot	Mode A port of darklegion/tremulous-legacy (1.2 gameplay) to Godot 4 with a Rust simulation
+d02	mode	A	source available; original kept buildable as the reference harness (re/harness)
+d03	doctrine_version	1.0	The Spreadsheet Method MDD v1.0 (2026-09-29)
+d04	emitter_version	1	sheetty emitter; mismatch is E-L0-EMITTER
+d05	rust	1.95.0 stable-x86_64-unknown-linux-gnu	MDD A.1 lists 1.98.1 msvc; this workspace was verified on 1.95.0 (dec004)
+d06	engine	godot 4.7.1-stable	replaces bevy per user instruction (dec001)
+d07	bindings	godot-rust gdext 0.5.5 (crate godot, feature api-4-7)	engine source to read instead of recalling APIs: ~/.cargo/registry/src/*/godot-core-0.5.5
+d08	source_pin	c862a5340c8de44dcc7abaff170c20c04f9340e8	https://github.com/darklegion/tremulous-legacy (2016-06-16)
+d09	reference_cc	gcc -O1 -ffp-contract=off -fno-fast-math x86_64	determinism flags for the C oracle (D9)
+d10	ghidra	not used	To-Do 2: decompilation not required - the full C source of the target is available (d08), so no Ghidra / ghidra-cli export is needed
+d11	legal	GPL-2.0-or-later	original code is GPLv2+; this port is a derivative work and inherits the licence. the Tremulous 1.1.0 media (CC BY-SA 2.5) ships in godot/base with COPYING and CC (dec016), the legacy repo's own assets as data-legacy-assets.pk3 (dec025)
+d12	d9_status	verified	set to verified once pmove golden traces match the C oracle
+d13	target_engine	id Tech 3 (ioquake3 fork)	To-Do 1: tremulous-legacy is darklegion's Tremulous 1.2-era codebase on an ioquake3-derived engine (Wikipedia: Tremulous; ModDB ioquake3 games list)
+d14	target_language	C (C89/C99), plus botlib-style menu scripts and Q3 shader/config text formats	To-Do 1: from the source tree pinned in d08 (src/client, src/qcommon, src/game, src/cgame, src/ui)
+d15	target_runtime	native engine binary + game/cgame/ui modules as QVM bytecode (or native .so/.dll with vm_* 0)	To-Do 1: q3asm/q3lcc QVM build and native shared-library build both in the Makefile
+d16	target_build	GNU make, gcc/clang (Makefile), SDL2 client, OpenGL1 renderer	To-Do 1: release build type; data: data-1.1.0.pk3 + map pk3s (Tremulous 1.1.0) + the repo's assets/
+d17	port_build	Godot 4.7.1 + godot-rust gdext 0.5.5 (GDExtension cdylib) + Rust stable; sheets -> sheetty -> OUT_DIR	To-Do 1: the port's own engine/language/runtime record

@@ -1,0 +1,23 @@
+# sheet: buildable_behaviors
+# version: 1
+# generator: table
+# requires: buildables
+# target: crate::gen::buildable_behaviors
+# owned_by: kernel-author
+# notes: think/die assignment switch of G_Build (g_buildable.c:3560-3700) as a fn table
+id	think	die	pain	touch	use_	status	ref_src
+eggpod	crate::kernel::buildable::a_spawn_think	crate::kernel::buildable::a_generic_die	crate::kernel::buildable::a_generic_pain	NULL	NULL	Done	g_buildable.c:861
+overmind	crate::kernel::buildable::a_overmind_think	crate::kernel::buildable::a_generic_die	crate::kernel::buildable::a_generic_pain	NULL	NULL	Done	g_buildable.c:923
+barricade	crate::kernel::buildable::a_barricade_think	crate::kernel::buildable::a_barricade_die	crate::kernel::buildable::a_barricade_pain	crate::kernel::buildable::a_barricade_touch	NULL	Done	g_buildable.c:1118
+acid_tube	crate::kernel::buildable::a_acid_tube_think	crate::kernel::buildable::a_generic_die	crate::kernel::buildable::a_generic_pain	NULL	NULL	Done	g_buildable.c:1165
+trapper	crate::kernel::buildable::a_trapper_think	crate::kernel::buildable::a_generic_die	crate::kernel::buildable::a_generic_pain	NULL	NULL	Done	g_buildable.c:1494
+booster	crate::kernel::buildable::a_generic_think	crate::kernel::buildable::a_generic_die	crate::kernel::buildable::a_generic_pain	crate::kernel::buildable::a_booster_touch	NULL	Done	g_buildable.c:1328
+hive	crate::kernel::buildable::a_hive_think	crate::kernel::buildable::a_generic_die	crate::kernel::buildable::a_hive_pain	NULL	NULL	Done	g_buildable.c:1268
+telenode	crate::kernel::buildable::h_spawn_think	crate::kernel::buildable::h_spawn_die	NULL	NULL	NULL	Done	g_buildable.c:1676
+mgturret	crate::kernel::buildable::h_mg_turret_think	crate::kernel::buildable::h_spawn_die	NULL	NULL	NULL	Done	g_buildable.c:2354
+tesla	crate::kernel::buildable::h_tesla_gen_think	crate::kernel::buildable::h_spawn_die	NULL	NULL	NULL	Done	g_buildable.c:2440
+arm	crate::kernel::buildable::h_armoury_think	crate::kernel::buildable::h_spawn_die	NULL	NULL	crate::kernel::buildable::h_armoury_activate	Done	g_buildable.c:1946
+dcc	crate::kernel::buildable::h_armoury_think	crate::kernel::buildable::h_spawn_die	NULL	NULL	NULL	Done	g_buildable.c:1972
+medistat	crate::kernel::buildable::h_medistat_think	crate::kernel::buildable::h_medistat_die	NULL	NULL	NULL	Done	g_buildable.c:2014
+reactor	crate::kernel::buildable::h_reactor_think	crate::kernel::buildable::h_spawn_die	NULL	NULL	crate::kernel::buildable::h_repeater_use	Done	g_buildable.c:1843
+repeater	crate::kernel::buildable::h_repeater_think	crate::kernel::buildable::h_repeater_die	NULL	NULL	crate::kernel::buildable::h_repeater_use	Done	g_buildable.c:1770

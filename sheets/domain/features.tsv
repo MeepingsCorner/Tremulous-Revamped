@@ -1,0 +1,69 @@
+# sheet: features
+# version: 1
+# generator: none
+# owned_by: architect
+# notes: cross-cutting behaviours the plan promises that are not a single table row
+id	description	ref_src
+bsp_loader	load IBSP v46 maps (collision + render) from the player's own pk3 files	qcommon/cm_load.c:1
+bsp_world	spawn structures and intermission points from a BSP entity lump	game/g_spawn.c:1
+spawn_queue	alien/human spawn queues and spawn point selection	game/g_main.c:1016
+evolve	alien evolution with evo cost and room checks	game/g_cmds.c:1658
+armoury	human buy/sell at an armoury, energy ammo at reactor/repeater	game/g_cmds.c:2073
+build	blueprint selection and placement validity	game/g_cmds.c:2405
+deconstruct	removing own structures (marking, destroy)	game/g_cmds.c:1850
+stages	team stage progression from kill credits	game/g_main.c:1266
+locational_damage	hit-region damage modifiers and armour	game/g_combat.c:1
+bots	computer opponents driving UserCmds	NULL
+determinism	bit-reproducible simulation given a seed	NULL
+patch_collision	curved patch collision (cm_patch.c) on real maps	qcommon/cm_patch.c:1
+movers	doors, plats, buttons, trains and continuous movers pushing players and structures	game/g_mover.c:1
+triggers	brush triggers, target_* relays and map decoration entities	game/g_trigger.c:1
+bp_zones	repeater build-point zones and BP queues	game/g_main.c:1111
+decon_marking	marking structures for deconstruction and replacing them when building	game/g_buildable.c:3059
+spectator_follow	spectators follow players (follow/follownext/followprev, lock view, PMF_FOLLOW copy)	game/g_cmds.c:2545
+intermission	win -> queued intermission -> ready-up -> ExitLevel (map_restart / g_nextMap)	game/g_main.c:1587
+votes	callvote/callteamvote/vote: map, nextmap, map_restart, draw, sudden_death, admitdefeat, kick, mute, unmute, denybuild, allowbuild	game/g_cmds.c:1157
+pvs_areas	PVS from the visibility lump and door area portals (trap_InPVS, CM_AdjustAreaPortalState)	qcommon/cm_test.c:320
+world_effects	drowning, lava and slime damage (P_WorldEffects, G_SetClientSound)	game/g_active.c:100
+location	Team_GetLocation for the HUD (target_location in PVS)	game/g_team.c:244
+chat	say/say_team/say_area/m/mt and ignore lists (G_Say)	game/g_cmds.c:860
+timelimit	g_timelimit warnings and stalemate	game/g_main.c:2033
+map_rotation	maprotation.cfg rotations, conditions, labels, nested rotations (G_AdvanceMapRotation)	game/g_maprotation.c:1097
+bisphere_trace	CM_BiSphereTrace lateral fraction for light flares (FLARE_REALFADE)	qcommon/cm_trace.c:1680
+admin	shrubbot admin system: admin.dat levels/admins/bans/commands, permissions, admin commands from the client path, '!' chat and the console	game/g_admin.c:1
+namelog	recent-player name log for admin targeting, mute and denybuild	game/g_namelog.c:1
+server_console	server console commands (ConsoleCommand / Svcmd_*)	game/g_svcmds.c:584
+layouts	buildable layout files: layoutsave, layoutload, g_layouts / g_layoutAuto, map rotation layouts	game/g_buildable.c:3897
+build_log	build log and admin revert	game/g_buildable.c:4198
+name_cleaning	G_ClientCleanName and G_admin_name_check on the names the host and bots supply	game/g_client.c:651
+inactivity	g_inactivity timer (ClientInactivityTimer), off by default	game/g_active.c:513
+flood_censor	G_FloodLimited and G_CensorString / g_censorship	game/g_cmds.c:3049
+session	session data across map changes (restartTeam, ignore list)	game/g_session.c:1
+net_huffman	the adaptive Huffman coding of protocol 71 messages and the OOB connect	qcommon/huffman.c:1
+net_msg	msg_t bit streams, the entityState/playerState field tables and the keyed usercmd delta	qcommon/msg.c:1
+net_chan	the netchan: sequences, qport, fragments, loopback	qcommon/net_chan.c:1
+net_ip	UDP sockets, address parsing and comparison, LAN broadcast, packet delay	qcommon/net_ip.c:1
+server	the server engine over the World: connectionless packets, challenges, connect, gamestate, rcon, downloads, timeouts, master heartbeats	server/sv_main.c:1
+snapshots	PVS/area culled snapshots delta-compressed against the acknowledged frame	server/sv_snapshot.c:1
+client	the client engine: connection states, gamestate and snapshots, usercmd packets, reliable commands	client/cl_main.c:1
+prediction	the networked cgame: snapshot interpolation, player prediction with error decay, events	cgame/cg_predict.c:1
+unlagged	lag compensation of the hit traces (G_Unlagged*)	game/g_active.c:1
+ip_bans	IP/CIDR bans and namelog addresses (G_AddressParse / G_AddressCompare)	game/g_admin.c:887
+server_browser	LAN and master-server lists, pings and server status for the browser menus	client/cl_main.c:4481
+guid	cl_guid from the qkey file (CL_UpdateGUID, Com_MD5File)	qcommon/md5.c:260
+dedicated_server	a dedicated server without a renderer (tremded)	server/sv_init.c:661
+warmup	g_doWarmup / g_warmup: no build points, stages, spawning, player averages or zaps until the warmup is over, the CS_WARMUP countdown in the HUD	game/g_main.c:2473
+userinfo_name	the local player's name cvar through ClientUserinfoChanged at connect and on every change, with the rename rules	game/g_client.c:813
+pure_checksums	pk3 checksums and feed-keyed pure checksums of the pak files (FS_LoadZipFile, Com_BlockChecksum)	qcommon/files.c:1967
+pure_server	sv_pure servers: the pak lists in systeminfo, the client's restricted search path and cp reply, SV_VerifyPaks_f	server/sv_client.c:970
+pk3_download	UDP downloads of the referenced pk3s a client lacks, with the download prompt	client/cl_main.c:2117
+demos	client demos: record, stoprecord, demo, timedemo, cl_autoRecordDemo	client/cl_main.c:688
+ipv6	ipv6 sockets, addresses and the multicast LAN scan (net_enabled)	qcommon/net_ip.c:878
+voip	ioquake3 in-game voice chat (USE_VOIP, Opus): +voiprecord, cl_voipSendTarget, voip ignore/gain/muteall, sv_voip, the meter	client/cl_main.c:403
+video_capture	the video / stopvideo AVI capture at cl_aviFrameRate (motion JPEG or raw) with the mixed audio	client/cl_avi.c:1
+master_list	the internet server list from master.tremulous.net: dedicated 2 heartbeats, the master's getinfo check, getservers with the protocol number, pings and joining a listed server	client/cl_main.c:4203
+vanilla_wire	the network messages of Tremulous 1.1.0 (protocol 69): its entityState / playerState field tables, usercmd keys, netchan without checksum and the xor coders of its client and server messages	qcommon/msg.c:1
+vanilla_client	joining vanilla Tremulous 1.1.0 servers (protocol 69): handshake, gamestate, snapshots, usercmds, commands, pure checks, downloads, disconnect	client/cl_main.c:1
+net_modes	the network mode Auto / legacy 1.3 (71) / vanilla 1.1 (69) and a server browser that lists, tags, filters and joins both kinds of servers	client/cl_main.c:1
+vanilla_game_data	Tremulous 1.1.0 (protocol 69) servers' game data in the legacy client: numbering, encodings, configstrings, commands, the hovel and the advanced construction kit, 1.1 menus and HUD values	game/bg_public.h:1
+vanilla_prediction	the cgame predicts a 1.1.0 server's movement with 1.1.0's bg_pmove.c	game/bg_pmove.c:1

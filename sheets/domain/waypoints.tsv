@@ -1,0 +1,150 @@
+# sheet: waypoints
+# version: 1
+# generator: table
+# dense: WaypointId
+# cyclic: links
+# requires: maps
+# target: crate::gen::waypoints
+# owned_by: level-design
+id	map	origin	links
+wp0	arena	-1400.0 -900.0 24.0	wp1 wp10 wp11
+wp1	arena	-1400.0 -700.0 24.0	wp0 wp2 wp10 wp11 wp12
+wp2	arena	-1400.0 -500.0 24.0	wp1 wp3 wp11 wp12 wp13
+wp3	arena	-1400.0 -300.0 24.0	wp2 wp4 wp12 wp13 wp14
+wp4	arena	-1400.0 -100.0 24.0	wp3 wp5 wp13 wp14 wp15
+wp5	arena	-1400.0 100.0 24.0	wp4 wp6 wp14 wp15 wp16
+wp6	arena	-1400.0 300.0 24.0	wp5 wp7 wp15 wp16 wp17
+wp7	arena	-1400.0 500.0 24.0	wp6 wp8 wp16 wp17 wp18
+wp8	arena	-1400.0 700.0 24.0	wp7 wp9 wp17 wp18 wp19
+wp9	arena	-1400.0 900.0 24.0	wp8 wp18 wp19
+wp10	arena	-1200.0 -900.0 24.0	wp0 wp1 wp11 wp20 wp21
+wp11	arena	-1200.0 -700.0 24.0	wp0 wp1 wp2 wp10 wp12 wp20 wp21 wp22
+wp12	arena	-1200.0 -500.0 24.0	wp1 wp2 wp3 wp11 wp13 wp21 wp22 wp23
+wp13	arena	-1200.0 -300.0 24.0	wp2 wp3 wp4 wp12 wp14 wp22 wp23 wp24
+wp14	arena	-1200.0 -100.0 24.0	wp3 wp4 wp5 wp13 wp15 wp23 wp24 wp25
+wp15	arena	-1200.0 100.0 24.0	wp4 wp5 wp6 wp14 wp16 wp24 wp25 wp26
+wp16	arena	-1200.0 300.0 24.0	wp5 wp6 wp7 wp15 wp17 wp25 wp26 wp27
+wp17	arena	-1200.0 500.0 24.0	wp6 wp7 wp8 wp16 wp18 wp26 wp27 wp28
+wp18	arena	-1200.0 700.0 24.0	wp7 wp8 wp9 wp17 wp19 wp27 wp28 wp29
+wp19	arena	-1200.0 900.0 24.0	wp8 wp9 wp18 wp28 wp29
+wp20	arena	-1000.0 -900.0 24.0	wp10 wp11 wp21 wp30 wp31
+wp21	arena	-1000.0 -700.0 24.0	wp10 wp11 wp12 wp20 wp22 wp30 wp31
+wp22	arena	-1000.0 -500.0 24.0	wp11 wp12 wp13 wp21 wp23
+wp23	arena	-1000.0 -300.0 24.0	wp12 wp13 wp14 wp22 wp24 wp33 wp34
+wp24	arena	-1000.0 -100.0 24.0	wp13 wp14 wp15 wp23 wp25 wp33 wp34 wp35
+wp25	arena	-1000.0 100.0 24.0	wp14 wp15 wp16 wp24 wp26 wp34 wp35 wp36
+wp26	arena	-1000.0 300.0 24.0	wp15 wp16 wp17 wp25 wp27 wp35 wp36
+wp27	arena	-1000.0 500.0 24.0	wp16 wp17 wp18 wp26 wp28
+wp28	arena	-1000.0 700.0 24.0	wp17 wp18 wp19 wp27 wp29 wp38 wp39
+wp29	arena	-1000.0 900.0 24.0	wp18 wp19 wp28 wp38 wp39
+wp30	arena	-800.0 -900.0 24.0	wp20 wp21 wp31
+wp31	arena	-800.0 -700.0 24.0	wp20 wp21 wp30 wp32
+wp32	arena	-800.0 -500.0 24.0	wp31 wp33
+wp33	arena	-800.0 -300.0 24.0	wp23 wp24 wp32 wp34
+wp34	arena	-800.0 -100.0 24.0	wp23 wp24 wp25 wp33 wp35 wp44 wp45
+wp35	arena	-800.0 100.0 24.0	wp24 wp25 wp26 wp34 wp36 wp44 wp45
+wp36	arena	-800.0 300.0 24.0	wp25 wp26 wp35 wp37
+wp37	arena	-800.0 500.0 24.0	wp36 wp38
+wp38	arena	-800.0 700.0 24.0	wp28 wp29 wp37 wp39
+wp39	arena	-800.0 900.0 24.0	wp28 wp29 wp38
+wp40	arena	-600.0 -900.0 24.0	wp41 wp50 wp51
+wp41	arena	-600.0 -700.0 24.0	wp40 wp42 wp50 wp51
+wp42	arena	-600.0 -500.0 24.0	wp41 wp43 wp51 wp52 wp53
+wp43	arena	-600.0 -300.0 24.0	wp42 wp44 wp52 wp53 wp54
+wp44	arena	-600.0 -100.0 24.0	wp34 wp35 wp43 wp45 wp53 wp54 wp55
+wp45	arena	-600.0 100.0 24.0	wp34 wp35 wp44 wp46 wp54 wp55 wp56
+wp46	arena	-600.0 300.0 24.0	wp45 wp47 wp55 wp56 wp57
+wp47	arena	-600.0 500.0 24.0	wp46 wp48 wp56 wp57 wp58
+wp48	arena	-600.0 700.0 24.0	wp47 wp49 wp58 wp59
+wp49	arena	-600.0 900.0 24.0	wp48 wp58 wp59
+wp50	arena	-400.0 -900.0 24.0	wp40 wp41 wp51 wp60 wp61
+wp51	arena	-400.0 -700.0 24.0	wp40 wp41 wp42 wp50 wp60 wp61 wp62
+wp52	arena	-400.0 -500.0 24.0	wp42 wp43 wp53 wp62 wp63
+wp53	arena	-400.0 -300.0 24.0	wp42 wp43 wp44 wp52 wp54 wp62 wp63
+wp54	arena	-400.0 -100.0 24.0	wp43 wp44 wp45 wp53 wp55 wp63
+wp55	arena	-400.0 100.0 24.0	wp44 wp45 wp46 wp54 wp56 wp64
+wp56	arena	-400.0 300.0 24.0	wp45 wp46 wp47 wp55 wp57 wp64 wp65
+wp57	arena	-400.0 500.0 24.0	wp46 wp47 wp56 wp64 wp65
+wp58	arena	-400.0 700.0 24.0	wp47 wp48 wp49 wp59 wp65 wp66 wp67
+wp59	arena	-400.0 900.0 24.0	wp48 wp49 wp58 wp66 wp67
+wp60	arena	-200.0 -900.0 24.0	wp50 wp51 wp61 wp68 wp69
+wp61	arena	-200.0 -700.0 24.0	wp50 wp51 wp60 wp62 wp68 wp69
+wp62	arena	-200.0 -500.0 24.0	wp51 wp52 wp53 wp61 wp63 wp69 wp70
+wp63	arena	-200.0 -300.0 24.0	wp52 wp53 wp54 wp62 wp70
+wp64	arena	-200.0 300.0 24.0	wp55 wp56 wp57 wp65 wp71
+wp65	arena	-200.0 500.0 24.0	wp56 wp57 wp58 wp64 wp66
+wp66	arena	-200.0 700.0 24.0	wp58 wp59 wp65 wp67 wp72
+wp67	arena	-200.0 900.0 24.0	wp58 wp59 wp66 wp72
+wp68	arena	0.0 -900.0 24.0	wp60 wp61 wp69 wp73 wp74
+wp69	arena	0.0 -700.0 24.0	wp60 wp61 wp62 wp68 wp73 wp74 wp75
+wp70	arena	0.0 -300.0 24.0	wp62 wp63 wp75 wp76
+wp71	arena	0.0 300.0 24.0	wp64 wp77
+wp72	arena	0.0 900.0 24.0	wp66 wp67 wp79 wp80
+wp73	arena	200.0 -900.0 24.0	wp68 wp69 wp74 wp81 wp82
+wp74	arena	200.0 -700.0 24.0	wp68 wp69 wp73 wp75 wp81 wp82
+wp75	arena	200.0 -500.0 24.0	wp69 wp70 wp74 wp76 wp82 wp83 wp84
+wp76	arena	200.0 -300.0 24.0	wp70 wp75 wp83 wp84 wp85
+wp77	arena	200.0 300.0 24.0	wp71 wp78 wp86 wp87 wp88
+wp78	arena	200.0 500.0 24.0	wp77 wp79 wp87 wp88 wp89
+wp79	arena	200.0 700.0 24.0	wp72 wp78 wp80 wp89 wp90
+wp80	arena	200.0 900.0 24.0	wp72 wp79 wp89 wp90
+wp81	arena	400.0 -900.0 24.0	wp73 wp74 wp82 wp91 wp92
+wp82	arena	400.0 -700.0 24.0	wp73 wp74 wp75 wp81 wp91 wp92 wp93
+wp83	arena	400.0 -500.0 24.0	wp75 wp76 wp84 wp93 wp94
+wp84	arena	400.0 -300.0 24.0	wp75 wp76 wp83 wp85 wp93 wp94 wp95
+wp85	arena	400.0 -100.0 24.0	wp76 wp84 wp86 wp94 wp95 wp96
+wp86	arena	400.0 100.0 24.0	wp77 wp85 wp87 wp95 wp96 wp97
+wp87	arena	400.0 300.0 24.0	wp77 wp78 wp86 wp88 wp96 wp97 wp98
+wp88	arena	400.0 500.0 24.0	wp77 wp78 wp87 wp97 wp98
+wp89	arena	400.0 700.0 24.0	wp78 wp79 wp80 wp90 wp98 wp99 wp100
+wp90	arena	400.0 900.0 24.0	wp79 wp80 wp89 wp99 wp100
+wp91	arena	600.0 -900.0 24.0	wp81 wp82 wp92
+wp92	arena	600.0 -700.0 24.0	wp81 wp82 wp91 wp93
+wp93	arena	600.0 -500.0 24.0	wp82 wp83 wp84 wp92 wp94
+wp94	arena	600.0 -300.0 24.0	wp83 wp84 wp85 wp93 wp95
+wp95	arena	600.0 -100.0 24.0	wp84 wp85 wp86 wp94 wp96 wp105 wp106
+wp96	arena	600.0 100.0 24.0	wp85 wp86 wp87 wp95 wp97 wp105 wp106
+wp97	arena	600.0 300.0 24.0	wp86 wp87 wp88 wp96 wp98
+wp98	arena	600.0 500.0 24.0	wp87 wp88 wp89 wp97 wp99
+wp99	arena	600.0 700.0 24.0	wp89 wp90 wp98 wp100
+wp100	arena	600.0 900.0 24.0	wp89 wp90 wp99
+wp101	arena	800.0 -900.0 24.0	wp102 wp111 wp112
+wp102	arena	800.0 -700.0 24.0	wp101 wp103 wp111 wp112
+wp103	arena	800.0 -500.0 24.0	wp102 wp104
+wp104	arena	800.0 -300.0 24.0	wp103 wp105 wp114 wp115
+wp105	arena	800.0 -100.0 24.0	wp95 wp96 wp104 wp106 wp114 wp115 wp116
+wp106	arena	800.0 100.0 24.0	wp95 wp96 wp105 wp107 wp115 wp116 wp117
+wp107	arena	800.0 300.0 24.0	wp106 wp108 wp116 wp117
+wp108	arena	800.0 500.0 24.0	wp107 wp109
+wp109	arena	800.0 700.0 24.0	wp108 wp110 wp119 wp120
+wp110	arena	800.0 900.0 24.0	wp109 wp119 wp120
+wp111	arena	1000.0 -900.0 24.0	wp101 wp102 wp112 wp121 wp122
+wp112	arena	1000.0 -700.0 24.0	wp101 wp102 wp111 wp113 wp121 wp122 wp123
+wp113	arena	1000.0 -500.0 24.0	wp112 wp114 wp122 wp123 wp124
+wp114	arena	1000.0 -300.0 24.0	wp104 wp105 wp113 wp115 wp123 wp124 wp125
+wp115	arena	1000.0 -100.0 24.0	wp104 wp105 wp106 wp114 wp116 wp124 wp125 wp126
+wp116	arena	1000.0 100.0 24.0	wp105 wp106 wp107 wp115 wp117 wp125 wp126 wp127
+wp117	arena	1000.0 300.0 24.0	wp106 wp107 wp116 wp118 wp126 wp127 wp128
+wp118	arena	1000.0 500.0 24.0	wp117 wp119 wp127 wp128 wp129
+wp119	arena	1000.0 700.0 24.0	wp109 wp110 wp118 wp120 wp128 wp129 wp130
+wp120	arena	1000.0 900.0 24.0	wp109 wp110 wp119 wp129 wp130
+wp121	arena	1200.0 -900.0 24.0	wp111 wp112 wp122 wp131 wp132
+wp122	arena	1200.0 -700.0 24.0	wp111 wp112 wp113 wp121 wp123 wp131 wp132 wp133
+wp123	arena	1200.0 -500.0 24.0	wp112 wp113 wp114 wp122 wp124 wp132 wp133 wp134
+wp124	arena	1200.0 -300.0 24.0	wp113 wp114 wp115 wp123 wp125 wp133 wp134 wp135
+wp125	arena	1200.0 -100.0 24.0	wp114 wp115 wp116 wp124 wp126 wp134 wp135 wp136
+wp126	arena	1200.0 100.0 24.0	wp115 wp116 wp117 wp125 wp127 wp135 wp136 wp137
+wp127	arena	1200.0 300.0 24.0	wp116 wp117 wp118 wp126 wp128 wp136 wp137 wp138
+wp128	arena	1200.0 500.0 24.0	wp117 wp118 wp119 wp127 wp129 wp137 wp138 wp139
+wp129	arena	1200.0 700.0 24.0	wp118 wp119 wp120 wp128 wp130 wp138 wp139 wp140
+wp130	arena	1200.0 900.0 24.0	wp119 wp120 wp129 wp139 wp140
+wp131	arena	1400.0 -900.0 24.0	wp121 wp122 wp132
+wp132	arena	1400.0 -700.0 24.0	wp121 wp122 wp123 wp131 wp133
+wp133	arena	1400.0 -500.0 24.0	wp122 wp123 wp124 wp132 wp134
+wp134	arena	1400.0 -300.0 24.0	wp123 wp124 wp125 wp133 wp135
+wp135	arena	1400.0 -100.0 24.0	wp124 wp125 wp126 wp134 wp136
+wp136	arena	1400.0 100.0 24.0	wp125 wp126 wp127 wp135 wp137
+wp137	arena	1400.0 300.0 24.0	wp126 wp127 wp128 wp136 wp138
+wp138	arena	1400.0 500.0 24.0	wp127 wp128 wp129 wp137 wp139
+wp139	arena	1400.0 700.0 24.0	wp128 wp129 wp130 wp138 wp140
+wp140	arena	1400.0 900.0 24.0	wp129 wp130 wp139

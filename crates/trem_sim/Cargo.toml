@@ -1,0 +1,22 @@
+[package]
+name = "trem_sim"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Tremulous 1.2 simulation, ported from C; data generated from the sheet book"
+build = "build.rs"
+
+[dependencies]
+phf = { version = "0.14", default-features = false }
+trem_opus = { path = "../trem_opus" }
+
+# net_ip.c's socket options (IPV6_V6ONLY before bind, if_nametoindex)
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[build-dependencies]
+sheetty = { path = "../sheetty" }
+
+[dev-dependencies]
+zip = { version = "2", default-features = false, features = ["deflate"] }
+sha2 = "0.10"

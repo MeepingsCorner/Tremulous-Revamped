@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/sheetty", "crates/sheetty-cli", "crates/trem_sim", "crates/trem_godot", "crates/trem_opus"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+
+[profile.dev]
+opt-level = 1
+debug = 1
+[profile.dev.package."*"]
+opt-level = 3
+debug = false
+[profile.release]
+lto = "thin"
+codegen-units = 1
+panic = "abort"

@@ -1,0 +1,10 @@
+/target
+/godot/.godot
+/re/harness/extract
+/re/harness/consts
+/re/harness/pmove_ref
+/re/harness/*.o
+/.gamedb
+*.bak
+~*
+*.TMP

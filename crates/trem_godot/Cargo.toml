@@ -1,0 +1,13 @@
+[package]
+name = "trem_godot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Godot 4 front end (GDExtension) for the trem_sim simulation"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+trem_sim = { path = "../trem_sim" }
+godot = { version = "0.5", features = ["api-4-7"] }

@@ -1,0 +1,70 @@
+@classes
+num	name	stages	health	fall_damage	regen_rate	abilities	start_weapon	build_dist	fov	bob	bob_cycle	steptime	speed	acceleration	air_acceleration	friction	stop_speed	jump_magnitude	knockback_scale	child0	child1	child2	cost	value	model	model_scale	skin	shadow_scale	hud	human_name	mins	maxs	crouch_maxs	dead_mins	dead_maxs	viewheight	crouch_viewheight	z_offset	shoulder_offsets
+0	spectator	7	0	0	0	0	0	0	90	0	1	0	600	10	1	6	100	270	1	0	0	0	0	0		1		1		Spectator	-15 -15 -15	15 15 15	15 15 15	-15 -15 -15	15 15 15	0	0	0	0 0 0
+1	builder	7	50	0.200000003	2	26	24	95	110	0.00100000005	2	150	0.899999976	10	1	6	100	195	1	2	3	0	0	240	builder	1	default	1	alien_builder_hud	Granger	-20 -20 -20	20 20 20	20 20 20	-20 -20 -4	20 20 4	0	0	0	-8 15 13
+2	builderupg	6	75	0.200000003	3	27	25	105	110	0.00100000005	2	100	0.899999976	10	1	6	100	270	1	3	0	0	0	300	builder	1	advanced	1	alien_builder_hud	Advanced Granger	-20 -20 -20	20 20 20	20 20 20	-20 -20 -4	20 20 4	0	0	0	-8 15 13
+3	level0	7	25	0	1.25	25	1	0	140	0	2.5	25	1.39999998	10	1	6	400	250	2	4	0	0	0	180	level0	1.20000005	default	0.5	alien_general_hud	Dretch	-15 -15 -15	15 15 15	15 15 15	-15 -15 -15	15 15 15	0	0	-5	-5 0 17
+4	level1	7	60	0	1.79999995	25	2	0	120	0.00100000005	1.79999995	60	1.25	10	1	6	300	310	1.20000005	6	5	0	1	270	level1	1	default	1	alien_general_hud	Basilisk	-18 -18 -18	18 18 18	18 18 18	-18 -18 -4	18 18 4	0	0	0	-10 0 18
+5	level1upg	6	80	0	2.39999986	25	3	0	120	0.00100000005	1.79999995	60	1.25	10	1	6	300	310	1.10000002	6	0	0	1	330	level1	1.16659999	upgrade	1	alien_general_hud	Advanced Basilisk	-21 -21 -21	21 21 21	21 21 21	-21 -21 -4.66599989	21 21 4.66599989	0	0	0	-10 0 18
+6	level2	7	150	0	4.5	88	4	0	90	0.00100000005	1.5	80	1.20000005	10	3	6	100	380	0.800000012	8	7	0	1	420	level2	1	default	1	alien_general_hud	Marauder	-23 -23 -22	23 23 14	23 23 14	-23 -23 -4	23 23 4	8	8	0	0 12 5
+7	level2upg	6	175	0	5.25	88	5	0	90	0.00100000005	1.5	80	1.20000005	10	3	6	100	380	0.699999988	8	0	0	1	540	level2	1.10000002	adv	1	alien_general_hud	Advanced Marauder	-25 -25 -24	25 25 16	25 25 16	-25 -25 -4	25 25 4	10	10	0	0 12 5
+8	level3	7	200	0	6	24	6	0	110	0.000500000024	1.29999995	90	1.10000002	10	1	6	200	270	0.5	10	9	0	1	600	level3	1	default	1	alien_general_hud	Dragoon	-26 -26 -23	26 26 32	26 26 32	-26 -26 -4	26 26 4	24	24	0	-10 15 8
+9	level3upg	6	250	0	7.5	24	7	0	110	0.000500000024	1.29999995	90	1.10000002	10	1	6	200	270	0.400000006	10	0	0	1	720	level3	1.14999998	adv	1	alien_general_hud	Advanced Dragoon	-29 -29 -29	29 29 37	29 29 38	-29 -29 -4	29 29 4	27	27	0	-10 17 12
+10	level4	4	350	0	8.75	24	8	0	90	0.00100000005	1.10000002	100	1.20000005	10	1	6	100	170	0.100000001	0	0	0	2	960	level4	1	default	2	alien_general_hud	Tyrant	-32 -32 -22	32 32 70	32 32 70	-32 -32 -34	32 32 34	64	64	0	-20 -25 30
+11	human_base	7	100	1	0	34	0	110	90	0.00200000009	1	100	1	10	1	6	100	220	1	0	0	0	0	400	human_base	1	default	1	human_hud	Human Base	-15 -15 -24	15 15 32	15 15 16	-15 -15 -4	15 15 4	24	7	-2	-10 15 0
+12	human_bsuit	4	100	1	0	34	0	110	90	0.00200000009	1	100	1	10	1	6	100	220	1	0	0	0	0	400	human_bsuit	1	default	1	human_hud	Human Battlesuit	-15 -15 -38	15 15 38	15 15 38	-15 -15 -4	15 15 4	29	29	-16	-30 25 -2
+@buildables
+num	name	human_name	entity_name	traj	bounce	build_points	stages	health	regen_rate	splash_damage	splash_radius	means_of_death	team	build_weapon	idle_anim	nextthink	build_time	usable	turret_range	turret_fire_speed	turret_proj	min_normal	invert_normal	creep_test	creep_size	dcc_test	transparent_test	unique_test	value	model0	model_scale	mins	maxs	z_offset
+1	eggpod	Egg	team_alien_spawn	5	0	10	7	250	8	50	100	42	1	50331648	3	100	15000	0	0	0	0	0.5	1	0	120	0	0	0	900	models/buildables/eggpod/eggpod.md3	1	-15 -15 -15	15 15 15	0
+2	overmind	Overmind	team_alien_overmind	5	0	0	7	750	6	15	300	42	1	50331648	3	1000	30000	0	0	0	0	0.949999988	0	0	120	0	0	1	2700	models/buildables/overmind/overmind.md3	1	-45 -45 -15	45 45 95	0
+3	barricade	Barricade	team_alien_barricade	5	0	8	7	300	14	50	100	42	1	50331648	3	100	20000	0	0	0	0	0.707000017	0	1	120	0	0	0	720	models/buildables/barricade/barricade.md3	1	-35 -35 -15	35 35 60	0
+4	acid_tube	Acid Tube	team_alien_acid_tube	5	0	8	7	125	10	50	100	42	1	50331648	3	200	15000	0	0	0	0	0	1	1	120	0	0	0	720	models/buildables/acid_tube/acid_tube.md3	0.600000024	-15 -15 -15	15 15 15	-8.5
+5	trapper	Trapper	team_alien_trapper	5	0	8	6	50	6	15	100	42	1	33554432	3	100	12000	0	400	1000	20	0	1	1	30	0	1	0	720	models/buildables/trapper/trapper.md3	1	-15 -15 -15	15 15 15	0
+6	booster	Booster	team_alien_booster	5	0	12	6	150	8	50	100	42	1	33554432	3	100	15000	0	0	0	0	0.707000017	0	1	120	0	1	0	1080	models/buildables/booster/booster.md3	1	-26 -26 -9	26 26 9	0
+7	hive	Hive	team_alien_hive	5	0	12	4	125	10	30	200	42	1	33554432	3	500	20000	0	0	0	21	0	1	1	120	0	0	0	1080	models/buildables/hive/hive.md3	1	-20 -20 -20	20 20 20	-10
+8	telenode	Telenode	team_human_spawn	5	0	10	7	310	0	50	100	38	2	67108864	3	100	10000	0	0	0	0	0.949999988	0	0	0	0	1	0	2400	models/buildables/telenode/telenode.md3	1	-40 -40 -4	40 40 6	0
+9	mgturret	Machinegun Turret	team_human_mgturret	5	0	8	7	190	0	100	100	38	2	67108864	3	50	10000	0	400	150	23	0.949999988	0	0	0	0	1	0	1920	models/buildables/mgturret/turret_base.md3	1	-25 -25 -20	25 25 20	0
+10	tesla	Tesla Generator	team_human_tesla	5	0	10	4	220	0	50	100	38	2	67108864	3	150	15000	0	200	250	22	0.949999988	0	0	0	0	1	0	2400	models/buildables/tesla/tesla.md3	1	-22 -22 -40	22 22 40	0
+11	arm	Armoury	team_human_armoury	5	0	10	7	420	0	50	100	38	2	67108864	3	100	10000	1	0	0	0	0.949999988	0	0	0	0	0	0	2400	models/buildables/arm/arm.md3	1	-40 -40 -13	40 40 50	-2
+12	dcc	Defence Computer	team_human_dcc	5	0	8	6	190	0	50	100	38	2	67108864	3	100	10000	0	0	0	0	0.949999988	0	0	0	0	0	0	1920	models/buildables/dcc/dcc.md3	1	-35 -35 -13	35 35 47	0
+13	medistat	Medistation	team_human_medistat	5	0	8	7	190	0	50	100	38	2	67108864	3	100	10000	0	0	0	0	0.949999988	0	0	0	0	1	0	1920	models/buildables/medistat/medistat.md3	1	-35 -35 -7	35 35 4	0
+14	reactor	Reactor	team_human_reactor	5	0	0	7	930	0	200	300	38	2	67108864	3	1000	20000	1	0	0	0	0.949999988	0	0	0	0	0	1	7200	models/buildables/reactor/reactor.md3	0.850000024	-41 -41 -15	41 41 95	-2
+15	repeater	Repeater	team_human_repeater	5	0	4	7	250	0	50	100	38	2	67108864	3	100	10000	1	0	0	0	0.949999988	0	0	0	0	0	0	960	models/buildables/repeater/repeater.md3	1	-15 -15 -15	15 15 25	0
+@weapons
+num	name	human_name	price	stages	slots	max_ammo	max_clips	infinite_ammo	uses_energy	repeat_rate1	repeat_rate2	repeat_rate3	reload_time	knockback_scale	has_alt_mode	has_third_mode	can_zoom	zoom_fov	purchasable	long_ranged	team
+1	level0	Bite	0	7	32	0	0	1	0	500	0	0	0	1	0	0	0	90	0	0	1
+2	level1	Claws	0	7	32	0	0	1	0	600	0	0	0	1	0	0	0	90	0	0	1
+3	level1upg	Claws Upgrade	0	7	32	0	0	1	0	500	2000	0	0	1	1	0	0	90	0	1	1
+4	level2	Bite	0	7	32	0	0	1	0	500	0	0	0	1	0	0	0	90	0	0	1
+5	level2upg	Zap	0	7	32	0	0	1	0	400	1500	0	0	1	1	0	0	90	0	0	1
+6	level3	Pounce	0	7	32	0	0	1	0	900	0	0	0	1	0	0	0	90	0	0	1
+7	level3upg	Pounce (upgrade)	0	7	32	3	0	1	0	800	0	1200	0	1	0	1	0	90	0	1	1
+8	level4	Charge	0	7	32	0	0	1	0	800	0	0	0	1	0	0	0	90	0	0	1
+9	blaster	Blaster	0	7	0	0	0	1	0	600	0	0	0	1	0	0	0	90	0	1	2
+10	rifle	Rifle	0	7	32	30	6	0	0	90	0	0	2000	1	0	0	0	90	1	1	2
+11	psaw	Pain Saw	100	7	32	0	0	1	0	75	0	0	0	1	0	0	0	90	1	0	2
+12	shotgun	Shotgun	150	7	32	8	3	0	0	1000	0	0	2000	1	0	0	0	90	1	1	2
+13	lgun	Las Gun	250	7	32	200	0	0	1	200	0	0	2000	1	0	0	0	90	1	1	2
+14	mdriver	Mass Driver	350	7	32	5	4	0	1	1000	0	0	2000	1	0	0	1	20	1	1	2
+15	chaingun	Chaingun	400	7	32	300	0	0	0	80	0	0	0	1	0	0	0	90	1	1	2
+16	flamer	Flame Thrower	400	6	32	200	0	0	0	200	0	0	0	2	0	0	0	90	1	1	2
+17	prifle	Pulse Rifle	450	6	32	40	5	0	1	100	0	0	2000	1	0	0	0	90	1	1	2
+18	lcannon	Lucifer Cannon	600	4	32	80	0	0	1	500	1000	0	0	1	1	0	0	90	1	1	2
+19	grenade	Grenade	200	6	0	1	0	0	0	0	0	0	0	1	0	0	0	90	0	0	2
+20	lockblob	Lock Blob	0	7	32	0	0	1	0	500	500	500	0	1	0	0	0	90	0	0	1
+21	hive	Hive	0	7	32	0	0	1	0	500	500	500	0	1	0	0	0	90	0	0	1
+22	teslagen	Tesla Generator	0	7	32	0	0	1	1	500	500	500	0	4	0	0	0	90	0	0	2
+23	mgturret	Machinegun Turret	0	7	32	0	0	1	0	0	0	0	0	1	0	0	0	90	0	0	2
+24	abuild	Alien build weapon	0	7	32	0	0	1	0	500	1000	0	0	1	1	0	0	90	1	0	1
+25	abuildupg	Alien build weapon2	0	7	32	0	0	1	0	500	1000	1000	0	1	1	1	0	90	1	0	1
+26	ckit	Construction Kit	0	7	32	0	0	1	0	1000	0	0	0	0	1	0	0	90	1	0	2
+@upgrades
+num	name	human_name	price	stages	slots	icon	purchasable	usable	team
+1	larmour	Light Armour	70	7	14	icons/iconu_larmour	1	0	2
+2	helmet	Helmet	90	6	1	icons/iconu_helmet	1	0	2
+3	medkit	Medkit	0	7	0	icons/iconu_atoxin	0	1	2
+4	battpack	Battery Pack	100	7	16	icons/iconu_battpack	1	0	2
+5	jetpack	Jet Pack	120	6	16	icons/iconu_jetpack	1	1	2
+6	bsuit	Battlesuit	400	4	31	icons/iconu_bsuit	1	0	2
+7	gren	Grenade	200	6	0		1	1	2
+8	ammo	Ammunition	0	7	0		1	0	2

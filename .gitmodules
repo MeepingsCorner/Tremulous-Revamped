@@ -1,0 +1,3 @@
+[submodule "re/source"]
+	path = re/source
+	url = https://github.com/darklegion/tremulous-legacy

@@ -1,0 +1,28 @@
+# sheet: scenarios
+# version: 1
+# generator: table
+# index: by_id
+# requires: classes,weapons,upgrades
+# owned_by: verifier
+# notes: golden-trace scenarios (MDD 7.5). script tokens: N*<f|r|u|b|y|p|w><int>... per tick (moves, buttons, yaw/pitch delta in short units, weapon byte)
+id	class	weapon	items	origin	yaw	pm_type	ps_state	msec	script
+h_walk	human_base	rifle	NULL	-1200.0 -700.0 40.0	0.0	Normal	NULL	16	30*f0 60*f127 20*f0
+h_strafe_jump	human_base	rifle	NULL	-1200.0 -700.0 40.0	0.0	Normal	NULL	8	20*f127 40*f127r127u127y90 40*f127r-127u127y-90 20*f0
+h_wall_slide	human_base	rifle	NULL	-1300.0 -900.0 40.0	300.0	Normal	NULL	16	90*f127r64
+h_ramp_platform	human_base	rifle	NULL	-500.0 0.0 40.0	0.0	Normal	NULL	16	120*f127 30*f127u127
+h_crouch	human_base	rifle	NULL	-1200.0 -700.0 40.0	45.0	Normal	NULL	16	20*u-127 40*f127u-127 20*f127
+h_sprint_stamina	human_base	rifle	NULL	-1300.0 600.0 40.0	0.0	Normal	NULL	33	150*f127b256 50*f127
+h_dodge	human_base	rifle	NULL	-1200.0 -700.0 40.0	0.0	Normal	NULL	16	10*f0 5*r127b64 40*f0 5*f-127b64 40*f0
+h_ladder	human_base	rifle	NULL	0.0 -960.0 40.0	270.0	Normal	NULL	16	20*f127 120*f127u127 30*f0
+h_fall_balcony	human_base	rifle	NULL	0.0 900.0 200.0	270.0	Normal	NULL	16	80*f127
+h_rifle_fire	human_base	rifle	NULL	-1200.0 -700.0 40.0	0.0	Normal	NULL	16	10*f0 120*b1 30*f0
+h_chaingun	human_bsuit	chaingun	bsuit	-1200.0 -700.0 40.0	0.0	Normal	NULL	16	10*f0 80*b1p3 10*f0
+h_lcannon	human_base	lcannon	NULL	-1200.0 -700.0 40.0	0.0	Normal	NULL	16	10*f0 220*b1 40*f0 30*b32 20*f0
+h_jetpack	human_base	rifle	jetpack	-1200.0 -700.0 40.0	0.0	Jetpack	NULL	16	60*u127f64 40*f127 40*u-127
+a_dretch_wallwalk	level0	level0	NULL	-900.0 -880.0 40.0	270.0	Normal	Nonsegmodel	16	40*f127u-127 120*f127u-127p-60 80*f127u-127y40 40*f0
+a_basilisk_ceiling	level1	level1	NULL	600.0 -600.0 40.0	0.0	Normal	Nonsegmodel	16	30*f127u-127 100*f127u-127p-120 100*f127u-127 60*f0
+a_marauder_walljump	level2	level2	NULL	-1300.0 -880.0 40.0	270.0	Normal	Nonsegmodel	16	30*f127 15*f127u127 30*f127r127u127y-80 30*f0
+a_dragoon_pounce	level3	level3	NULL	-1100.0 0.0 40.0	0.0	Normal	Nonsegmodel	16	10*f0 60*b32 1*f0 80*f0 5*b1 20*f0
+a_tyrant_trample	level4	level4	NULL	-1100.0 -500.0 60.0	0.0	Normal	Nonsegmodel	16	20*f127 140*f127b32 100*f127 30*f0
+a_granger	builder	abuild	NULL	-1000.0 300.0 40.0	90.0	Normal	Nonsegmodel	16	60*f127 20*f127u127 40*f127r127
+s_spectator_fly	spectator	NULL	NULL	0.0 0.0 300.0	30.0	Spectator	NULL	16	60*f127u127 60*r127p40 30*f0

@@ -1,0 +1,11 @@
+lan: world=true status=cl=Active num=6 server=localhost sv_map=atcs sv_active=1 sv_port=30720 me=groid origin=720,-384,296 hp=100 ping=0 weapon=0 ammo=0 clips=0 wstate=0 others=[Xeno1@0,0,0 Xeno2@0,0,0 Xeno3@0,0,0 Marine1@0,0,0 Marine2@0,0,0 Marine3@0,0,0] snap: weapon=0 ammo=0 clips=0 misc=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] ps11.weapon=0 ps11.ammo=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+lan: net_port= net_enabled= net_ip= sv_maxclients=
+lan: local address 127.0.0.1
+lan: local address 192.168.0.104
+lan: local address 169.254.3.195
+lan: local address 169.254.201.183
+lan: local address 169.254.42.192
+lan: 127.0.0.1:30720 -> reply from 127.0.0.1: infoResponse | \challenge\xxx\protocol\71\gamename\Tremulous\hostname\noname\mapname\atcs\clients\7\sv_maxclients\8\pu
+lan: 192.168.0.104:30720 -> reply from 192.168.0.104: infoResponse | \challenge\xxx\protocol\71\gamename\Tremulous\hostname\noname\mapname\atcs\clients\7\sv_maxclients\8\pu
+lan: 255.255.255.255:30720 -> reply from 192.168.0.104: infoResponse | \challenge\xxx\protocol\71\gamename\Tremulous\hostname\noname\mapname\atcs\clients\7\sv_maxclients\8\pu
+lan: done

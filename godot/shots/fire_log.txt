@@ -1,0 +1,16 @@
+autogen: seta name "Owner"
+autogen: seta r_width "0"
+autogen: seta rate "90000"
+autogen: seta snaps "40"
+autogen: seta cl_maxpackets "125"
+connect: 104.236.81.57:30720 resolved to 104.236.81.57:30720
+status: cl=Active num=1 server=104.236.81.57:30720 me=PortTest449 origin=720,-384,296 hp=100 ping=0 weapon=0 ammo=0 clips=0 wstate=0 others=[^7m^3o^7derati^1o^7n@0,0,0 UnnamedPlayer@0,0,0] snap: weapon=0 ammo=0 clips=0 misc=[8194, 1, 0, 32, 0, 0, 0, 0, 1, 0, 0, 0, 16777216, 0, 0, 0] ps11.weapon=0 ps11.ammo=[0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+team: 
+class: 
+menu input_enabled=false
+status after spawn: cl=Active num=1 server=104.236.81.57:30720 me=PortTest449 origin=-1647,277,40 hp=100 ping=0 weapon=10 ammo=27 clips=6 wstate=0 others=[^7m^3o^7derati^1o^7n@0,0,0 UnnamedPlayer@0,0,0] snap: weapon=10 ammo=27 clips=6 misc=[2, 1536, 0, 32, 0, 0, 0, -30208, 0, 0, 0, 0, 0, 655360, 745499, 0] ps11.weapon=10 ps11.ammo=[0, 24603, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] input_enabled=true
+fire start t=25296
+fire end t=26513
+score: 
+status after scores: cl=Active num=1 server=104.236.81.57:30720 me=PortTest449 origin=-1647,277,40 hp=100 ping=298 weapon=10 ammo=13 clips=6 wstate=0 others=[^7m^3o^7derati^1o^7n@0,0,0 UnnamedPlayer@0,0,0] snap: weapon=10 ammo=13 clips=6 misc=[2, 1536, 0, 32, 0, 0, 0, -25958, 0, 0, 0, 0, 0, 655360, 745485, 0] ps11.weapon=10 ps11.ammo=[0, 24589, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+disconnect: 

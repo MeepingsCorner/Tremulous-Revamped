@@ -1,0 +1,1 @@
+Tremulous 1.1.0 source (GPL v2) from https://github.com/jkent/tremulous-backport (commit b33e2a8): the vanilla protocol 69 reference for dec040. Only game, cgame, qcommon, server, client, ui sources and the ui menus are kept.

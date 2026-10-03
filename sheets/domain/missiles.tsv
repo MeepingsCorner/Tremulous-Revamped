@@ -1,0 +1,18 @@
+# sheet: missiles
+# version: 1
+# generator: table
+# dense: MissileId
+# requires: weapons
+# target: crate::gen::missiles
+# owned_by: synthesizer
+# notes: fire_* constructors of g_missile.c as rows; behaviour differences live in `impact`
+id	weapon	point_against_world	lifetime	damage	splash_damage	splash_radius	mod	splash_mod	size	speed	traj	bounce_half	lag	impact	ref_src
+flame	flamer	0	700	20	10	50	Flamer	FlamerSplash	15.0	500.0	Linear	0	0.65	Normal	g_missile.c:339
+blaster	blaster	1	10000	10	0	0	Blaster	Blaster	5.0	1400.0	Linear	0	0.0	Normal	g_missile.c:387
+pulse	prifle	1	10000	9	0	0	Prifle	Prifle	5.0	1200.0	Linear	0	0.0	Normal	g_missile.c:433
+lcannon	lcannon	1	10000	0	0	150	Lcannon	LcannonSplash	5.0	700.0	Linear	0	0.0	Normal	g_missile.c:479
+grenade	grenade	0	5000	310	310	192	Grenade	Grenade	3.0	400.0	Gravity	1	0.0	Bounce	g_missile.c:540
+hive	hive	0	3000	80	0	0	Swarm	Swarm	0.0	320.0	Linear	0	0.0	Hive	g_missile.c:650
+lockblob	lockblob	1	15000	0	0	0	Unknown	Unknown	0.0	500.0	Linear	0	0.0	Lockblob	g_missile.c:693
+slowblob	abuildupg	1	15000	4	0	0	Slowblob	Slowblob	0.0	800.0	Gravity	0	0.0	Slowblob	g_missile.c:732
+bounceball	level3upg	1	3000	110	110	75	Level3Bounceball	Level3Bounceball	0.0	1000.0	Gravity	0	0.0	Normal	g_missile.c:810

@@ -1,0 +1,16 @@
+video_test: was "r_fullscreen" is:"0^7", the default
+video_test: was "r_width" is:"1366^7" default:"0^7"
+video_test: was "r_height" is:"768^7" default:"0^7"
+video_test: was "r_mode" is:"-2^7", the default
+video_test: start mode=0 window=(1366, 768) screen=(3840, 2160) render=(1366.0, 768.0) scale_mode=2 scale_size=(1366, 768)
+video_test: > r_availableModes -> '"r_availableModes" is:"1024x576 1280x720 1366x768 1600x900 1920x1080 2560x1440 3200x1800 3840x2160 5120x2880 7680x4320 1360x768 1280x800 1440x900 1680x1050 1920x1200 2560x1600 2880x1800 3840x2400 640x480 800x600 1024x768 1152x864 1280x960 1400x1050 1600x1200 2048x1536 1280x1024 2560x2048 2560x1080 5120x2160 3440x1440 3840x1600 3840x1080 5120x1440^7"'
+video_test: > set r_width 1920; set r_height 1080; set r_fullscreen 1; vid_restart -> 'no game'
+video_test: 1920x1080 full mode=4 window=(3840, 2160) screen=(3840, 2160) render=(1920.0, 1080.0) scale_mode=2 scale_size=(1920, 1080)
+video_test: > set r_width 800; set r_height 600; vid_restart -> 'no game'
+video_test: 800x600 full mode=4 window=(3840, 2160) screen=(3840, 2160) render=(1920.0, 1080.0) scale_mode=2 scale_size=(1920, 1080)
+video_test: > set r_fullscreen 0; set r_width 1280; set r_height 720; vid_restart -> 'no game'
+video_test: 1280x720 windowed mode=0 window=(1280, 720) screen=(3840, 2160) render=(1280.0, 720.0) scale_mode=2 scale_size=(1280, 720)
+video_test: > set r_width 3840; set r_height 2160; vid_restart -> 'no game'
+video_test: 3840x2160 windowed mode=0 window=(1280, 720) screen=(3840, 2160) render=(1280.0, 720.0) scale_mode=2 scale_size=(1280, 720)
+video_test: > set r_fullscreen 0; set r_width 0; set r_height 0; vid_restart -> 'no game'
+video_test: restored mode=0 window=(1280, 720) screen=(3840, 2160) render=(1280.0, 720.0) scale_mode=2 scale_size=(1280, 720)

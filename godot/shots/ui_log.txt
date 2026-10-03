@@ -1,0 +1,12 @@
+cmd: 
+cmd: 
+ui_shot: 7_human_build menu='tremulous_humanbuild'
+ui_shot: 8_armoury menu='tremulous_humanarmoury'
+ui_shot: 9_options menu=''
+ui_shot: 10_main menu='main'
+cmd: 
+cmd: 
+cmd: 
+ui_shot: 11_alien_build menu='tremulous_alienbuild'
+ui_shot: 12_evolve menu='tremulous_alienupgrade'
+ui_shot: 13_hud_granger menu=''

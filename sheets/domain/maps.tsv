@@ -1,0 +1,8 @@
+# sheet: maps
+# version: 1
+# generator: table
+# dense: MapId
+# target: crate::gen::maps
+# owned_by: level-design
+id	display_name	gravity	alien_bp	human_bp	alien_credits_start	human_credits_start	sky_color	ambient
+arena	Arena (sheet-authored test map)	800.0	150	100	0	0	#1b1f2a	0.35

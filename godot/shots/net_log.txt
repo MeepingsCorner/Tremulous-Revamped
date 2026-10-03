@@ -1,0 +1,8 @@
+net_test: ---- connect 104.236.81.57:30720 -> '104.236.81.57:30720 resolved to 104.236.81.57:30720'
+net_test: t=0s cl=Connected num=0 server=104.236.81.57:30720 connecting=true world=false loading=true
+net_test: t=1s cl=Primed num=1 server=104.236.81.57:30720 connecting=false world=false loading=false
+net_test: t=2s cl=Active num=1 server=104.236.81.57:30720 me=Owner origin=720,-384,296 hp=100 ping=0 others=[^7m^3o^7derati^1o^7n@0,0,0] connecting=false world=true loading=false
+net_test: disconnect -> ''
+net_test: ---- connect 66.94.98.116:30722 -> '66.94.98.116:30722 resolved to 66.94.98.116:30722'
+net_test: t=0s cl=Connected num=1 server=66.94.98.116:30722 connecting=true world=false loading=true
+net_test: t=1s cl=Connected num=3 server=66.94.98.116:30722 connecting=true world=false loading=true

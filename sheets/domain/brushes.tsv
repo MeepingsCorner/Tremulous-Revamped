@@ -1,0 +1,37 @@
+# sheet: brushes
+# version: 1
+# generator: table
+# index: by_id
+# requires: maps,materials
+# target: crate::gen::brushes
+# owned_by: level-design
+id	map	mins	maxs	cut	contents	surface	material
+floor	arena	-1536.0 -1024.0 -32.0	1536.0 1024.0 0.0	NULL	Solid	NULL	floor
+ceiling	arena	-1536.0 -1024.0 512.0	1536.0 1024.0 544.0	NULL	Solid	NULL	ceiling
+wall_n	arena	-1536.0 1024.0 0.0	1536.0 1056.0 512.0	NULL	Solid	NULL	wall
+wall_s	arena	-1536.0 -1056.0 0.0	1536.0 -1024.0 512.0	NULL	Solid	NULL	wall
+wall_w	arena	-1568.0 -1024.0 0.0	-1536.0 1024.0 512.0	NULL	Solid	NULL	wall
+wall_e	arena	1536.0 -1024.0 0.0	1568.0 1024.0 512.0	NULL	Solid	NULL	wall
+div_w_n	arena	-656.0 128.0 0.0	-624.0 1024.0 512.0	NULL	Solid	NULL	wall
+div_w_s	arena	-656.0 -1024.0 0.0	-624.0 -128.0 512.0	NULL	Solid	NULL	wall
+div_w_lintel	arena	-656.0 -128.0 160.0	-624.0 128.0 512.0	NULL	Solid	NULL	trim
+div_e_n	arena	624.0 128.0 0.0	656.0 1024.0 512.0	NULL	Solid	NULL	wall
+div_e_s	arena	624.0 -1024.0 0.0	656.0 -128.0 512.0	NULL	Solid	NULL	wall
+div_e_lintel	arena	624.0 -128.0 160.0	656.0 128.0 512.0	NULL	Solid	NULL	trim
+plat	arena	-160.0 -160.0 0.0	160.0 160.0 64.0	NULL	Solid	NULL	metal
+plat_ramp_w	arena	-352.0 -96.0 0.0	-160.0 96.0 64.0	-0.316228 0.0 0.948683 111.312174	Solid	NULL	metal
+plat_ramp_e	arena	160.0 -96.0 0.0	352.0 96.0 64.0	0.316228 0.0 0.948683 111.312174	Solid	NULL	metal
+pillar_0	arena	-440.0 -600.0 0.0	-360.0 -520.0 512.0	NULL	Solid	NULL	trim
+pillar_1	arena	-440.0 520.0 0.0	-360.0 600.0 512.0	NULL	Solid	NULL	trim
+pillar_2	arena	360.0 -600.0 0.0	440.0 -520.0 512.0	NULL	Solid	NULL	trim
+pillar_3	arena	360.0 520.0 0.0	440.0 600.0 512.0	NULL	Solid	NULL	trim
+balcony	arena	-480.0 768.0 128.0	480.0 1024.0 160.0	NULL	Solid	NULL	metal
+balcony_ramp	arena	-96.0 448.0 0.0	96.0 768.0 160.0	0.0 -0.447214 0.894427 -200.351691	Solid	NULL	metal
+ladder	arena	-64.0 -1024.0 0.0	64.0 -1016.0 320.0	NULL	Solid	Ladder	ladder
+ledge_s	arena	-256.0 -1024.0 320.0	256.0 -864.0 352.0	NULL	Solid	NULL	metal
+crate_0	arena	-948.0 452.0 0.0	-852.0 548.0 72.0	NULL	Solid	NULL	crate
+crate_1	arena	-948.0 -548.0 0.0	-852.0 -452.0 72.0	NULL	Solid	NULL	crate
+crate_2	arena	852.0 452.0 0.0	948.0 548.0 72.0	NULL	Solid	NULL	crate
+crate_3	arena	852.0 -548.0 0.0	948.0 -452.0 72.0	NULL	Solid	NULL	crate
+crate_4	arena	-48.0 -608.0 0.0	48.0 -512.0 72.0	NULL	Solid	NULL	crate
+crate_5	arena	-48.0 332.0 0.0	48.0 428.0 72.0	NULL	Solid	NULL	crate

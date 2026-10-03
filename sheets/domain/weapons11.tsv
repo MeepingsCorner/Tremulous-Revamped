@@ -1,0 +1,38 @@
+# sheet: weapons11
+# version: 1
+# generator: table
+# index: by_id
+# requires: weapons
+# dense: Weapon11Id
+# target: crate::gen::weapons11
+# owned_by: synthesizer
+# doctrine: D1,D2,D3,D5
+# notes: weapons of Tremulous 1.1.0 (bg_misc.c bg_weapons); re/harness/synth_v11.py (dec041)
+id	num	legacy	team	price	stages	slots	max_ammo	max_clips	infinite_ammo	uses_energy	repeat_rate1	repeat_rate2	repeat_rate3	reload_time	has_alt_mode	has_third_mode	can_zoom	zoom_fov	purchasable	build_delay	display_name	c_sym	ref_src
+level0	1	level0	Aliens	0	S1|S2|S3	Weapon	0	0	1	0	500	0	0	0	0	0	0	90.0	0	0	Bite	WP_ALEVEL0	bg_misc.c:3302
+level1	2	level1	Aliens	0	S1|S2|S3	Weapon	0	0	1	0	600	0	0	0	0	0	0	90.0	0	0	Claws	WP_ALEVEL1	bg_misc.c:3325
+level1upg	3	level1upg	Aliens	0	S1|S2|S3	Weapon	0	0	1	0	500	2000	0	0	1	0	0	90.0	0	0	Claws Upgrade	WP_ALEVEL1_UPG	bg_misc.c:3348
+level2	4	level2	Aliens	0	S1|S2|S3	Weapon	0	0	1	0	500	0	0	0	0	0	0	90.0	0	0	Bite	WP_ALEVEL2	bg_misc.c:3371
+level2upg	5	level2upg	Aliens	0	S1|S2|S3	Weapon	0	0	1	0	400	1500	0	0	1	0	0	90.0	0	0	Zap	WP_ALEVEL2_UPG	bg_misc.c:3394
+level3	6	level3	Aliens	0	S1|S2|S3	Weapon	0	0	1	0	700	0	0	0	0	0	0	90.0	0	0	Pounce	WP_ALEVEL3	bg_misc.c:3417
+level3upg	7	level3upg	Aliens	0	S1|S2|S3	Weapon	3	0	1	0	600	0	1000	0	0	1	0	90.0	0	0	Pounce (upgrade)	WP_ALEVEL3_UPG	bg_misc.c:3440
+level4	8	level4	Aliens	0	S1|S2|S3	Weapon	0	0	1	0	750	0	0	0	0	0	0	90.0	0	0	Charge	WP_ALEVEL4	bg_misc.c:3463
+blaster	9	blaster	Humans	0	S1|S2|S3	NULL	0	0	1	0	600	0	0	0	0	0	0	90.0	0	0	Blaster	WP_BLASTER	bg_misc.c:2957
+rifle	10	rifle	Humans	0	S1|S2|S3	Weapon	30	6	0	0	90	0	0	2000	0	0	0	90.0	1	0	Rifle	WP_MACHINEGUN	bg_misc.c:2980
+psaw	11	psaw	Humans	100	S1|S2|S3	Weapon	0	0	1	0	75	0	0	0	0	0	0	90.0	1	0	Pain Saw	WP_PAIN_SAW	bg_misc.c:3164
+shotgun	12	shotgun	Humans	150	S1|S2|S3	Weapon	8	3	0	0	1000	0	0	2000	0	0	0	90.0	1	0	Shotgun	WP_SHOTGUN	bg_misc.c:3003
+lgun	13	lgun	Humans	250	S1|S2|S3	Weapon	200	0	0	1	200	0	0	2000	0	0	0	90.0	1	0	Las Gun	WP_LAS_GUN	bg_misc.c:3141
+mdriver	14	mdriver	Humans	350	S1|S2|S3	Weapon	5	4	0	1	1000	0	0	2000	0	0	1	20.0	1	0	Mass Driver	WP_MASS_DRIVER	bg_misc.c:3072
+chaingun	15	chaingun	Humans	400	S1|S2|S3	Weapon	300	0	0	0	80	0	0	0	0	0	0	90.0	1	0	Chaingun	WP_CHAINGUN	bg_misc.c:3049
+prifle	16	prifle	Humans	400	S2|S3	Weapon	50	4	0	1	100	0	0	2000	0	0	0	90.0	1	0	Pulse Rifle	WP_PULSE_RIFLE	bg_misc.c:3095
+flamer	17	flamer	Humans	450	S2|S3	Weapon	150	0	0	0	200	0	0	0	0	0	0	90.0	1	0	Flame Thrower	WP_FLAMER	bg_misc.c:3026
+lcannon	18	lcannon	Humans	600	S3	Weapon	90	0	0	1	500	1000	0	2000	1	0	0	90.0	1	0	Lucifer Cannon	WP_LUCIFER_CANNON	bg_misc.c:3118
+grenade	19	grenade	Humans	200	S2|S3	NULL	1	0	0	0	0	0	0	0	0	0	0	90.0	0	0	Grenade	WP_GRENADE	bg_misc.c:3187
+lockblob	20	lockblob	Aliens	0	S1|S2|S3	Weapon	0	0	1	0	500	500	500	0	0	0	0	90.0	0	0	Lock Blob	WP_LOCKBLOB_LAUNCHER	bg_misc.c:3486
+hive	21	hive	Aliens	0	S1|S2|S3	Weapon	0	0	1	0	500	500	500	0	0	0	0	90.0	0	0	Hive	WP_HIVE	bg_misc.c:3509
+teslagen	22	teslagen	Humans	0	S1|S2|S3	Weapon	0	0	1	1	500	500	500	0	0	0	0	90.0	0	0	Tesla Generator	WP_TESLAGEN	bg_misc.c:3555
+mgturret	23	mgturret	Humans	0	S1|S2|S3	Weapon	0	0	1	0	0	0	0	0	0	0	0	90.0	0	0	Machinegun Turret	WP_MGTURRET	bg_misc.c:3532
+abuild	24	abuild	Aliens	0	S1|S2|S3	Weapon	0	0	1	0	500	500	0	0	1	0	0	90.0	1	17000	Alien build weapon	WP_ABUILD	bg_misc.c:3256
+abuildupg	25	abuildupg	Aliens	0	S1|S2|S3	Weapon	0	0	1	0	500	1000	1000	0	1	1	0	90.0	1	12000	Alien build weapon2	WP_ABUILD2	bg_misc.c:3279
+ackit	26	ackit	Humans	0	S2|S3	Weapon	0	0	1	0	1000	1000	0	0	1	0	0	90.0	1	15000	Adv Construction Kit	WP_HBUILD2	bg_misc.c:3233
+ckit	27	ckit	Humans	0	S1|S2|S3	Weapon	0	0	1	0	1000	1000	0	0	1	0	0	90.0	1	17500	Construction Kit	WP_HBUILD	bg_misc.c:3210

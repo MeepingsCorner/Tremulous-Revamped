@@ -1,0 +1,23 @@
+# sheet: systems
+# version: 1
+# generator: table
+# order_after: after
+# requires: -
+# target: crate::gen::systems
+# owned_by: architect
+# notes: G_RunFrame (g_main.c:2323) as data; emitted topologically sorted by `after` (MDD 9.4)
+id	after	run	status	ref_src
+bots_think	NULL	crate::kernel::bot::think_all	Done	NULL
+client_think	bots_think	crate::kernel::client::think_all	Done	g_active.c:1229
+run_entities	client_think	crate::kernel::world::run_entities	Done	g_main.c:2381
+client_end_frame	run_entities	crate::kernel::client::end_frame_all	Done	g_active.c:1821
+unlagged_store	client_end_frame	crate::kernel::unlagged::store	Done	g_main.c:2470
+count_spawns	unlagged_store	crate::kernel::team::count_spawns	Done	g_main.c:1065
+build_points	count_spawns	crate::kernel::team::calculate_build_points	Done	g_main.c:1111
+stages	build_points	crate::kernel::team::calculate_stages	Done	g_main.c:1266
+spawn_clients	stages	crate::kernel::client::spawn_queues	Done	g_main.c:1016
+avg_players	spawn_clients	crate::kernel::team::calculate_avg_players	Done	g_main.c:1380
+update_zaps	avg_players	crate::kernel::weapon::update_zaps	Done	g_weapon.c:1151
+exit_rules	update_zaps	crate::kernel::team::check_exit_rules	Done	g_main.c:2007
+check_votes	exit_rules	crate::kernel::vote::check_votes	Done	g_main.c:2491
+log_flush	check_votes	crate::kernel::log::flush_frame	Done	g_main.c:1709

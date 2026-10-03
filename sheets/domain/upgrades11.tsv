@@ -1,0 +1,19 @@
+# sheet: upgrades11
+# version: 1
+# generator: table
+# index: by_id
+# requires: upgrades
+# dense: Upgrade11Id
+# target: crate::gen::upgrades11
+# owned_by: synthesizer
+# doctrine: D1,D2,D3,D5
+# notes: upgrades of Tremulous 1.1.0 (bg_misc.c bg_upgrades); re/harness/synth_v11.py (dec041)
+id	num	legacy	team	price	stages	slots	purchasable	usable	display_name	icon	c_sym	ref_src
+larmour	1	larmour	Humans	70	S1|S2|S3	Torso|Arms|Legs	1	0	Light Armour	icons/iconu_larmour	UP_LIGHTARMOUR	bg_misc.c:3984
+helmet	2	helmet	Humans	90	S2|S3	Head	1	0	Helmet	icons/iconu_helmet	UP_HELMET	bg_misc.c:3996
+medkit	3	medkit	Humans	0	S1|S2|S3	NULL	0	1	Medkit	icons/iconu_atoxin	UP_MEDKIT	bg_misc.c:4008
+battpack	4	battpack	Humans	100	S1|S2|S3	Backpack	1	0	Battery Pack	icons/iconu_battpack	UP_BATTPACK	bg_misc.c:4020
+jetpack	5	jetpack	Humans	120	S2|S3	Backpack	1	1	Jet Pack	icons/iconu_jetpack	UP_JETPACK	bg_misc.c:4032
+bsuit	6	bsuit	Humans	400	S3	Head|Torso|Arms|Legs|Backpack	1	0	Battlesuit	icons/iconu_bsuit	UP_BATTLESUIT	bg_misc.c:4044
+gren	7	gren	Humans	200	S2|S3	NULL	1	1	Grenade	NULL	UP_GRENADE	bg_misc.c:4056
+ammo	8	ammo	Humans	0	S1|S2|S3	NULL	1	0	Ammunition	NULL	UP_AMMO	bg_misc.c:4068

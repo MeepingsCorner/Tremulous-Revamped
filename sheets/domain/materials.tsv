@@ -1,0 +1,16 @@
+# sheet: materials
+# version: 1
+# generator: table
+# index: by_id
+# target: crate::gen::materials
+# owned_by: level-design
+id	color	metallic	roughness	emission
+floor	#4a4d55	0.1	0.85	0.0
+ceiling	#2c2f36	0.0	0.9	0.0
+wall	#6b6f78	0.05	0.8	0.0
+trim	#b8742a	0.4	0.5	0.0
+metal	#7d8a99	0.7	0.35	0.0
+crate	#5b4a35	0.0	0.9	0.0
+ladder	#d1b43a	0.5	0.4	0.1
+alien_base	#3d6b3a	0.0	0.7	0.15
+human_base	#2f5a8a	0.3	0.5	0.1

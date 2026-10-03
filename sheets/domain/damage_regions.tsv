@@ -1,0 +1,31 @@
+# sheet: damage_regions
+# version: 1
+# generator: table
+# requires: classes,upgrades
+# target: crate::gen::damage_regions
+# owned_by: synthesizer
+# notes: locdamage.cfg + armour/*.armour (G_ParseDmgScript); order matters (file order)
+id	kind	class	upgrade	min_height	max_height	min_angle	max_angle	modifier	crouch
+human_base_legs	Body	human_base	NULL	0.0	0.5	0.0	360.0	0.5	0
+human_base_torso	Body	human_base	NULL	0.5	0.8	0.0	360.0	1.0	0
+human_base_head	Body	human_base	NULL	0.8	1.0	0.0	360.0	1.5	0
+human_base_legs_crouch	Body	human_base	NULL	0.0	0.3	0.0	360.0	0.5	1
+human_base_torso_crouch	Body	human_base	NULL	0.3	0.7	0.0	360.0	1.0	1
+human_base_head_crouch	Body	human_base	NULL	0.7	1.0	0.0	360.0	1.5	1
+human_bsuit_legs	Body	human_bsuit	NULL	0.0	0.5	0.0	360.0	0.5	0
+human_bsuit_torso	Body	human_bsuit	NULL	0.5	0.8	0.0	360.0	1.0	0
+human_bsuit_head	Body	human_bsuit	NULL	0.8	1.0	0.0	360.0	1.5	0
+larmour_chest	Armour	NULL	larmour	0.5	0.8	310.0	50.0	0.35	0
+larmour_left_arm	Armour	NULL	larmour	0.5	0.8	50.0	130.0	0.3	0
+larmour_back	Armour	NULL	larmour	0.5	0.8	130.0	230.0	0.4	0
+larmour_right_arm	Armour	NULL	larmour	0.5	0.8	230.0	310.0	0.3	0
+larmour_legs	Armour	NULL	larmour	0.0	0.5	0.0	360.0	0.3	0
+larmour_chest_crouch	Armour	NULL	larmour	0.3	0.7	310.0	50.0	0.35	1
+larmour_left_arm_crouch	Armour	NULL	larmour	0.3	0.7	50.0	130.0	0.3	1
+larmour_back_crouch	Armour	NULL	larmour	0.3	0.7	130.0	230.0	0.4	1
+larmour_right_arm_crouch	Armour	NULL	larmour	0.3	0.7	230.0	310.0	0.3	1
+larmour_legs_crouch	Armour	NULL	larmour	0.0	0.3	0.0	360.0	0.3	1
+helmet	Armour	NULL	helmet	0.8	1.0	0.0	360.0	0.4	0
+helmet_crouch	Armour	NULL	helmet	0.7	1.0	0.0	360.0	0.4	1
+bsuit_body	Armour	NULL	bsuit	0.0	0.8	0.0	360.0	0.2	0
+bsuit_head	Armour	NULL	bsuit	0.8	1.0	0.0	360.0	0.27	0
