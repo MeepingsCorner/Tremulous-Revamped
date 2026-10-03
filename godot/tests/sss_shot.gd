@@ -25,7 +25,10 @@ func _wait(s: float) -> void:
 	await get_tree().create_timer(s).timeout
 
 func _shot(name: String) -> void:
+	main.get_node("HUD").close_menu()
 	await _wait(1.5)
+	main.get_node("HUD").close_menu()
+	await _wait(0.2)
 	get_viewport().get_texture().get_image().save_png("user://" + name)
 	print("sss: saved ", name)
 
@@ -43,8 +46,8 @@ func _run() -> void:
 	print("sss: alive=", not game.get_hud().is_empty() and game.get_hud().alive, " as ", team, " ", klass)
 	# third person, looking back at the face from close by
 	game.exec("cg_thirdPerson 1")
-	game.exec("cg_thirdPersonAngle 160")
-	game.exec("cg_thirdPersonRange 55")
+	game.exec("cg_thirdPersonAngle 180")
+	game.exec("cg_thirdPersonRange 90")
 	game.exec("r_enhanced 0")
 	await _shot("sss_%s_vanilla.png" % team)
 	game.exec("r_enhanced 1")

@@ -94,6 +94,15 @@ void vertex() {
     POSITION = PROJECTION_MATRIX * vec4(view_pos * depth_hack, 1.0);
 }
 void fragment() {
+#ifdef ENHANCED_LIT
+    // the shader writes subsurface outputs (enhanced), so Godot runs its
+    // transmittance on every material using it: safe values everywhere else
+    // (a zero transmittance depth turns the vanilla models black)
+    SSS_STRENGTH = 0.0;
+    SSS_TRANSMITTANCE_COLOR = vec4(0.0);
+    SSS_TRANSMITTANCE_DEPTH = 1.0;
+    SSS_TRANSMITTANCE_BOOST = 0.0;
+#endif
     vec2 uv0 = tcmods(UV, tc0_k, tc0_a, tc0_b, TIME);
     vec4 c = ((trem_gfx > 0.5 && has_hd) ? texture(albedo_hd, uv0) : texture(albedo_tex, uv0)) * tint;
     if (alpha_test && c.a < 0.5) { discard; }
