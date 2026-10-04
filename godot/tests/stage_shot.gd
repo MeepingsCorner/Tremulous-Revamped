@@ -3,11 +3,13 @@ extends Node
 ## surfaces whose shaders use several stages, waves, tcMods, deforms, skies
 ## and fog, from the views in res://tests/stage_views.json (or $TREM_VIEWS):
 ## godot --path godot res://tests/stage_shot.tscn -- --map=atcs [--enhanced]
-## -> user://stage_<map>_<n>_<surface>_<mode>[_t].png ("_t": 0.7 s later)
+## [--burst=N] -> user://stage_<map>_<n>_<surface>_<mode>[_t|_b<k>].png ("_t": 0.7 s
+## later, "_b<k>": N consecutive frames after it)
 var main: Node
 var game
 var map := "atcs"
 var enhanced := false
+var burst := 0
 var cam_xform = null
 
 func _ready() -> void:
@@ -16,6 +18,8 @@ func _ready() -> void:
 			map = a.substr(6)
 		if a == "--enhanced":
 			enhanced = true
+		if a.begins_with("--burst="):
+			burst = int(a.substr(8))
 	main = load("res://main.tscn").instantiate()
 	add_child(main)
 	game = main.get_node("Game")
@@ -68,6 +72,9 @@ func _run() -> void:
 			await _shot("stage_%s_%d_%s_%s.png" % [map, i, v.name, mode])
 			await _wait(0.7)
 			await _shot("stage_%s_%d_%s_%s_t.png" % [map, i, v.name, mode])
+			# consecutive frames: flicker shows as pixels that change frame to frame
+			for b in burst:
+				await _shot("stage_%s_%d_%s_%s_b%d.png" % [map, i, v.name, mode, b])
 		i += 1
 	print("stage: SUMMARY done ", map)
 	get_tree().quit()

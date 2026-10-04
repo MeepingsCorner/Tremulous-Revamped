@@ -294,7 +294,7 @@ pub struct BspRender {
     /// the full shader scripts (q3shader.rs), the stage shaders by blend,
     /// and the stage images
     q3: HashMap<String, crate::q3shader::Q3Shader>,
-    stage_shaders: HashMap<(crate::q3shader::Variant, bool), Gd<Shader>>,
+    stage_shaders: HashMap<(crate::q3shader::Variant, bool, bool), Gd<Shader>>,
     images: HashMap<String, Option<Gd<ImageTexture>>>,
     anims: HashMap<Vec<String>, Option<Gd<Texture2DArray>>>,
     white: Gd<ImageTexture>,
@@ -611,12 +611,12 @@ impl BspRender {
         t
     }
 
-    fn stage_shader(&mut self, v: crate::q3shader::Variant, depth_write: bool) -> Gd<Shader> {
+    fn stage_shader(&mut self, v: crate::q3shader::Variant, depth_write: bool, offset: bool) -> Gd<Shader> {
         self.stage_shaders
-            .entry((v, depth_write))
+            .entry((v, depth_write, offset))
             .or_insert_with(|| {
                 let mut sh = Shader::new_gd();
-                sh.set_code(&crate::q3shader::stage_shader_code(v, depth_write));
+                sh.set_code(&crate::q3shader::stage_shader_code(v, depth_write, offset));
                 sh
             })
             .clone()
@@ -628,7 +628,7 @@ impl BspRender {
         use crate::q3shader::{blend_variant, Source, Variant};
         let (variant, out_kind) = blend_variant(st.blend.as_ref());
         let depth_write = variant != Variant::Opaque && st.depth_write;
-        let shader = self.stage_shader(variant, depth_write);
+        let shader = self.stage_shader(variant, depth_write, plan.polygon_offset);
         let mut mat = ShaderMaterial::new_gd();
         mat.set_shader(&shader);
         match &st.source {
@@ -665,7 +665,10 @@ impl BspRender {
             mat.set_shader_parameter("lm_mod_k", &Vector3::new(k[0], k[1], k[2]).to_variant());
         }
         let mut pull = plan.pull;
-        if on_top {
+        // over an earlier pass, or blended over the opaque world: a hair
+        // nearer, so that a coplanar surface wins its depth test as with the
+        // C's GL_LEQUAL (atcs's force fields lie in their frames' planes)
+        if on_top || variant != Variant::Opaque {
             pull *= 0.99995;
         }
         mat.set_shader_parameter("q3_pull", &pull.to_variant());
@@ -755,6 +758,9 @@ pub struct Plan {
     pub deforms: Vec<crate::q3shader::Deform>,
     /// view-space pull of every pass (polygonOffset)
     pub pull: f32,
+    /// polygonOffset: also offset by the depth slope (glPolygonOffset), for
+    /// decals on curved patches whose facets cross the wall's
+    pub polygon_offset: bool,
     pub sort: f32,
     /// a last stage `$lightmap` filtered onto everything before it, folded
     /// into the earlier passes (exact: the multiply distributes over their
@@ -768,7 +774,7 @@ pub fn plan_passes(name: &str, q3: Option<&crate::q3shader::Q3Shader>, lm_ok: bo
     use crate::q3shader::{const_rgb, AlphaGen, RgbGen, Source, TcGen};
     let Some(sh) = q3 else {
         // no script: the implicit shader (texture x light map, or the vertex colours)
-        return Some(Plan { base: Some(BasePass { image: name.to_string(), light_src: if lm_ok { 0 } else { 1 }, tint: [1.0; 3], alpha_func: 0 }), stages: Vec::new(), deforms: Vec::new(), pull: 1.0, sort: 3.0, lm_mod: None });
+        return Some(Plan { base: Some(BasePass { image: name.to_string(), light_src: if lm_ok { 0 } else { 1 }, tint: [1.0; 3], alpha_func: 0 }), stages: Vec::new(), deforms: Vec::new(), pull: 1.0, polygon_offset: false, sort: 3.0, lm_mod: None });
     };
     if sh.nodraw || sh.stages.is_empty() {
         return None;
@@ -827,7 +833,7 @@ pub fn plan_passes(name: &str, q3: Option<&crate::q3shader::Q3Shader>, lm_ok: bo
             }
         }
     }
-    Some(Plan { base, stages, deforms: sh.deforms.iter().copied().filter(|d| *d != crate::q3shader::Deform::Normal).collect(), pull: if sh.polygon_offset { 0.9995 } else { 1.0 }, sort: sh.effective_sort(), lm_mod })
+    Some(Plan { base, stages, deforms: sh.deforms.iter().copied().filter(|d| *d != crate::q3shader::Deform::Normal).collect(), pull: if sh.polygon_offset { 0.9995 } else { 1.0 }, polygon_offset: sh.polygon_offset, sort: sh.effective_sort(), lm_mod })
 }
 
 /// deformVertexes autosprite (tr_shade_calc.c AutoSprite): each quad's
@@ -1298,7 +1304,7 @@ mod plan_tests {
         let p = plan("t/d\n{\n polygonOffset\n {\n  map t/d.tga\n  blendfunc blend\n }\n}\n", "t/d", true).unwrap();
         assert!(p.base.is_none());
         assert_eq!(p.stages.len(), 1);
-        assert!(p.pull < 1.0);
+        assert!(p.pull < 1.0 && p.polygon_offset);
         assert_eq!(p.sort, 4.0);
     }
 

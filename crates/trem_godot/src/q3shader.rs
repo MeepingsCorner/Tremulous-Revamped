@@ -710,7 +710,9 @@ pub fn blend_variant(b: Option<&BlendFunc>) -> (Variant, i32) {
 
 /// The shader of one stage pass (tr_shade.c RB_IterateStagesGeneric for one
 /// stage: ComputeColors, ComputeTexCoords, the blend), unshaded.
-pub fn stage_shader_code(v: Variant, depth_write: bool) -> String {
+/// `offset`: polygonOffset, the depth moved towards the camera by the
+/// fragment's depth slope too (glPolygonOffset(-1, -2) of the C).
+pub fn stage_shader_code(v: Variant, depth_write: bool, offset: bool) -> String {
     let mode = match v {
         Variant::Opaque => "depth_draw_opaque".to_string(),
         Variant::Add => format!("blend_add, {}", if depth_write { "depth_draw_always" } else { "depth_draw_never" }),
@@ -724,7 +726,9 @@ pub fn stage_shader_code(v: Variant, depth_write: bool) -> String {
         // (glow on) and scales a multiply pass's colour the same way (gfx.rs)
         Variant::Mul => "ALBEDO = pow(clamp(o.rgb, 0.0, 4.0), vec3(R_GAMMA_EXP)) * trem_mul_k;",
         Variant::Opaque => "ALBEDO = pow(clamp(o.rgb * 2.0, 0.0, 1.0), vec3(R_GAMMA_EXP));",
-        Variant::Add => "ALBEDO = pow(clamp(o.rgb * 2.0, 0.0, 1.0), vec3(R_GAMMA_EXP)) * (trem_gfx > 0.5 ? 1.8 : 1.0);",
+        // enhanced: only bright texels (bulbs, flares) are pushed over 1.0 for the
+        // bloom; dim see-through layers (atcs's force fields) stay as in vanilla
+        Variant::Add => "ALBEDO = pow(clamp(o.rgb * 2.0, 0.0, 1.0), vec3(R_GAMMA_EXP)); if (trem_gfx > 0.5) { ALBEDO *= 1.0 + 0.8 * smoothstep(0.55, 1.0, max(ALBEDO.r, max(ALBEDO.g, ALBEDO.b))); }",
         Variant::Mix => "ALBEDO = pow(clamp(o.rgb * 2.0, 0.0, 1.0), vec3(R_GAMMA_EXP)); ALPHA = clamp(o.a, 0.0, 1.0);",
         // GL_ONE GL_ONE_MINUS_SRC_ALPHA: the colour as is over (1 - alpha) of what is under
         Variant::Premul => "ALBEDO = pow(clamp(o.rgb * 2.0, 0.0, 1.0), vec3(R_GAMMA_EXP)); ALPHA = clamp(o.a, 0.0, 1.0);",
@@ -742,9 +746,20 @@ pub fn stage_shader_code(v: Variant, depth_write: bool) -> String {
     s.push_str("}\nvoid fragment() {\n");
     s.push_str(STAGE_FRAGMENT);
     s.push_str(out);
+    if offset {
+        s.push_str(GLSL_DEPTH_OFFSET);
+    }
     s.push_str("\n}\n");
     s
 }
+
+const GLSL_DEPTH_OFFSET: &str = r#"
+#if CURRENT_RENDERER == RENDERER_COMPATIBILITY
+    DEPTH = FRAGCOORD.z - fwidth(FRAGCOORD.z) * 1.5 - 4.0e-6;
+#else
+    DEPTH = FRAGCOORD.z + fwidth(FRAGCOORD.z) * 1.5 + 4.0e-6;
+#endif
+"#;
 
 const STAGE_UNIFORMS: &str = r#"
 // 0 image, 1 clamped image, 2 animMap, 3 the light map, 4 white
