@@ -120,7 +120,7 @@ func _run() -> void:
 	game.exec("cg_thirdPersonRange 160")
 	await _wait(1.0)
 	# die, pushed sideways and up (as a hit from the side would)
-	game.ragdoll_test_push(me, Vector3(3.0, 1.2, 0.0))
+	game.ragdoll_test_push(me, Vector3(6.0, 2.0, 0.0))
 	var death_at: Vector3 = _actor_origin(me)
 	game.exec("kill")
 	t = 0.0
@@ -154,6 +154,20 @@ func _run() -> void:
 	var stood: float = death_at.z / 32.0
 	_check("it stays on the floor", p2.y > stood - 1.5, "fell %.2f (start y %.2f, now %.2f, stood at %.2f)" % [start.y - p2.y, start.y, p2.y, stood])
 	_check("it comes to rest", p2.distance_to(p1) < 0.1, "moved %.3f in the last second" % p2.distance_to(p1))
+	# it travels away from where the server has the body
+	var server_body := Vector2(death_at.x / 32.0, -death_at.y / 32.0)
+	var travelled := Vector2(p2.x, p2.z).distance_to(server_body)
+	_check("it travelled from the death spot", travelled > 1.5, "%.2f m" % travelled)
+	# the corpse entity takes over the ragdoll where it lies (not back at the death spot)
+	t = 0.0
+	while t < 8.0 and not _info().is_empty() and _info()[0][1] == 0:
+		await _wait(0.25)
+		t += 0.25
+	if not _info().is_empty() and _info()[0][1] == 1:
+		var p3: Vector3 = _info()[0][4]
+		_check("the corpse keeps the ragdoll where it lies", p3.distance_to(p2) < 0.5 and _info().size() >= 1, "moved %.2f when the corpse took over after %.1f s" % [p3.distance_to(p2), t])
+	else:
+		print("rag: (no corpse took over within 8 s: ", _info(), ")")
 	# F10 to vanilla: the original corpse, where the server has it
 	game.exec("r_enhanced 0")
 	await _wait(0.4)

@@ -215,6 +215,9 @@ pub struct TremGame {
     rigs: Option<std::rc::Rc<HashMap<String, crate::ragdoll::Rig>>>,
     ragdoll_world: Option<Gd<godot::classes::StaticBody3D>>,
     death_push: HashMap<usize, (Vector3, f64)>,
+    /// each living player's last velocity (Godot space, m/s): a ragdoll
+    /// carries on with the momentum its body had
+    alive_vel: HashMap<usize, Vector3>,
     hand: Option<ViewHand>,
     audio: Option<Audio>,
     lightgrid: Option<crate::bspview::LightGrid>,
@@ -322,6 +325,7 @@ impl INode3D for TremGame {
             rigs: None,
             ragdoll_world: None,
             death_push: HashMap::new(),
+            alive_vel: HashMap::new(),
             hand: None,
             audio: None,
             lightgrid: None,
@@ -796,6 +800,7 @@ impl TremGame {
             r.free();
         }
         self.death_push.clear();
+        self.alive_vel.clear();
         self.missiles.clear();
         self.flashes.clear();
         self.hand = None;
@@ -1895,6 +1900,7 @@ impl TremGame {
             r.free();
         }
         self.death_push.clear();
+        self.alive_vel.clear();
         self.missiles.clear();
         self.flashes.clear();
         self.hand = None;
@@ -2995,7 +3001,7 @@ impl TremGame {
         let now = self.clock;
         let mut new_roots = Vec::new();
         {
-            let TremGame { world, lib, actors, ragdolls, death_push, lightgrid, .. } = self;
+            let TremGame { world, lib, actors, ragdolls, death_push, alive_vel, lightgrid, .. } = self;
             let (w, lib) = (world.as_ref().unwrap(), lib.as_ref().unwrap());
             // dead: PM_DEAD / EF_DEAD (a player waiting to spawn also has no
             // health, and is not a corpse)
@@ -3006,6 +3012,15 @@ impl TremGame {
                 }
             };
             let corpse = |i: usize| i < w.ents.len() && w.ents[i].inuse && w.ents[i].etype == EType::Corpse;
+            for i in 0..MAX_CLIENTS.min(w.ents.len()) {
+                if w.ents[i].inuse && w.ents[i].etype == EType::Player && !dead_player(i) {
+                    alive_vel.insert(i, q2g(&w.clients[i].ps.velocity));
+                }
+            }
+            // where the server has each dying body (the ragdoll travels on)
+            for r in ragdolls.iter_mut().filter(|r| !r.corpse && dead_player(r.ent)) {
+                r.server_pos = q2g(&w.clients[r.ent].ps.origin);
+            }
             // the ragdolls whose body is gone: a corpse freed, a dead player
             // respawned and not taken over by its corpse within 3 s
             ragdolls.retain_mut(|r| {
@@ -3024,10 +3039,12 @@ impl TremGame {
                 }
                 let a = &actors[&i];
                 if is_corpse {
-                    // the corpse replacing a dying player's ragdoll (CopyToBodyQue)
+                    // the corpse replacing a dying player's ragdoll (CopyToBodyQue):
+                    // it spawns where the server had the body, wherever the
+                    // ragdoll has travelled to
                     let at = q2g(&w.ents[i].origin);
-                    if let Some(r) = ragdolls.iter_mut().filter(|r| !r.corpse && r.model_dir == a.model_dir && !dead_player(r.ent)).min_by(|x, y| x.position().distance_to(at).partial_cmp(&y.position().distance_to(at)).unwrap()) {
-                        if r.position().distance_to(at) < 6.0 {
+                    if let Some(r) = ragdolls.iter_mut().filter(|r| !r.corpse && r.model_dir == a.model_dir && !dead_player(r.ent)).min_by(|x, y| x.server_pos.distance_to(at).partial_cmp(&y.server_pos.distance_to(at)).unwrap()) {
+                        if r.server_pos.distance_to(at) < 3.0 {
                             r.ent = i;
                             r.corpse = true;
                             r.corpse_z = Some(w.ents[i].origin[2]);
@@ -3036,7 +3053,16 @@ impl TremGame {
                     }
                 }
                 let Some(rig) = rigs.get(&a.model_dir) else { continue };
-                let push = if is_corpse { None } else { death_push.get(&i).filter(|(_, t)| now - t < 1.0).map(|(v, _)| *v) };
+                // a dying body: its momentum and the killing hit's push
+                let push = if is_corpse {
+                    None
+                } else {
+                    let hit = death_push.get(&i).filter(|(_, t)| now - t < 1.0).map(|(v, _)| *v).unwrap_or(Vector3::ZERO);
+                    let alive = alive_vel.remove(&i).unwrap_or(Vector3::ZERO);
+                    let dying = q2g(&w.clients[i].ps.velocity);
+                    let v = crate::ragdoll::death_velocity([alive.x, alive.y, alive.z], [dying.x, dying.y, dying.z], [hit.x, hit.y, hit.z]);
+                    Some(Vector3::new(v[0], v[1], v[2]))
+                };
                 if let Some(mut r) = crate::ragdoll::Ragdoll::build(lib, rig, &a.model_dir, a.model_scale(), &a.body_parts(), i, push, now) {
                     if is_corpse {
                         r.corpse = true;

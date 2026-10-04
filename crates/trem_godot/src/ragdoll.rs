@@ -339,17 +339,30 @@ pub fn skin_weights(pos: V3, bone: usize, parent: &[Option<usize>], joints: &[V3
 pub fn death_push(m: trem_sim::gen::enums::MeansOfDeath) -> Option<f32> {
     use trem_sim::gen::enums::MeansOfDeath as M;
     Some(match m {
-        M::Blaster | M::Machinegun | M::Lasgun | M::Prifle | M::Chaingun | M::Mgturret => 2.0,
-        M::Shotgun | M::Mdriver | M::Painsaw | M::Teslagen => 3.5,
-        M::Lcannon | M::LcannonSplash => 7.0,
-        M::Grenade | M::Reactor => 9.0,
-        M::Flamer | M::FlamerSplash => 1.5,
-        M::Level0Bite | M::Level1Claw | M::AbuilderClaw | M::Level2Claw | M::Level2Zap | M::Swarm | M::Slowblob | M::Atube | M::Hspawn | M::Aspawn | M::Overmind => 2.5,
-        M::Level3Claw | M::Level3Bounceball => 4.0,
-        M::Level3Pounce | M::Level4Claw => 6.0,
-        M::Level4Trample | M::Level4Crush => 9.0,
+        M::Blaster | M::Machinegun | M::Lasgun | M::Prifle | M::Chaingun | M::Mgturret => 3.5,
+        M::Shotgun | M::Mdriver | M::Painsaw | M::Teslagen => 6.0,
+        M::Lcannon | M::LcannonSplash => 12.0,
+        M::Grenade | M::Reactor => 15.0,
+        M::Flamer | M::FlamerSplash => 2.5,
+        M::Level0Bite | M::Level1Claw | M::AbuilderClaw | M::Level2Claw | M::Level2Zap | M::Swarm | M::Slowblob | M::Atube | M::Hspawn | M::Aspawn | M::Overmind => 4.5,
+        M::Level3Claw | M::Level3Bounceball => 7.0,
+        M::Level3Pounce | M::Level4Claw => 10.0,
+        M::Level4Trample | M::Level4Crush => 15.0,
         _ => return None,
     })
+}
+
+/// The fastest a body is thrown (m/s, Godot space).
+pub const MAX_DEATH_SPEED: f32 = 30.0;
+
+/// The velocity a ragdoll starts with (m/s, Godot space): the body's own
+/// momentum (what it had while alive, or on the frame it died if the
+/// server's knockback made that faster) plus the push of the killing hit.
+pub fn death_velocity(alive: [f32; 3], dying: [f32; 3], push: [f32; 3]) -> [f32; 3] {
+    let m = if len(dying) > len(alive) { dying } else { alive };
+    let v = add(m, push);
+    let l = len(v);
+    if l > MAX_DEATH_SPEED { scale(v, MAX_DEATH_SPEED / l) } else { v }
 }
 
 /// A class's mass for the ragdoll (kg): what the bodies feel like when hit.
@@ -450,6 +463,9 @@ pub struct Ragdoll {
     /// the corpse entity's first height (Quake units): it sinks below it
     pub corpse_z: Option<f32>,
     pub sunk: f32,
+    /// where the server has the body (Godot space): the ragdoll travels
+    /// away from it, the corpse entity that takes over spawns at it
+    pub server_pos: Vector3,
 }
 
 impl Ragdoll {
@@ -638,9 +654,9 @@ impl Ragdoll {
                 pb.set_joint_type(JointType::NONE);
             }
             pb.set_mass((mass * per_bone[b].0.len() as f32 / total as f32).max(0.5));
-            pb.set_friction(0.8);
+            pb.set_friction(0.45);
             pb.set_bounce(0.05);
-            pb.set_linear_damp(0.15);
+            pb.set_linear_damp(0.05);
             pb.set_angular_damp(1.5);
             pb.set_gravity_scale(GRAVITY_SCALE);
             pb.set_collision_layer(LAYER_RAGDOLL);
@@ -653,7 +669,7 @@ impl Ragdoll {
         root.set_name(&format!("Ragdoll{ent}"));
         root.add_child(&skel);
         let start_pos = gv(joints[0]);
-        Some(Ragdoll { ent, corpse: false, model_dir: model_dir.to_string(), root, skel, sim, bones: pbs, mats, started: false, push, born: now, start_pos, corpse_z: None, sunk: 0.0 })
+        Some(Ragdoll { ent, corpse: false, model_dir: model_dir.to_string(), root, skel, sim, bones: pbs, mats, started: false, push, born: now, start_pos, corpse_z: None, sunk: 0.0, server_pos: start_pos })
     }
 
     /// Start the simulation (once `root` is in the scene) and give it the
@@ -847,5 +863,18 @@ mod tests {
         use trem_sim::gen::enums::MeansOfDeath as M;
         assert!(death_push(M::Lcannon).unwrap() > death_push(M::Blaster).unwrap());
         assert!(death_push(M::Falling).is_none());
+    }
+
+    #[test]
+    fn a_body_keeps_its_momentum_and_takes_the_hit() {
+        // running at 10 m/s, hit sideways: it carries on and is pushed
+        let v = death_velocity([10.0, 0.0, 0.0], [9.0, 0.0, 0.0], [0.0, 1.0, 3.0]);
+        assert_eq!(v, [10.0, 1.0, 3.0]);
+        // the server's knockback on the dying frame counts when it is faster
+        let v = death_velocity([1.0, 0.0, 0.0], [0.0, 0.0, 8.0], [0.0, 0.0, 0.0]);
+        assert_eq!(v, [0.0, 0.0, 8.0]);
+        // never thrown absurdly far
+        let v = death_velocity([100.0, 0.0, 0.0], [0.0; 3], [50.0, 0.0, 0.0]);
+        assert!((len(v) - MAX_DEATH_SPEED).abs() < 1e-3);
     }
 }
