@@ -914,7 +914,7 @@ impl TremGame {
 
     /// A map is loading (the loading screen is up).
     #[func]
-    fn is_loading(&self) -> bool {
+    pub(crate) fn is_loading(&self) -> bool {
         self.loading.is_some() || self.connect_screen.is_some()
     }
 

@@ -244,6 +244,12 @@ pub struct WeaponCfg {
     pub flash: [Vec<String>; 3],
     pub impact: [Vec<String>; 3],
     pub impact_flesh: [Vec<String>; 3],
+    /// looping sounds (CG_ParseWeaponFile / CG_ParseWeaponModeSection):
+    /// `idleSound` while held (readySound), per mode `firingSound` while
+    /// firing and `missileSound` on the projectile
+    pub idle_sound: Option<String>,
+    pub firing_sound: [Option<String>; 3],
+    pub missile_sound: [Option<String>; 3],
     pub missile_model: [Option<String>; 3],
     /// (radius in Quake units, shader/image)
     pub missile_sprite: [Option<(f32, String)>; 3],
@@ -505,6 +511,17 @@ impl Library {
                                     cfg.missile_dlight[md] = Some([c[0], c[1], c[2]]);
                                 }
                             }
+                        }
+                    }
+                    "idlesound" => {
+                        if mode.is_none() {
+                            cfg.idle_sound = l.get(1).cloned();
+                        }
+                    }
+                    "firingsound" | "missilesound" => {
+                        if let (Some(md), Some(p)) = (mode, l.get(1)) {
+                            let slot = if key == "firingsound" { &mut cfg.firing_sound } else { &mut cfg.missile_sound };
+                            slot[md] = Some(p.clone());
                         }
                     }
                     "flashsound" | "impactsound" | "impactfleshsound" => {

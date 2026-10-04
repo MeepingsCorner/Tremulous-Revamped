@@ -7639,9 +7639,18 @@ impl TremMenus {
             self.flush();
             return;
         }
+        // CL_MapLoading: a map loading (our own server's too, from Create
+        // Server or the console) closes the ui (cls.keyCatchers = 0) so the
+        // loading screen shows instead of the menu it was started from
+        let loading = self.game().is_some_and(|g| g.bind().is_loading());
+        if loading && !now && self.ui.as_ref().unwrap().is_open() {
+            self.ui.as_mut().unwrap().set_active_menu(UiMenuCommand::None);
+            self.flush();
+        }
         // CL_Frame tests clc.state == CA_DISCONNECTED: while connecting (and
-        // downloading) there is no map yet, but the connect screen shows
-        let connecting = self.game().is_some_and(|g| g.bind().is_connecting());
+        // downloading) or loading there is no map yet, but the connect /
+        // loading screen shows
+        let connecting = loading || self.game().is_some_and(|g| g.bind().is_connecting());
         if !now && !connecting && self.intro_started && self.system_cin.is_none() && !self.ui.as_ref().unwrap().is_open() {
             self.stop_ui_sound();
             self.ui.as_mut().unwrap().set_active_menu(UiMenuCommand::Main);

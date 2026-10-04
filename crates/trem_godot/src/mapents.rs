@@ -51,7 +51,10 @@ pub struct MapEnts {
     model2: HashMap<usize, ModelInst>,
     md3s: HashMap<usize, Md3Vis>,
     flares: HashMap<usize, Flare>,
-    loops: HashMap<usize, (String, Gd<AudioStreamPlayer3D>)>,
+    /// looping sounds by (entity, source): 0 the entity's own loopSound /
+    /// the jetpack, 1 its weapon or projectile, 2 the lucifer cannon's
+    /// overcharge warning (trap_S_AddLoopingSound keeps one per source)
+    loops: HashMap<(usize, u8), (String, Gd<AudioStreamPlayer3D>)>,
     speaker_time: HashMap<usize, i32>,
     seed: u32,
     /// `cg_lightFlare` (None: the default, FLARE_REALFADE).
@@ -358,16 +361,45 @@ impl MapEnts {
             } else {
                 None
             };
-            let want_path = jet.map(str::to_string).or_else(|| if e.loop_sound > 0 && e.etype != EType::Buildable { w.sound_name(e.loop_sound).map(str::to_string) } else { None });
-            if let Some(want) = want_path {
+            let mut wants: Vec<(u8, String)> = Vec::new();
+            if let Some(p) = jet.map(str::to_string).or_else(|| if e.loop_sound > 0 && e.etype != EType::Buildable { w.sound_name(e.loop_sound).map(str::to_string) } else { None }) {
+                wants.push((0, p));
+            }
+            // CG_AddPlayerWeapon: firingSound while the current mode fires, else
+            // the weapon's idleSound; CG_Missile: the projectile's missileSound
+            if let Some(l) = lib.as_deref_mut() {
+                let player = e.etype == EType::Player && i < trem_sim::kernel::world::MAX_CLIENTS;
+                let (weapon, mode, flags) = if player { let ps = &w.clients[i].ps; (ps.weapon, ps.generic1, ps.e_flags) } else { (e.weapon, e.generic1, e.e_flags) };
+                let mode = if (1..=3).contains(&mode) { mode as usize - 1 } else { 0 };
+                let cfg = trem_sim::gen::weapons::WeaponId::from_num(weapon.clamp(0, 255) as u8).filter(|_| weapon > 0).map(|wid| l.weapon_cfg(wid.id()));
+                if let Some(cfg) = cfg {
+                    if player && w.clients[i].ps.stats[trem_sim::gen::enums::Stat::Health as usize] > 0 {
+                        let firing = [k::EF_FIRING, k::EF_FIRING2, k::EF_FIRING3][mode] & flags != 0;
+                        if let Some(p) = cfg.firing_sound[mode].clone().filter(|_| firing).or_else(|| cfg.idle_sound.clone()) {
+                            wants.push((1, p));
+                        }
+                        // the lucifer cannon's overcharge warning, unheard by aliens
+                        let viewer_team = me.map(|m| w.clients[m].ps.stats[trem_sim::gen::enums::Stat::Team as usize]).unwrap_or(0);
+                        if weapon == trem_sim::gen::weapons::WeaponId::Lcannon.num() as i32 && flags & k::EF_WARN_CHARGE != 0 && viewer_team != trem_sim::gen::enums::Team::Aliens as i32 {
+                            wants.push((2, if Some(i) == me { "models/weapons/lcannon/warning.wav".to_string() } else { "models/weapons/lcannon/warning2.wav|models/weapons/lcannon/warning.wav".to_string() }));
+                        }
+                    } else if e.etype == EType::Missile {
+                        let m = (e.generic1 - 1).clamp(0, 2) as usize;
+                        if let Some(p) = cfg.missile_sound[m].clone() {
+                            wants.push((1, p));
+                        }
+                    }
+                }
+            }
+            for (slot, want) in wants {
                 let Some(l) = lib.as_deref_mut() else { continue };
                 let origin = sound_origin(w, i);
-                if self.loops.get(&i).map(|(s, _)| *s != want).unwrap_or(true) {
-                    if let Some((_, mut p)) = self.loops.remove(&i) {
+                let key = (i, slot);
+                if self.loops.get(&key).map(|(s, _)| *s != want).unwrap_or(true) {
+                    if let Some((_, mut p)) = self.loops.remove(&key) {
                         p.queue_free();
                     }
-                    let path = want.clone();
-                    let Some(stream) = l.sound(&path) else { continue };
+                    let Some(stream) = want.split('|').find_map(|p| l.sound(p)) else { continue };
                     if let Ok(mut wav) = stream.clone().try_cast::<godot::classes::AudioStreamWav>() {
                         wav.set_loop_mode(godot::classes::audio_stream_wav::LoopMode::FORWARD);
                         let frames = wav.get_length() * wav.get_mix_rate() as f64;
@@ -377,15 +409,15 @@ impl MapEnts {
                     p.set_stream(&stream);
                     p.set_autoplay(true);
                     add.push(p.clone().upcast());
-                    self.loops.insert(i, (want, p));
+                    self.loops.insert(key, (want, p));
                 }
-                if let Some((_, p)) = self.loops.get_mut(&i) {
+                if let Some((_, p)) = self.loops.get_mut(&key) {
                     p.set_position(q2g(&origin));
                     if !p.is_playing() && p.is_inside_tree() {
                         p.play();
                     }
                 }
-                alive_loop.push(i);
+                alive_loop.push(key);
             }
         }
         let gone: Vec<usize> = self.brushes.keys().copied().filter(|i| !alive_brush.contains(i)).collect();
@@ -409,7 +441,7 @@ impl MapEnts {
                 f.node.queue_free();
             }
         }
-        let gone: Vec<usize> = self.loops.keys().copied().filter(|i| !alive_loop.contains(i)).collect();
+        let gone: Vec<(usize, u8)> = self.loops.keys().copied().filter(|i| !alive_loop.contains(i)).collect();
         for i in gone {
             if let Some((_, mut p)) = self.loops.remove(&i) {
                 p.queue_free();
