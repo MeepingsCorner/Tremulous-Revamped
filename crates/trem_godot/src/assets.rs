@@ -86,6 +86,9 @@ pub struct ShaderInfo {
     pub image: Option<String>,
     pub blend: Blend,
     pub alpha_test: bool,
+    /// the first stage's `alphaFunc`: 0 none (the image's alpha is ignored,
+    /// as the renderer does), 1 GT0, 2 LT128, 3 GE128
+    pub alpha_func: u8,
     pub two_sided: bool,
     pub sky: Option<String>,
     pub nodraw: bool,
@@ -142,6 +145,7 @@ pub fn parse_shader_script(text: &str, out: &mut HashMap<String, ShaderInfo>) {
     let mut stage_img: Option<String> = None;
     let mut stage_blend: Option<Blend> = None;
     let mut stage_alpha = false;
+    let mut stage_afunc = 0u8;
     let mut stage_unlit = false;
     let mut stage_tc: Vec<TcMod> = Vec::new();
     let mut stage_index = 0;
@@ -164,6 +168,7 @@ pub fn parse_shader_script(text: &str, out: &mut HashMap<String, ShaderInfo>) {
                         stage_img = None;
                         stage_blend = None;
                         stage_alpha = false;
+                        stage_afunc = 0;
                         stage_is_lightmap = false;
                         stage_unlit = false;
                         stage_tc.clear();
@@ -182,6 +187,7 @@ pub fn parse_shader_script(text: &str, out: &mut HashMap<String, ShaderInfo>) {
                             // a texture stage filtered onto a lightmap is an ordinary opaque surface
                             info.blend = if lightmap_first { Blend::Opaque } else { stage_blend.unwrap_or(Blend::Opaque) };
                             info.alpha_test = stage_alpha;
+                            info.alpha_func = stage_afunc;
                         }
                         stage_index += 1;
                     }
@@ -252,7 +258,15 @@ pub fn parse_shader_script(text: &str, out: &mut HashMap<String, ShaderInfo>) {
                         i = toks.len();
                         continue;
                     }
-                    "alphafunc" => stage_alpha = true,
+                    "alphafunc" => {
+                        stage_alpha = true;
+                        stage_afunc = match toks.get(i + 1).map(|x| x.to_lowercase()).as_deref() {
+                            Some("gt0") => 1,
+                            Some("lt128") => 2,
+                            _ => 3,
+                        };
+                        i += 1;
+                    }
                     "rgbgen" => {
                         let m = toks.get(i + 1).map(|x| x.to_lowercase()).unwrap_or_default();
                         stage_unlit = m == "identity" || m == "identitylighting";
@@ -361,6 +375,16 @@ mod tests {
         assert_eq!(px(7, 15), &[255, 255, 255, 255]);
         assert_eq!(px(1, 1), &[32, 32, 32, 255]);
         assert_eq!(px(8, 9), &[32, 32, 32, 255]);
+    }
+
+    #[test]
+    fn only_an_alphafunc_cuts_holes() {
+        let mut m = HashMap::new();
+        parse_shader_script("textures/a/grate\n{\n {\n map $lightmap\n }\n {\n map textures/a/grate.tga\n alphaFunc GE128\n blendFunc filter\n }\n}\ntextures/a/plant\n{\n {\n map textures/a/p.tga\n alphaFunc GT0\n }\n}\ntextures/a/floor\n{\n {\n map textures/a/floor.tga\n }\n}\n", &mut m);
+        assert_eq!(m["textures/a/grate"].alpha_func, 3);
+        assert_eq!(m["textures/a/plant"].alpha_func, 1);
+        // atcs's eq2_grate_01: its image has alpha holes, its shader draws it solid
+        assert_eq!(m["textures/a/floor"].alpha_func, 0);
     }
 
     #[test]

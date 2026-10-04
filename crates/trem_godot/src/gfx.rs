@@ -45,12 +45,52 @@ pub const GFX_CVARS: &[(&str, &str)] = &[
     ("r_dlightShadows", "4"),
     // r_ragdolls: corpses fall as ragdolls in the enhanced mode (ragdoll.rs)
     ("r_ragdolls", "1"),
+    // r_dynamicShadows: players, structures and corpses throw shadows on the
+    // map (the shadow sun, enhanced only)
+    ("r_dynamicShadows", "1"),
     ("r_modelDebug", "0"),
 ];
 
 /// The node group of every dynamic light (muzzle flashes, missiles,
 /// effects): enhanced mode gives the most important of them shadows.
 pub const DLIGHT_GROUP: &str = "trem_dlight";
+
+/// Enhanced dynamic shadows: one directional "shadow sun" turned each frame
+/// to the light grid's dominant direction where the view is. It lights
+/// nothing: the shaders' light() (bspview.rs, models.rs) only take the
+/// directed share of the baked / grid light away where a shadow falls. The
+/// map and the solid surfaces of every model (players, their weapons,
+/// structures, ragdolls, missiles, map models) take its shadows (this render
+/// layer, its cull mask); the models cast them (this layer, its shadow
+/// caster mask), the map does not (its light and shadows are baked: from
+/// inside a room the sun would black it out).
+pub const SHADOW_RECEIVER_LAYER: u32 = 2;
+pub const SHADOW_CASTER_LAYER: u32 = 4;
+/// Our own body in first person (shadow only): the shadow sun takes it, the
+/// flashlight held at the eye does not (it would light the inside of it).
+pub const SHADOW_SELF_LAYER: u32 = 8;
+/// The shader global: how much of the directed light a shadow takes.
+pub const SHADOW_GLOBAL: &str = "trem_shadow_k";
+pub const SHADOW_STRENGTH: f32 = 0.65;
+
+/// The shadow sun's direction (towards the light, Godot space) from the
+/// light grid's: kept at least 30 degrees up so shadows stay under their
+/// casters, eased towards a new direction (no popping between grid cells).
+pub fn shadow_dir(prev: Option<Vector3>, grid: Vector3, dt: f32) -> Vector3 {
+    let mut d = if grid.length() > 1e-4 { grid.normalized() } else { Vector3::UP };
+    if d.y < 0.5 {
+        let h = Vector3::new(d.x, 0.0, d.z);
+        let h = if h.length() > 1e-4 { h.normalized() } else { Vector3::FORWARD };
+        d = (h * 0.866 + Vector3::UP * 0.5).normalized();
+    }
+    match prev {
+        Some(p) => {
+            let k = 1.0 - (-dt * 2.5).exp();
+            (p + (d - p) * k).normalized()
+        }
+        None => d,
+    }
+}
 
 /// FSR 2 for this frame? -1 auto: while ray / path tracing (the expensive
 /// modes); 1: always in the enhanced mode; 0 / vanilla: never.
@@ -583,6 +623,21 @@ pub fn derive_maps_image(img: &Gd<Image>, want_normal: bool) -> (Option<Gd<Image
 
 #[cfg(test)]
 mod tests {
+    use godot::prelude::Vector3;
+
+    #[test]
+    fn the_shadow_sun_stays_up_and_eases() {
+        // a low grid light is lifted to 30 degrees
+        let d = super::shadow_dir(None, Vector3::new(1.0, 0.1, 0.0), 0.016);
+        assert!((d.y - 0.5).abs() < 1e-3 && d.x > 0.8);
+        // overhead stays overhead
+        assert!(super::shadow_dir(None, Vector3::new(0.0, 1.0, 0.0), 0.016).y > 0.999);
+        // a new direction is reached over frames, not at once
+        let a = Vector3::new(0.0, 1.0, 0.0);
+        let b = super::shadow_dir(Some(a), Vector3::new(0.6, 0.8, 0.0), 0.016);
+        assert!(b.x > 0.0 && b.x < 0.1);
+    }
+
     #[test]
     fn upscale_auto_only_with_ray_tracing_in_enhanced() {
         use super::{upscale_on, RtMode};
@@ -691,6 +746,9 @@ pub struct GfxRuntime {
     pub upscale: (i32, f32),
     pub model_debug: i32,
     pub shadow_max: usize,
+    /// the enhanced shadow sun and its direction (SHADOW_RECEIVER_LAYER)
+    pub shadow_sun: Option<Gd<godot::classes::DirectionalLight3D>>,
+    pub shadow_sun_dir: Option<Vector3>,
 }
 
 impl GfxRuntime {
@@ -710,6 +768,7 @@ impl GfxRuntime {
         let mode = if enhanced && !failed && self.rt.is_some() { caps.rt_mode(rt_cvar) } else { RtMode::Off };
         set_global(enhanced, self.model_debug);
         fx_set_enhanced(enhanced);
+        crate::hdtex::set_ui_enabled(enhanced);
         if let (Some(env), Some(v)) = (self.env.as_mut(), self.vanilla.as_ref()) {
             configure_environment(env, enhanced, mode, v);
         }

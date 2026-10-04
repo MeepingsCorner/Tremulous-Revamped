@@ -40,3 +40,7 @@ trem_gfx={
 "type": "float",
 "value": 0.0
 }
+trem_shadow_k={
+"type": "float",
+"value": 0.0
+}

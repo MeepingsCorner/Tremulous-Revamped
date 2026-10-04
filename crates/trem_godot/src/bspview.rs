@@ -34,6 +34,10 @@ uniform bool has_hd = false;
 uniform sampler2D lm : filter_linear;
 uniform bool use_lm = false;
 uniform vec4 tint = vec4(1.0);
+// the shader script's alphaFunc (0 none: the image's alpha is ignored, as the
+// renderer does - grates like atcs's eq2_grate_01 carry alpha holes their
+// shader never cuts; 1 GT0, 2 LT128, 3 GE128)
+uniform int alpha_func = 0;
 uniform sampler2D nrm : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform bool has_nrm = false;
 uniform float rough = 0.7;
@@ -46,13 +50,19 @@ uniform float metal = 0.0;
 uniform float wet = 0.0;
 uniform float detail_k = 0.0;
 uniform sampler2D detail : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
+// enhanced dynamic shadows (gfx.rs shadow_sun): how much of the baked light
+// a model's shadow takes away here (the directed share of the light grid,
+// facing it), the darkest a shadow gets
+global uniform float trem_shadow_k;
 varying vec4 grid;
+varying vec3 shadow_irr;
 void vertex() {
     grid = CUSTOM0;
 }
 void fragment() {
+    shadow_irr = vec3(0.0);
     vec4 t = ((trem_gfx > 0.5 && has_hd) ? texture(tex_hd, UV) : texture(tex, UV)) * tint;
-    if (t.a < 0.5) { discard; }
+    if ((alpha_func == 1 && t.a <= 0.0) || (alpha_func == 2 && t.a >= 0.5) || (alpha_func == 3 && t.a < 0.5)) { discard; }
     vec3 light = use_lm ? texture(lm, UV2).rgb : COLOR.rgb;
     // R_ColorShiftLightingBytes (mapOverBrightBits 2 - overBrightBits 1 = x2,
     // hue-preserving clamp), then the x2 hardware overbright; all in gamma space.
@@ -105,6 +115,25 @@ void fragment() {
         CLEARCOAT_ROUGHNESS = 0.15;
         IRRADIANCE = vec4(baked * k * irr_scale, 1.0);
         RADIANCE = vec4(baked * 0.3 * irr_scale, 1.0);
+        vec3 gl = normalize((VIEW_MATRIX * vec4(grid.xyz, 0.0)).xyz + vec3(1e-5));
+        float facing = smoothstep(0.0, 0.25, dot(NORMAL, gl));
+        shadow_irr = baked * k * irr_scale * clamp(grid.w, 0.0, 0.85) * facing * trem_shadow_k;
+    }
+}
+// The lights a map surface takes besides its baked light: the dynamic
+// lights (muzzle flashes, explosions: Lambert + a highlight, as the default
+// would) and, enhanced, the shadow sun, which adds nothing and only takes
+// the directed share of the baked light away where a model's shadow falls.
+void light() {
+    if (LIGHT_IS_DIRECTIONAL) {
+        DIFFUSE_LIGHT -= shadow_irr * (1.0 - ATTENUATION);
+    } else {
+        float ndl = clamp(dot(NORMAL, LIGHT), 0.0, 1.0);
+        DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * ndl / PI;
+        vec3 h = normalize(VIEW + LIGHT);
+        float shin = mix(256.0, 6.0, ROUGHNESS);
+        float s = pow(clamp(dot(NORMAL, h), 0.0, 1.0), shin) * (shin + 8.0) / (8.0 * PI);
+        SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * ndl * s * SPECULAR_AMOUNT * 0.5;
     }
 }
 "#;
@@ -513,6 +542,7 @@ impl BspRender {
                 crate::assets::Blend::Opaque => &self.shader,
             });
             mat.set_shader_parameter("tex", &tex.to_variant());
+            mat.set_shader_parameter("alpha_func", &(info.alpha_func as i32).to_variant());
             if let Some(Some(hd)) = self.hd.get(&shader_num) {
                 mat.set_shader_parameter("tex_hd", &hd.to_variant());
                 mat.set_shader_parameter("has_hd", &true.to_variant());
@@ -539,6 +569,10 @@ impl BspRender {
             mi.set_mesh(&mesh);
             mi.set_material_override(&mat);
             mi.set_name(&format!("bsp{m}_{shader_num}_{lm}"));
+            // the map takes the shadow sun's shadows and casts none (its
+            // light is baked: from inside a room the sun would black it out)
+            mi.set_layer_mask(1 | crate::gfx::SHADOW_RECEIVER_LAYER);
+            mi.set_cast_shadows_setting(godot::classes::geometry_instance_3d::ShadowCastingSetting::OFF);
             out.push(mi);
         }
         out

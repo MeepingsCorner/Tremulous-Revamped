@@ -33,9 +33,15 @@ func _pk3s() -> PackedStringArray:
 func _esrgan(work: String, src: String, dst: String) -> void:
 	var exe := esrgan.path_join("realesrgan-ncnn-vulkan.exe")
 	var t := Time.get_ticks_msec()
-	var output := []
-	var code := OS.execute(exe, ["-i", work.path_join(src), "-o", work.path_join(dst), "-n", "realesrgan-x4plus", "-s", "4", "-f", "png", "-m", esrgan.path_join("models")], output, true)
-	print("hd: realesrgan ", src, " -> ", dst, " exit ", code, " in ", (Time.get_ticks_msec() - t) / 1000, " s")
+	# one image per run: a whole folder in one run came back with images
+	# blank or swapped between files
+	var files := DirAccess.get_files_at(work.path_join(src))
+	var bad := 0
+	for f in files:
+		var code := OS.execute(exe, ["-i", work.path_join(src).path_join(f), "-o", work.path_join(dst).path_join(f), "-n", "realesrgan-x4plus", "-s", "4", "-f", "png", "-m", esrgan.path_join("models")], [], true)
+		if code != 0:
+			bad += 1
+	print("hd: realesrgan ", src, " -> ", dst, ": ", files.size(), " images, ", bad, " failed, in ", (Time.get_ticks_msec() - t) / 1000, " s")
 
 func _run() -> void:
 	await get_tree().process_frame
@@ -43,7 +49,17 @@ func _run() -> void:
 	var b = TremHdBuilder.new()
 	var pk3s := _pk3s()
 	print("hd: ", pk3s.size(), " pk3 files, target ", target, ", out ", out)
-	var n: int = b.prepare(pk3s, out, work, target)
+	# an image that comes out empty is not written: the next round redoes it
+	for round in 3:
+		var n: int = b.prepare(pk3s, out, work, target)
+		print("hd: round ", round + 1, ": ", n, " to do")
+		if n == 0:
+			break
+		await _round(b, work, n)
+	print("hd: done")
+	get_tree().quit()
+
+func _round(b, work: String, n: int) -> void:
 	if n > 0:
 		_esrgan(work, "a_in", "a_mid")
 		_esrgan(work, "a_mid", "a_out")
@@ -56,5 +72,3 @@ func _run() -> void:
 			if i % 2 == 0:
 				await get_tree().process_frame
 		print("hd: compressed ", n, " textures in ", (Time.get_ticks_msec() - t) / 1000, " s")
-	print("hd: done")
-	get_tree().quit()

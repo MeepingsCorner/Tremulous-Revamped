@@ -133,6 +133,21 @@ impl Actor {
         }).collect();
         format!("{} scale={} z_offset={} parts={}", self.key, self.scale, self.z_offset, parts.join(" "))
     }
+    /// Enhanced, the player's own body in first person: unseen, but its
+    /// shadow falls (`ModelInst::set_shadow_only`).
+    pub fn set_shadow_only(&mut self, on: bool) {
+        for p in self.parts.iter_mut().chain(self.jetpack.iter_mut()).chain(self.battpack.iter_mut()) {
+            p.set_shadow_only(on);
+        }
+        if on {
+            if let Some(f) = self.jetpack_flash.as_mut() {
+                f.set_visible(false);
+            }
+            if let Some(l) = self.label.as_mut() {
+                l.set_visible(false);
+            }
+        }
+    }
     pub fn set_visible(&mut self, v: bool) {
         for p in self.parts.iter_mut().chain(self.jetpack.iter_mut()).chain(self.battpack.iter_mut()) {
             p.set_visible(v);

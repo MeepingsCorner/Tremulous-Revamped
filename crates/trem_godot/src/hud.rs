@@ -4782,6 +4782,7 @@ impl IControl for TremHud {
         for op in &ops {
             match op {
                 Op::Pic { tex, r, c, rot, uv } => {
+                    let tex = &crate::hdtex::ui(tex);
                     let rect = Rect2::new(Vector2::new(r[0] * xs, r[1] * ys), Vector2::new(r[2] * xs, r[3] * ys));
                     let mut b = self.base_mut();
                     if *rot != 0.0 {
@@ -4801,6 +4802,7 @@ impl IControl for TremHud {
                     }
                 }
                 Op::Quad { tex, r, c, st } => {
+                    let tex = &crate::hdtex::ui(tex);
                     let rect = Rect2::new(Vector2::new(r[0] * xs, r[1] * ys), Vector2::new(r[2] * xs, r[3] * ys));
                     let (p, s) = (rect.position, rect.size);
                     let points = PackedVector2Array::from(&[p, Vector2::new(p.x + s.x, p.y), p + s, Vector2::new(p.x, p.y + s.y)][..]);

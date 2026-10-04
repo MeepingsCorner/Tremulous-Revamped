@@ -60,6 +60,10 @@ uniform bool alpha_test = false;
 // unchanged (x/z, y/z) but its depth is in front of any wall the player
 // touches, like the renderer's glDepthRange( 0, 0.3 ) for these entities.
 uniform float depth_hack = 1.0;
+// enhanced dynamic shadows (gfx.rs shadow sun): the directed share of the
+// grid light a shadow takes away (light()), at most trem_shadow_k of it
+global uniform float trem_shadow_k;
+varying vec3 shadow_irr;
 // the stages' tcMods (kind 1 scale, 2 scroll, 3 rotate; 0 none), rgbGen
 // identity (unlit), and a second, alpha-blended stage over the first
 uniform ivec4 tc0_k = ivec4(0);
@@ -103,6 +107,7 @@ void vertex() {
     POSITION = PROJECTION_MATRIX * vec4(view_pos * depth_hack, 1.0);
 }
 void fragment() {
+    shadow_irr = vec3(0.0);
 #ifdef ENHANCED_LIT
     // the shader writes subsurface outputs (enhanced), so Godot runs its
     // transmittance on every material using it: safe values everywhere else
@@ -142,6 +147,7 @@ void fragment() {
         }
         vec3 lin_l = pow(amb * 2.0 + dcol * 2.0 * max(dot(n, ldir), 0.0), vec3(R_GAMMA_EXP));
         if (lit0) {
+            shadow_irr = max(lin_l - pow(amb * 2.0, vec3(R_GAMMA_EXP)), vec3(0.0)) * trem_shadow_k;
             ALBEDO = pow(clamp(base, 0.0, 1.0), vec3(R_GAMMA_EXP));
             IRRADIANCE = vec4(lin_l, 1.0);
             // a faint sheen only: a white reflection at the light grid's level
@@ -185,6 +191,23 @@ void fragment() {
     ALBEDO = pow(clamp(rgb + c.rgb * emission, 0.0, 1.0), vec3(R_GAMMA_EXP));
 #endif
 }
+#ifdef ENHANCED_LIT
+// Dynamic lights as the default would light the model (Lambert, a
+// highlight); the shadow sun lights nothing and only takes the directed
+// grid light away where another model's (or the model's own) shadow falls.
+void light() {
+    if (LIGHT_IS_DIRECTIONAL) {
+        DIFFUSE_LIGHT -= shadow_irr * (1.0 - ATTENUATION);
+    } else {
+        float ndl = clamp(dot(NORMAL, LIGHT), 0.0, 1.0);
+        DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * ndl / PI;
+        vec3 h = normalize(VIEW + LIGHT);
+        float shin = mix(256.0, 6.0, ROUGHNESS);
+        float s = pow(clamp(dot(NORMAL, h), 0.0, 1.0), shin) * (shin + 8.0) / (8.0 * PI);
+        SPECULAR_LIGHT += LIGHT_COLOR * ATTENUATION * ndl * s * SPECULAR_AMOUNT * 0.5;
+    }
+}
+#endif
 "#;
 
 /// View-space scale of RF_DEPTHHACK models: 0.3 like the C's depth range
@@ -324,8 +347,17 @@ impl Library {
             None
         } else {
             let stem = key.trim_end_matches(".tga").trim_end_matches(".jpg").to_string();
-            let img = self.shader_images.get(&stem).and_then(|i| i.image.clone()).and_then(|p| load_image(&mut self.pk3, &p)).or_else(|| load_image(&mut self.pk3, name));
-            img.and_then(|i| ImageTexture::create_from_image(&i)).map(|t| t.upcast::<Texture2D>())
+            let path = self.shader_images.get(&stem).and_then(|i| i.image.clone());
+            let img = path.as_ref().and_then(|p| load_image(&mut self.pk3, p)).or_else(|| load_image(&mut self.pk3, name));
+            let t = img.and_then(|i| ImageTexture::create_from_image(&i)).map(|t| t.upcast::<Texture2D>());
+            // the interface's images: their HD versions (enhanced, hdtex.rs ui)
+            if let Some(t) = t.as_ref() {
+                let src = path.unwrap_or_else(|| key.clone());
+                if crate::hdtex::wanted_ui(&format!("{}.tga", crate::hdtex::key_of(&src))) {
+                    crate::hdtex::register_ui(t, &crate::hdtex::key_of(&src));
+                }
+            }
+            t
         };
         self.textures.insert(key, t.clone());
         t
@@ -541,6 +573,7 @@ impl Library {
         let mut root = Node3D::new_alloc();
         let mut mis = Vec::new();
         let mut mis_surf = Vec::new();
+        let mut casts = Vec::new();
         for s in &res.surfs {
             let img = skin.and_then(|sk| sk.get(&s.name.to_lowercase()).cloned()).unwrap_or_else(|| s.shader.clone());
             if img.to_lowercase().starts_with("gfx/null") {
@@ -596,11 +629,20 @@ impl Library {
             let mut mi = MeshInstance3D::new_alloc();
             mi.set_mesh(&s.mesh);
             mi.set_material_override(&mat);
+            // solid surfaces cast the enhanced shadow sun's shadows (gfx.rs);
+            // glows and blended layers (the medistation's cone) cast none
+            let solid = info.blend == Blend::Opaque;
+            if solid {
+                mi.set_layer_mask(1 | crate::gfx::SHADOW_CASTER_LAYER | crate::gfx::SHADOW_RECEIVER_LAYER);
+            } else {
+                mi.set_cast_shadows_setting(godot::classes::geometry_instance_3d::ShadowCastingSetting::OFF);
+            }
             root.add_child(&mi);
             mis.push((mi, mat));
             mis_surf.push(s.md3_index);
+            casts.push(solid);
         }
-        ModelInst { root, mis, mis_surf, res: res.clone(), last: (-1, -1, -1.0) }
+        ModelInst { root, mis, mis_surf, casts, shadow_only: false, res: res.clone(), last: (-1, -1, -1.0) }
     }
 }
 
@@ -667,6 +709,9 @@ pub struct ModelInst {
     mis: Vec<(Gd<MeshInstance3D>, Gd<ShaderMaterial>)>,
     /// the MD3 surface of each entry of `mis`
     mis_surf: Vec<usize>,
+    /// which entries of `mis` cast shadows (the solid ones)
+    casts: Vec<bool>,
+    shadow_only: bool,
     pub res: Rc<ModelRes>,
     last: (i32, i32, f32),
 }
@@ -712,9 +757,12 @@ impl ModelInst {
     }
     /// `RF_DEPTHHACK` (see the shader's depth_hack).
     pub fn set_depth_hack(&mut self, on: bool) {
-        for (mi, m) in self.mis.iter_mut() {
-            // RF_FIRST_PERSON models cast no shadows
-            mi.set_cast_shadows_setting(if on { godot::classes::geometry_instance_3d::ShadowCastingSetting::OFF } else { godot::classes::geometry_instance_3d::ShadowCastingSetting::ON });
+        for ((mi, m), &cast) in self.mis.iter_mut().zip(self.casts.iter()) {
+            // RF_FIRST_PERSON models (the view weapon, drawn pulled towards
+            // the eye) neither cast nor take the shadow sun's shadows: the
+            // body's own shadow-only weapon throws the gun's shadow
+            mi.set_cast_shadows_setting(if on || !cast { godot::classes::geometry_instance_3d::ShadowCastingSetting::OFF } else { godot::classes::geometry_instance_3d::ShadowCastingSetting::ON });
+            mi.set_layer_mask(if on || !cast { 1 } else { 1 | crate::gfx::SHADOW_CASTER_LAYER | crate::gfx::SHADOW_RECEIVER_LAYER });
             m.set_shader_parameter("depth_hack", &(if on { DEPTH_HACK_SCALE } else { 1.0f32 }).to_variant());
         }
     }
@@ -735,6 +783,23 @@ impl ModelInst {
     }
     pub fn set_visible(&mut self, v: bool) {
         self.root.set_visible(v);
+    }
+    /// Enhanced: drawn only into the shadows (the player's own body in
+    /// first person still throws its shadow); glows hidden meanwhile.
+    pub fn set_shadow_only(&mut self, on: bool) {
+        if on == self.shadow_only {
+            return;
+        }
+        self.shadow_only = on;
+        use godot::classes::geometry_instance_3d::ShadowCastingSetting as S;
+        for ((mi, _), &cast) in self.mis.iter_mut().zip(self.casts.iter()) {
+            if cast {
+                mi.set_cast_shadows_setting(if on { S::SHADOWS_ONLY } else { S::ON });
+                mi.set_layer_mask(if on { 1 | crate::gfx::SHADOW_SELF_LAYER } else { 1 | crate::gfx::SHADOW_CASTER_LAYER | crate::gfx::SHADOW_RECEIVER_LAYER });
+            } else {
+                mi.set_visible(!on);
+            }
+        }
     }
     pub fn free(mut self) {
         self.root.queue_free();

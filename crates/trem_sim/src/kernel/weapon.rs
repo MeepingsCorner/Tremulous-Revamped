@@ -334,9 +334,8 @@ pub fn cancel_build_fire(w: &mut World, ent: usize) {
         w.clients[ent].ps.stats[Stat::Buildable as usize] = 0;
         return;
     }
-    if w.clients[ent].ps.weapon == WeaponId::Ckit as i32 {
-        check_ckit_repair(w, ent);
-    } else {
+    // (the ckit repairs from ClientThink, CheckCkitRepair: not here)
+    if w.clients[ent].ps.weapon != WeaponId::Ckit as i32 {
         // granger claw swipe
         let a = aim(w, ent);
         let (tr, target) = wide_trace(w, ent, &a, k::ABUILDER_CLAW_RANGE, k::ABUILDER_CLAW_WIDTH, k::ABUILDER_CLAW_WIDTH);
@@ -348,20 +347,35 @@ pub fn cancel_build_fire(w: &mut World, ent: usize) {
     }
 }
 
-/// `CheckCkitRepair`.
+/// `CheckCkitRepair` (from ClientThink while the ckit is held): a damaged
+/// human structure in the crosshair within 100 units gains HBUILD_HEALRATE,
+/// then the ckit waits its repeat rate (HBUILD_REPEAT): 18 health a second,
+/// not every frame. The repair events go on the builder.
 pub fn check_ckit_repair(w: &mut World, ent: usize) {
+    let ps = &w.clients[ent].ps;
+    if ps.weapon_time > 0 || ps.stat(Stat::Misc) > 0 {
+        return;
+    }
     let a = aim(w, ent);
-    let end = ma(&w.clients[ent].ps.origin, 100.0, &a.forward);
-    let tr = w.trace(&w.clients[ent].ps.origin.clone(), None, None, &end, ent as i32, k::MASK_PLAYERSOLID);
+    let view = bg::client_view_origin(&w.clients[ent].ps);
+    let end = ma(&view, 100.0, &a.forward);
+    let tr = w.trace(&view, None, None, &end, ent as i32, k::MASK_PLAYERSOLID);
     let t = tr.entity_num as usize;
-    if t >= w.ents.len() || w.ents[t].etype != EType::Buildable || w.ents[t].team != Team::Humans {
+    if tr.fraction >= 1.0 || t >= w.ents.len() || !w.ents[t].spawned || w.ents[t].health <= 0 || w.ents[t].etype != EType::Buildable || w.ents[t].team != Team::Humans {
         return;
     }
     let Some(b) = w.ents[t].buildable else { return };
-    if w.ents[t].spawned && w.ents[t].health > 0 && w.ents[t].health < b.def().health {
-        w.ents[t].health = (w.ents[t].health + k::HBUILD_HEALRATE).min(b.def().health);
-        let ev = if w.ents[t].health == b.def().health { Event::BuildRepaired } else { Event::BuildRepair };
-        w.add_event(t, ev, 0);
+    let full = b.def().health;
+    if w.ents[t].health < full {
+        w.ents[t].health += k::HBUILD_HEALRATE;
+        if w.ents[t].health >= full {
+            w.ents[t].health = full;
+            w.add_event(ent, Event::BuildRepaired, 0);
+        } else {
+            w.add_event(ent, Event::BuildRepair, 0);
+        }
+        let rate = bg::weapon(w.clients[ent].ps.weapon).repeat_rate1;
+        w.clients[ent].ps.weapon_time += rate;
     }
 }
 

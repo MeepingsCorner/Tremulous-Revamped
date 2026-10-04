@@ -1138,6 +1138,7 @@ impl IControl for TremConsole {
                     let rect = Rect2::new(Vector2::new(x * xs, y * ys), Vector2::new(size * xs, size * ys));
                     if let Some(t) = &self.charset {
                         let (row, colm) = ((*ch >> 4) as f32, (*ch & 15) as f32);
+                        let t = &crate::hdtex::ui(t);
                         let src = Rect2::new(Vector2::new(colm * 0.0625, row * 0.0625) * t.get_size(), Vector2::new(0.0625, 0.0625) * t.get_size());
                         let t = t.clone();
                         self.base_mut().draw_texture_rect_region_ex(&t, rect, src).modulate(col(c)).done();
@@ -1148,7 +1149,8 @@ impl IControl for TremConsole {
                     match &self.charset {
                         Some(t) => {
                             let (row, colm) = ((*ch >> 4) as f32, (*ch & 15) as f32);
-                            let src = Rect2::new(Vector2::new(colm * 0.0625, row * 0.0625) * t.get_size(), Vector2::new(0.0625, 0.0625) * t.get_size());
+                            let t = &crate::hdtex::ui(t);
+                        let src = Rect2::new(Vector2::new(colm * 0.0625, row * 0.0625) * t.get_size(), Vector2::new(0.0625, 0.0625) * t.get_size());
                             let t = t.clone();
                             self.base_mut().draw_texture_rect_region_ex(&t, rect, src).modulate(col(c)).done();
                         }

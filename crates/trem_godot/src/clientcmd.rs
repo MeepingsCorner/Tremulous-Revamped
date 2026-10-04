@@ -44,6 +44,7 @@ bind  F7            port_restart
 bind  F8            port_maps
 bind  F9            port_help
 bind  F10           port_gfx
+bind  g             port_vision
 ";
 
 /// The 1.1.0 data's default.cfg (data-1.1.0.pk3), verbatim: used when no
@@ -167,6 +168,8 @@ const HOST_COMMANDS: &[&str] = &[
     "port_help",
     // the graphics modes (gfx.rs), the FMOD sound path (fmodaudio.rs)
     "port_gfx",
+    // the enhanced flashlight (humans) / night vision (aliens)
+    "port_vision",
     "s_fmodinfo",
 ];
 
@@ -676,6 +679,7 @@ mod tests {
         assert_eq!(k("z"), "+button6");
         assert_eq!(k("F1"), "vote yes");
         assert_eq!(k("F7"), "port_restart");
+        assert_eq!(k("g"), "port_vision");
         assert!(!c.config_modified(), "Com_Init clears the archive flag");
         assert!(h.forwarded.is_empty());
     }

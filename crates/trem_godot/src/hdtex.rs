@@ -46,6 +46,42 @@ pub fn wanted(path: &str) -> bool {
     img && (p.starts_with("textures/") || p.starts_with("models/") || p.starts_with("env/"))
 }
 
+/// The interface's images (the HD UI, enhanced mode): HUD and menu art,
+/// icons, the fonts' glyph pages, level shots. Upscaled x4 (Real-ESRGAN, the
+/// alpha channel too: the fonts' glyphs live in it), kept uncompressed.
+pub fn wanted_ui(path: &str) -> bool {
+    let p = path.to_lowercase();
+    let img = p.ends_with(".tga") || p.ends_with(".jpg") || p.ends_with(".png");
+    img && ["ui/", "gfx/2d/", "fonts/", "icons/", "levelshots/", "menu/"].iter().any(|d| p.starts_with(d))
+}
+
+thread_local! {
+    /// the UI textures (by instance) and their image keys
+    static UI_KEYS: RefCell<HashMap<i64, String>> = RefCell::new(HashMap::new());
+    static UI_ON: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Library::texture: a UI image's texture and its key, for `ui`.
+pub fn register_ui(tex: &Gd<godot::classes::Texture2D>, key: &str) {
+    UI_KEYS.with(|m| m.borrow_mut().insert(tex.instance_id().to_i64(), key.to_string()));
+}
+
+/// The enhanced mode draws the HD UI (gfx.rs).
+pub fn set_ui_enabled(on: bool) {
+    UI_ON.with(|c| c.set(on));
+}
+
+/// The texture to draw for a UI texture: its HD version in the enhanced
+/// mode when the pack has one, else itself (the HUD, menus and console draw
+/// with normalised texture coordinates, so either fits).
+pub fn ui(tex: &Gd<godot::classes::Texture2D>) -> Gd<godot::classes::Texture2D> {
+    if !UI_ON.with(|c| c.get()) {
+        return tex.clone();
+    }
+    let key = UI_KEYS.with(|m| m.borrow().get(&tex.instance_id().to_i64()).cloned());
+    key.and_then(|k| get(&k)).map(|h| h.albedo.upcast()).unwrap_or_else(|| tex.clone())
+}
+
 fn block_bytes(fmt: ImageFormat) -> Option<usize> {
     match fmt {
         ImageFormat::DXT1 | ImageFormat::RGTC_R => Some(8),
@@ -185,6 +221,9 @@ struct Item {
     pad: usize,
     /// Real-ESRGAN x4 passes (1 or 2)
     passes: u32,
+    /// an interface image (`wanted_ui`): x4, its alpha upscaled too
+    ui: bool,
+    has_alpha: bool,
 }
 
 /// Builds the pack (tests/hd_build.gd drives it: prepare, the Real-ESRGAN
@@ -201,15 +240,27 @@ pub struct TremHdBuilder {
 }
 
 fn wrap_pad(rgba: &[u8], w: usize, h: usize, p: usize) -> Vec<u8> {
+    pad_with(rgba, w, h, p, |v, n| v.rem_euclid(n), 0..3)
+}
+
+/// Edge-repeat padding (interface images do not tile); `chan` picks the
+/// channels written as RGB (0..3 the colour, 3..4 the alpha as grey).
+fn clamp_pad(rgba: &[u8], w: usize, h: usize, p: usize, chan: std::ops::Range<usize>) -> Vec<u8> {
+    pad_with(rgba, w, h, p, |v, n| v.clamp(0, n - 1), chan)
+}
+
+fn pad_with(rgba: &[u8], w: usize, h: usize, p: usize, at: impl Fn(isize, isize) -> isize, chan: std::ops::Range<usize>) -> Vec<u8> {
     let (pw, ph) = (w + 2 * p, h + 2 * p);
     let mut out = vec![0u8; pw * ph * 3];
     for y in 0..ph {
-        let sy = (y as isize - p as isize).rem_euclid(h as isize) as usize;
+        let sy = at(y as isize - p as isize, h as isize) as usize;
         for x in 0..pw {
-            let sx = (x as isize - p as isize).rem_euclid(w as isize) as usize;
+            let sx = at(x as isize - p as isize, w as isize) as usize;
             let s = (sy * w + sx) * 4;
             let d = (y * pw + x) * 3;
-            out[d..d + 3].copy_from_slice(&rgba[s..s + 3]);
+            for k in 0..3 {
+                out[d + k] = rgba[s + chan.start + k.min(chan.len() - 1)];
+            }
         }
     }
     out
@@ -228,9 +279,11 @@ impl TremHdBuilder {
         self.work = PathBuf::from(work_dir.to_string());
         self.target = target.max(256) as usize;
         for d in ["a_in", "a_mid", "a_out", "b_in", "b_out"] {
+            // a fresh round: nothing left over from an earlier one
+            let _ = std::fs::remove_dir_all(self.work.join(d));
             let _ = std::fs::create_dir_all(self.work.join(d));
         }
-        let mut files: Vec<String> = pk3.files().filter(|f| wanted(f)).cloned().collect();
+        let mut files: Vec<String> = pk3.files().filter(|f| wanted(f) || wanted_ui(f)).cloned().collect();
         files.sort();
         let mut seen = std::collections::HashSet::new();
         self.items.clear();
@@ -243,6 +296,27 @@ impl TremHdBuilder {
             img.clear_mipmaps();
             img.convert(ImageFormat::RGBA8);
             let (w, h) = (img.get_width() as usize, img.get_height() as usize);
+            if wanted_ui(&f) {
+                // the interface: x4 in one pass, edges repeated, alpha too
+                if w.max(h) < 8 || w.max(h) > 1024 {
+                    continue;
+                }
+                let pad = 4;
+                let data = img.get_data();
+                let has_alpha = data.as_slice().chunks_exact(4).any(|p| p[3] < 250);
+                let idx = self.items.len();
+                let save = |rgb: Vec<u8>, name: String| {
+                    if let Some(p) = Image::create_from_data((w + 2 * pad) as i32, (h + 2 * pad) as i32, false, ImageFormat::RGB8, &PackedByteArray::from(rgb.as_slice())) {
+                        let _ = p.save_png(&self.work.join("b_in").join(name).to_string_lossy().to_string());
+                    }
+                };
+                save(clamp_pad(data.as_slice(), w, h, pad, 0..3), format!("{idx:05}.png"));
+                if has_alpha {
+                    save(clamp_pad(data.as_slice(), w, h, pad, 3..4), format!("{idx:05}a.png"));
+                }
+                self.items.push(Item { key, src: f, w, h, pad, passes: 1, ui: true, has_alpha });
+                continue;
+            }
             if w.max(h) < 48 {
                 continue;
             }
@@ -255,7 +329,7 @@ impl TremHdBuilder {
             let idx = self.items.len();
             let dir = if passes == 2 { "a_in" } else { "b_in" };
             let _ = pimg.save_png(&self.work.join(dir).join(format!("{idx:05}.png")).to_string_lossy().to_string());
-            self.items.push(Item { key, src: f, w, h, pad, passes });
+            self.items.push(Item { key, src: f, w, h, pad, passes, ui: false, has_alpha: false });
         }
         self.pk3 = Some(pk3);
         godot_print!("hd: {} images to upscale ({} with two passes)", self.items.len(), self.items.iter().filter(|i| i.passes == 2).count());
@@ -274,6 +348,9 @@ impl TremHdBuilder {
         up.convert(ImageFormat::RGBA8);
         let crop = up.get_region(Rect2i::new(Vector2i::new((it.pad * scale) as i32, (it.pad * scale) as i32), Vector2i::new((it.w * scale) as i32, (it.h * scale) as i32)));
         let Some(mut img) = crop else { return GString::new() };
+        if it.ui {
+            return self.finish_ui(i, &it, img);
+        }
         let m = it.w.max(it.h);
         let (fw, fh) = ((it.w * self.target / m).max(4), (it.h * self.target / m).max(4));
         img.resize_ex(fw as i32, fh as i32).interpolation(Interpolation::LANCZOS).done();
@@ -320,9 +397,91 @@ impl TremHdBuilder {
     }
 }
 
+impl TremHdBuilder {
+    /// An interface image: x4 exactly, its alpha from the upscaled alpha
+    /// image (crisp glyph edges), mipmapped, uncompressed.
+    fn finish_ui(&mut self, i: i32, it: &Item, mut img: Gd<Image>) -> GString {
+        let (fw, fh) = (it.w * 4, it.h * 4);
+        if img.get_width() as usize != fw || img.get_height() as usize != fh {
+            return GString::from(format!("hd: {} upscaled image is {}x{}, not {fw}x{fh}", it.key, img.get_width(), img.get_height()).as_str());
+        }
+        if it.has_alpha {
+            let a_png = self.work.join("b_out").join(format!("{i:05}a.png"));
+            let a = Image::load_from_file(&a_png.to_string_lossy().to_string()).and_then(|mut a| {
+                a.convert(ImageFormat::RGBA8);
+                a.get_region(Rect2i::new(Vector2i::new((it.pad * 4) as i32, (it.pad * 4) as i32), Vector2i::new(fw as i32, fh as i32)))
+            });
+            let Some(a) = a else { return GString::from(format!("hd: {} missing upscaled alpha", it.key).as_str()) };
+            let ad = a.get_data();
+            let mut d = img.get_data().as_slice().to_vec();
+            for (px, sa) in d.chunks_exact_mut(4).zip(ad.as_slice().chunks_exact(4)) {
+                px[3] = sa[0];
+            }
+            if let Some(n) = Image::create_from_data(fw as i32, fh as i32, false, ImageFormat::RGBA8, &PackedByteArray::from(d.as_slice())) {
+                img = n;
+            }
+        }
+        // at most 2048 on the longest side (level shots, the title art)
+        let m = fw.max(fh);
+        let (fw, fh) = if m > 2048 { ((fw * 2048 / m).max(1), (fh * 2048 / m).max(1)) } else { (fw, fh) };
+        if fw != img.get_width() as usize {
+            img.resize_ex(fw as i32, fh as i32).interpolation(Interpolation::LANCZOS).done();
+        }
+        // the upscale must look like the original (a blank or another
+        // image's result is dropped: the next round redoes it)
+        let mean = |im: &Gd<Image>| -> [f64; 2] {
+            let d = im.get_data();
+            let n = (d.len() / 4).max(1) as f64;
+            let (mut a, mut c) = (0.0, 0.0);
+            for p in d.as_slice().chunks_exact(4) {
+                a += p[3] as f64;
+                c += (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0;
+            }
+            [a / n, c / n]
+        };
+        let src = self.pk3.as_mut().and_then(|pk3| crate::assets::load_image(pk3, &it.src)).map(|mut s| {
+            s.clear_mipmaps();
+            s.convert(ImageFormat::RGBA8);
+            s.resize_ex(fw as i32, fh as i32).interpolation(Interpolation::CUBIC).done();
+            s
+        });
+        if let Some(s) = src.as_ref() {
+            let (m0, m1) = (mean(s), mean(&img));
+            if (m0[0] - m1[0]).abs() > 12.0 || (m0[1] - m1[1]).abs() > 20.0 {
+                return GString::from(format!("hd: {} came out unlike the original (alpha {:.0}/{:.0}, colour {:.0}/{:.0}): not written", it.key, m1[0], m0[0], m1[1], m0[1]).as_str());
+            }
+        }
+        img.generate_mipmaps();
+        let out = self.out.join(format!("{}.hdtex", it.key));
+        if let Err(e) = write(&out, &img, [0.0; 3], it.has_alpha) {
+            return GString::from(format!("hd: {}: {e}", out.display()).as_str());
+        }
+        for f in [format!("{i:05}.png"), format!("{i:05}a.png")] {
+            let _ = std::fs::remove_file(self.work.join("b_in").join(&f));
+            let _ = std::fs::remove_file(self.work.join("b_out").join(&f));
+        }
+        GString::from(format!("hd: ui {} {}x{} -> {}x{}", it.key, it.w, it.h, fw, fh).as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_interface_is_upscaled_apart() {
+        assert!(wanted_ui("gfx/2d/crosshair.tga"));
+        assert!(wanted_ui("fonts/fontImage_0_26.tga"));
+        assert!(wanted_ui("ui/assets/title.tga"));
+        assert!(!wanted_ui("textures/atcs/floor.tga"));
+        // edge padding repeats the border; the alpha comes out as grey
+        let px = [10, 20, 30, 40, 50, 60, 70, 80];
+        let p = clamp_pad(&px, 2, 1, 1, 0..3);
+        assert_eq!(&p[0..3], &[10, 20, 30]);
+        let a = clamp_pad(&px, 2, 1, 1, 3..4);
+        assert_eq!(&a[0..3], &[40, 40, 40]);
+        assert_eq!(&a[(4 + 3) * 3..(4 + 3) * 3 + 3], &[80, 80, 80]);
+    }
 
     #[test]
     fn keys_and_scope() {

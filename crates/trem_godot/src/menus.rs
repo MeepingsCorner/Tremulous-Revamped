@@ -7467,6 +7467,7 @@ impl TremMenus {
             while i < ops.len() && matches!(ops[i], Op::Premul { .. }) == premul {
                 match &ops[i] {
                     Op::Pic { tex, r, uv, c } => {
+                        let tex = &crate::hdtex::ui(tex);
                         let ts = tex.get_size();
                         let src = Rect2::new(Vector2::new(uv[0] * ts.x, uv[1] * ts.y), Vector2::new((uv[2] - uv[0]) * ts.x, (uv[3] - uv[1]) * ts.y));
                         rs.canvas_item_add_texture_rect_region_ex(item, px(r), tex.get_rid(), src).modulate(col(c)).done();

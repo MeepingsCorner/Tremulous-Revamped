@@ -190,6 +190,12 @@ pub struct TremGame {
     /// renders the world into this SubViewport, shown by `view_sprite` over
     /// the `CG_CalcVrect` rectangle (see `sync_view_rect`).
     view_vp: Option<Gd<godot::classes::SubViewport>>,
+    /// enhanced (port_vision, G): the human's flashlight / the alien's
+    /// night vision is on; the light and the overlay that draw them
+    vision_on: bool,
+    vision_toggle: bool,
+    flashlight: Option<Gd<godot::classes::SpotLight3D>>,
+    night_vision: Option<Gd<godot::classes::ColorRect>>,
     view_sprite: Option<Gd<godot::classes::Sprite2D>>,
     /// cg.refdef x, y, width, height (pixels) and fov_x, fov_y of the last frame
     vrect: (i32, i32, i32, i32),
@@ -317,6 +323,10 @@ impl INode3D for TremGame {
             last_build_attempt: 0,
             camera: None,
             view_vp: None,
+            vision_on: false,
+            vision_toggle: false,
+            flashlight: None,
+            night_vision: None,
             view_sprite: None,
             vrect: (0, 0, 0, 0),
             view_fov: (90.0, 73.74),
@@ -470,6 +480,7 @@ impl INode3D for TremGame {
         if let Some(cam) = self.camera.as_ref().filter(|c| c.is_inside_tree()).map(|c| c.get_global_position()) {
             let mut tree = self.base().get_tree();
             self.gfx.shadow_budget(&mut tree, cam);
+            self.sync_shadow_sun(cam, delta as f32);
         }
         if self.net_active() {
             self.net_process(delta);
@@ -574,6 +585,7 @@ impl INode3D for TremGame {
         self.sync_visuals();
         let t1 = t0.elapsed().as_millis();
         self.sync_camera();
+        self.sync_vision();
         self.misc_frame(); // wt-misc: cgame rename prints, vote beep, dev commands
         self.update_fx(delta);
         let t2 = t0.elapsed().as_millis();
@@ -2338,8 +2350,110 @@ impl TremGame {
         r
     }
 
+    /// `port_vision` (G): the enhanced mode's flashlight (humans, on the
+    /// gun) or night vision (aliens). Client-side only: nothing is sent to
+    /// the server (others do not see it); vanilla has neither.
+    fn port_vision(&mut self) {
+        // (a console command runs while the client is lent out by
+        // with_client: its cvars are not here, so the frame does it)
+        self.vision_toggle = true;
+    }
+
+    fn toggle_vision(&mut self) {
+        if self.client.cvars.integer("r_enhanced") == 0 {
+            self.misc.con.print("flashlight / night vision: enhanced graphics only (F10)\n");
+            return;
+        }
+        self.vision_on = !self.vision_on;
+        let alien = self.world.as_ref().zip(self.me).is_some_and(|(w, me)| w.clients[me].ps.stat(Stat::Team) == Team::Aliens as i32);
+        let what = if alien { "night vision" } else { "flashlight" };
+        let msg = format!("{what} {}\n", if self.vision_on { "on" } else { "off" });
+        godot_print!("{}", msg.trim_end());
+        self.misc.con.print(&msg);
+    }
+
+    /// The flashlight follows the view (from the gun, a little right of and
+    /// below the eye); night vision draws over the 3D view (not the HUD).
+    fn sync_vision(&mut self) {
+        use godot::classes::{ColorRect, Shader, ShaderMaterial, SpotLight3D};
+        if std::mem::take(&mut self.vision_toggle) {
+            self.toggle_vision();
+        }
+        let enhanced = self.client.cvars.integer("r_enhanced") != 0;
+        let (mut torch, mut nv) = (false, false);
+        let mut pose = None;
+        if let (true, true, Some(w), Some(me)) = (enhanced, self.vision_on, self.world.as_ref(), self.me) {
+            let ps = &w.clients[me].ps;
+            let alive = ps.stat(Stat::Health) > 0 && ps.pm_type == trem_sim::gen::enums::PmType::Normal as i32;
+            let team = ps.stat(Stat::Team);
+            torch = alive && team == Team::Humans as i32;
+            nv = alive && team == Team::Aliens as i32;
+            let (org, ang) = self.cam_q;
+            let (f, r, u) = angle_vectors(&ang);
+            let mut p = org;
+            for k in 0..3 {
+                p[k] += f[k] * 10.0 + r[k] * 7.0 - u[k] * 6.0;
+            }
+            pose = Some(Transform3D::new(basis_from_angles(&ang), q2g(&p)));
+        }
+        if torch && self.flashlight.as_ref().is_none_or(|l| !l.is_instance_valid()) {
+            let mut l = SpotLight3D::new_alloc();
+            l.set_name("Flashlight");
+            l.set_color(Color::from_rgb(1.0, 0.95, 0.85));
+            // (the baked light is already in the surfaces: a torch has to be
+            // strong to show over it, as one does in a lit corridor)
+            l.set_param(LightParam::ENERGY, 28.0);
+            l.set_param(LightParam::RANGE, 32.0);
+            l.set_param(LightParam::SPOT_ANGLE, 26.0);
+            l.set_param(LightParam::SPOT_ATTENUATION, 0.5);
+            l.set_param(LightParam::ATTENUATION, 1.0);
+            l.set_shadow(true);
+            // our own (shadow-only) body and gun stay out of its shadows
+            l.set("shadow_caster_mask", &(crate::gfx::SHADOW_CASTER_LAYER as i64).to_variant());
+            self.base_mut().add_child(&l);
+            self.flashlight = Some(l);
+        }
+        if let Some(l) = self.flashlight.as_mut().filter(|l| l.is_instance_valid()) {
+            l.set_visible(torch);
+            if let (true, Some(t)) = (torch, pose) {
+                l.set_transform(t);
+            }
+        }
+        if nv && self.night_vision.as_ref().is_none_or(|n| !n.is_instance_valid()) {
+            if let Some(mut vp) = self.view_vp.clone() {
+                let mut sh = Shader::new_gd();
+                sh.set_code(NIGHT_VISION_SHADER);
+                let mut m = ShaderMaterial::new_gd();
+                m.set_shader(&sh);
+                let mut r = ColorRect::new_alloc();
+                r.set_name("NightVision");
+                r.set_material(&m);
+                r.set_mouse_filter(godot::classes::control::MouseFilter::IGNORE);
+                r.set_anchors_preset(godot::classes::control::LayoutPreset::FULL_RECT);
+                vp.add_child(&r);
+                self.night_vision = Some(r);
+            }
+        }
+        if let Some(n) = self.night_vision.as_mut().filter(|n| n.is_instance_valid()) {
+            n.set_visible(nv);
+            if nv {
+                let size = self.view_vp.as_ref().map(|v| v.get_size()).unwrap_or_default();
+                n.set_position(Vector2::ZERO);
+                n.set_size(Vector2::new(size.x as f32, size.y as f32));
+            }
+        }
+    }
+
     /// `CL_KeyEvent` (key repeats are filtered by the caller).
     fn key_event_num(&mut self, key: i32, down: bool) {
+        // G toggles the enhanced flashlight / night vision unless bound
+        if key == 'g' as i32 && down {
+            let b = self.client.keys.get_binding(key).to_string();
+            if b.is_empty() {
+                self.port_vision();
+                return;
+            }
+        }
         // F10 switches the graphics mode (like Halo: CE Anniversary's
         // switch) unless the player bound it to something else
         if key == crate::keys::K_F1 + 9 && down {
@@ -3068,6 +3182,55 @@ impl TremGame {
         }
     }
 
+    /// Enhanced mode, a BSP map, r_dynamicShadows: the shadow sun (gfx.rs)
+    /// turned to the light grid's direction where the view is. Otherwise
+    /// none (vanilla draws no dynamic shadows).
+    fn shadow_sun_on(&self) -> bool {
+        self.client.cvars.integer("r_enhanced") != 0 && self.client.cvars.integer("r_dynamicShadows") != 0 && self.gfx.is_bsp && self.world.is_some() && self.lightgrid.is_some()
+    }
+
+    fn sync_shadow_sun(&mut self, view: Vector3, dt: f32) {
+        use godot::classes::directional_light_3d::ShadowMode;
+        let on = self.shadow_sun_on();
+        if !on {
+            if let Some(mut s) = self.gfx.shadow_sun.take() {
+                if s.is_instance_valid() {
+                    s.queue_free();
+                }
+                godot::classes::RenderingServer::singleton().global_shader_parameter_set(crate::gfx::SHADOW_GLOBAL, &0.0f32.to_variant());
+            }
+            self.gfx.shadow_sun_dir = None;
+            return;
+        }
+        if self.gfx.shadow_sun.as_ref().is_none_or(|s| !s.is_instance_valid()) {
+            let mut s = DirectionalLight3D::new_alloc();
+            s.set_name("ShadowSun");
+            s.set_shadow(true);
+            s.set_cull_mask(crate::gfx::SHADOW_RECEIVER_LAYER);
+            s.set("shadow_caster_mask", &((crate::gfx::SHADOW_CASTER_LAYER | crate::gfx::SHADOW_SELF_LAYER) as i64).to_variant());
+            s.set_shadow_mode(ShadowMode::PARALLEL_4_SPLITS);
+            s.set_param(LightParam::SHADOW_MAX_DISTANCE, 40.0);
+            s.set_param(LightParam::SHADOW_BIAS, 0.03);
+            s.set_param(LightParam::SHADOW_NORMAL_BIAS, 1.0);
+            s.set_param(LightParam::SHADOW_BLUR, 1.5);
+            s.set_blend_splits(true);
+            self.base_mut().add_child(&s);
+            self.gfx.shadow_sun = Some(s);
+            self.gfx.shadow_sun_dir = None;
+            godot::classes::RenderingServer::singleton().global_shader_parameter_set(crate::gfx::SHADOW_GLOBAL, &crate::gfx::SHADOW_STRENGTH.to_variant());
+        }
+        let q = [view.x / crate::geom::SCALE, -view.z / crate::geom::SCALE, view.y / crate::geom::SCALE];
+        let (_, _, ld) = light_at(self.lightgrid.as_ref(), &q);
+        let d = crate::gfx::shadow_dir(self.gfx.shadow_sun_dir, ld, dt);
+        self.gfx.shadow_sun_dir = Some(d);
+        if let Some(s) = self.gfx.shadow_sun.as_mut() {
+            let up = if d.y.abs() > 0.99 { Vector3::FORWARD } else { Vector3::UP };
+            // a directional light shines along its -Z: from the light's side
+            let x = up.cross(d).normalized();
+            s.set_basis(Basis::from_cols(x, d.cross(x).normalized(), d));
+        }
+    }
+
     /// Enhanced mode: dead players and corpses fall as ragdolls. A ragdoll
     /// starts at the death (pushed by the killing hit), carries on as the
     /// server's corpse when it replaces the player, sinks with it and goes
@@ -3205,6 +3368,7 @@ impl TremGame {
         let now = (self.clock * 1000.0) as i32;
         let me = self.view_ent();
         let first_person = !self.rendering_third_person();
+        let shadows = self.shadow_sun_on();
         let mut new_nodes: Vec<Gd<Node3D>> = Vec::new();
         let mut sounds: Vec<SoundReq> = Vec::new();
         {
@@ -3256,7 +3420,16 @@ impl TremGame {
                     EType::Buildable => a.update_buildable(w, i, now, &mut sounds),
                     _ => a.update_player(w, i, now),
                 }
-                a.set_visible(!(Some(i) == me && first_person));
+                // our own body in first person: unseen; enhanced, its shadow
+                // still falls (the shadow sun)
+                let own_hidden = Some(i) == me && first_person;
+                if own_hidden && shadows {
+                    a.set_visible(true);
+                    a.set_shadow_only(true);
+                } else {
+                    a.set_shadow_only(false);
+                    a.set_visible(!own_hidden);
+                }
                 seen.insert(i);
             }
             // projectiles: missile model or sprite from weapon.cfg
@@ -4437,6 +4610,7 @@ impl TremGame {
         if self.world.is_some() && self.me.is_some() {
             self.sync_visuals();
             self.sync_camera();
+            self.sync_vision();
             self.update_fx(delta);
             self.update_effects();
         }
@@ -4483,6 +4657,24 @@ fn actor_key(w: &World, i: usize) -> Option<String> {
         _ => None,
     }
 }
+
+/// The aliens' night vision (enhanced, port_vision): the view's light
+/// amplified (dark corners come up, bright ones roll off), green, a little
+/// grain and vignette; drawn over the 3D view only, so the HUD stays as is.
+const NIGHT_VISION_SHADER: &str = r#"
+shader_type canvas_item;
+uniform sampler2D screen : hint_screen_texture, filter_linear;
+void fragment() {
+    vec3 c = texture(screen, SCREEN_UV).rgb;
+    float l = dot(c, vec3(0.3, 0.59, 0.11));
+    float g = 1.0 - exp(-l * 7.0);
+    float n = fract(sin(dot(SCREEN_UV * vec2(12.9898, 78.233) + vec2(TIME * 3.1, TIME * 1.7), vec2(1.0, 1.0))) * 43758.5453);
+    vec2 d = SCREEN_UV - 0.5;
+    float vig = clamp(1.0 - dot(d, d) * 1.4, 0.0, 1.0);
+    vec3 nv = vec3(0.3, 1.0, 0.4) * (g * 0.95 + 0.05) * vig + (n - 0.5) * 0.06;
+    COLOR = vec4(nv, 1.0);
+}
+"#;
 
 /// The pk3 search path: user://base, <executable>/base, res://base, --base=DIR.
 /// `Com_AddStartupCommands`' map: `+map <name>` / `+devmap <name>` on the
@@ -4624,6 +4816,7 @@ impl crate::clientcmd::ClientHost for TremGame {
             "port_removebot" => self.remove_bot(GString::from(a1)),
             "port_restart" => self.restart(),
             "port_gfx" => self.port_gfx(a1),
+            "port_vision" => self.port_vision(),
             "s_fmodinfo" => {
                 let msg = match self.fmod.as_ref() {
                     Some(f) => format!("FMOD + Steam Audio: {}\n", f.stats()),
@@ -5368,6 +5561,13 @@ impl TremGame {
             GString::from(format!("{o:.3} {n}").as_str())
         }).collect()
     }
+    /// Tests: "on flashlight-visible night-vision-visible" (port_vision).
+    #[func]
+    fn vision_state(&self) -> GString {
+        let l = self.flashlight.as_ref().is_some_and(|l| l.is_instance_valid() && l.is_visible());
+        let n = self.night_vision.as_ref().is_some_and(|n| n.is_instance_valid() && n.is_visible());
+        GString::from(format!("{} {} {}", self.vision_on as i32, l as i32, n as i32).as_str())
+    }
     /// Tests: per ragdoll hinge "bone min max seen_min seen_max" (flexion, degrees).
     #[func]
     fn ragdoll_hinges(&self) -> PackedStringArray {
@@ -5393,6 +5593,25 @@ impl TremGame {
     #[func]
     fn actor_visible(&self, ent: i32) -> bool {
         self.actors.get(&(ent.max(0) as usize)).map(|a| a.root_nodes().first().map(|n| n.is_visible()).unwrap_or(false)).unwrap_or(false)
+    }
+    /// Tests: [entity, health, max health] of the structures of `classname`
+    /// ("ent health max" each).
+    #[func]
+    fn structure_health(&self, classname: GString) -> PackedStringArray {
+        let Some(w) = self.world.as_ref() else { return PackedStringArray::new() };
+        let c = classname.to_string();
+        (0..w.num_entities).filter(|&i| w.ents[i].inuse && w.ents[i].classname == c && w.ents[i].buildable.is_some()).map(|i| GString::from(format!("{} {} {}", i, w.ents[i].health, w.ents[i].buildable.unwrap().def().health).as_str())).collect()
+    }
+    /// Tests: set a structure's health (a local game's world).
+    #[func]
+    fn test_set_health(&mut self, ent: i32, health: i32) -> bool {
+        match self.game_world_mut() {
+            Some(w) if (ent as usize) < w.ents.len() && w.ents[ent as usize].inuse => {
+                w.ents[ent as usize].health = health;
+                true
+            }
+            _ => false,
+        }
     }
     /// Tests: the entity of the local player (-1 none).
     #[func]

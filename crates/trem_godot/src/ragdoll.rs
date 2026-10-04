@@ -865,6 +865,7 @@ impl Ragdoll {
         }
         // it moves away from where it was built
         mi.set_extra_cull_margin(4.0);
+        mi.set_layer_mask(1 | crate::gfx::SHADOW_CASTER_LAYER | crate::gfx::SHADOW_RECEIVER_LAYER);
         skel.add_child(&mi);
         if let Some(skin) = skel.create_skin_from_rest_transforms() {
             mi.set_skin(&skin);
