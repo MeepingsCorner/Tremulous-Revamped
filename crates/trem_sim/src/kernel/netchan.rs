@@ -190,6 +190,78 @@ pub fn is_lan_address(a: &NetAdr) -> bool {
 
 /// `NET_StringToAdr`: 0 not found, 1 found with a port, 2 found without
 /// one (the port is then PORT_SERVER). "localhost" is the loopback.
+/// This machine's name (`gethostname`).
+fn host_name() -> String {
+    #[cfg(windows)]
+    {
+        std::env::var("COMPUTERNAME").unwrap_or_default()
+    }
+    #[cfg(unix)]
+    {
+        let mut buf = [0u8; 256];
+        // SAFETY: the buffer and its length
+        let r = unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+        if r != 0 {
+            return String::new();
+        }
+        let n = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        String::from_utf8_lossy(&buf[..n]).into_owned()
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        String::new()
+    }
+}
+
+/// This machine's IPv4 addresses on its networks, loopback and link-local
+/// left out: every adapter's (`getifaddrs`; on Windows the host name's
+/// addresses, which are every adapter's). Port addition (dec045): the LAN
+/// scan and the server's "join me at" line.
+pub fn local_ipv4() -> Vec<Ipv4Addr> {
+    let mut out: Vec<Ipv4Addr> = Vec::new();
+    #[cfg(unix)]
+    // SAFETY: getifaddrs' list, walked and freed here
+    unsafe {
+        let mut ifs: *mut libc::ifaddrs = std::ptr::null_mut();
+        if libc::getifaddrs(&mut ifs) == 0 {
+            let mut p = ifs;
+            while !p.is_null() {
+                let a = (*p).ifa_addr;
+                if !a.is_null() && (*a).sa_family as i32 == libc::AF_INET {
+                    let sin = &*(a as *const libc::sockaddr_in);
+                    out.push(Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr)));
+                }
+                p = (*p).ifa_next;
+            }
+            libc::freeifaddrs(ifs);
+        }
+    }
+    let host = host_name();
+    if !host.is_empty() {
+        if let Ok(it) = (host.as_str(), 0u16).to_socket_addrs() {
+            out.extend(it.filter_map(|a| match a.ip() {
+                IpAddr::V4(v) => Some(v),
+                _ => None,
+            }));
+        }
+    }
+    out.retain(|v| !v.is_loopback() && !v.is_link_local() && !v.is_unspecified());
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The subnet-directed broadcast of each local address (as a /24, the
+/// home-network size). Windows sends 255.255.255.255 out of one adapter
+/// only (the best route: a VPN's or a virtual machine's adapter can take
+/// it), so the LAN scan also broadcasts on each network by its own address.
+pub fn lan_broadcasts(locals: &[Ipv4Addr]) -> Vec<[u8; 4]> {
+    let mut out: Vec<[u8; 4]> = locals.iter().map(|a| { let o = a.octets(); [o[0], o[1], o[2], 255] }).collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
 pub fn string_to_adr(s: &str, family: NetAdrType) -> (i32, NetAdr) {
     if s == "localhost" {
         return (1, NetAdr::loopback());
@@ -462,6 +534,11 @@ impl Net {
         self.ports[src as usize] = 0;
         self.ports6[src as usize] = 0;
         self.loopbacks[src as usize].clear();
+    }
+
+    /// The bound ipv4 port of a source, when its socket is open.
+    pub fn port(&self, src: NetSrc) -> Option<u16> {
+        self.sockets[src as usize].as_ref().map(|_| self.ports[src as usize])
     }
 
     pub fn is_open(&self, src: NetSrc) -> bool {
@@ -933,5 +1010,17 @@ impl Netchan {
         // the message can now be read from the current message pointer
         self.incoming_sequence = sequence;
         true
+    }
+}
+
+#[cfg(test)]
+mod lan_tests {
+    #[test]
+    fn each_network_gets_its_own_broadcast() {
+        use std::net::Ipv4Addr;
+        let b = super::lan_broadcasts(&[Ipv4Addr::new(192, 168, 1, 23), Ipv4Addr::new(10, 0, 5, 7), Ipv4Addr::new(192, 168, 1, 40)]);
+        assert_eq!(b, vec![[10, 0, 5, 255], [192, 168, 1, 255]]);
+        // this machine's addresses: never loopback
+        assert!(super::local_ipv4().iter().all(|a| !a.is_loopback()));
     }
 }

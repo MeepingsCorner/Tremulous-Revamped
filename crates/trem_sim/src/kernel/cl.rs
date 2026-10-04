@@ -2065,6 +2065,9 @@ impl NetClient {
         self.local_servers.clear();
         net.open_client();
         let message = b"\xff\xff\xff\xffgetinfo xxx";
+        // each network's own broadcast too (dec045: Windows sends the
+        // all-ones broadcast out of one adapter only)
+        let nets = if net.capture.is_some() { Vec::new() } else { netchan::lan_broadcasts(&netchan::local_ipv4()) };
         for _ in 0..2 {
             for j in 0..netchan::NUM_SERVER_PORTS {
                 let port = netchan::PORT_SERVER + j;
@@ -2072,6 +2075,10 @@ impl NetClient {
                 net.send_packet(NetSrc::Client, message, &to);
                 let to = NetAdr { kind: NetAdrType::Multicast6, port, ..Default::default() };
                 net.send_packet(NetSrc::Client, message, &to);
+                for b in &nets {
+                    let to = NetAdr { kind: NetAdrType::Ip, ip: *b, port, ..Default::default() };
+                    net.send_packet(NetSrc::Client, message, &to);
+                }
                 // the loopback interfaces (dec033): same-machine servers
                 let lo = NetAdr { kind: NetAdrType::Ip, ip: [127, 0, 0, 1], port, ..Default::default() };
                 net.send_packet(NetSrc::Client, message, &lo);
