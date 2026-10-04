@@ -60,10 +60,13 @@ uniform bool alpha_test = false;
 // unchanged (x/z, y/z) but its depth is in front of any wall the player
 // touches, like the renderer's glDepthRange( 0, 0.3 ) for these entities.
 uniform float depth_hack = 1.0;
-// enhanced dynamic shadows (gfx.rs shadow sun): the directed share of the
-// grid light a shadow takes away (light()), at most trem_shadow_k of it
+// enhanced dynamic shadows (lamps.rs): the directed share of the grid light
+// a shadow takes away (light()), at most trem_shadow_k of it; the grid's
+// direction (view space)
 global uniform float trem_shadow_k;
 varying vec3 shadow_irr;
+varying vec3 shadow_gdir;
+// @SHADOW
 // the stages' tcMods (kind 1 scale, 2 scroll, 3 rotate; 0 none), rgbGen
 // identity (unlit), and a second, alpha-blended stage over the first
 uniform ivec4 tc0_k = ivec4(0);
@@ -108,6 +111,7 @@ void vertex() {
 }
 void fragment() {
     shadow_irr = vec3(0.0);
+    shadow_gdir = (VIEW_MATRIX * vec4(ldir, 0.0)).xyz;
 #ifdef ENHANCED_LIT
     // the shader writes subsurface outputs (enhanced), so Godot runs its
     // transmittance on every material using it: safe values everywhere else
@@ -193,12 +197,13 @@ void fragment() {
 }
 #ifdef ENHANCED_LIT
 // Dynamic lights as the default would light the model (Lambert, a
-// highlight); the shadow sun lights nothing and only takes the directed
-// grid light away where another model's (or the model's own) shadow falls.
+// highlight); the shadow lights (lamps.rs) light nothing and only take the
+// directed grid light away where another model's (or its own) shadow falls.
 void light() {
-    if (LIGHT_IS_DIRECTIONAL) {
-        DIFFUSE_LIGHT -= shadow_irr * (1.0 - ATTENUATION);
-    } else {
+    if (LIGHT_COLOR.r < 0.0) {
+        // a world-fixed shadow light (lamps.rs): takes, adds nothing
+        DIFFUSE_LIGHT -= shadow_irr * trem_lamp_shadow(LIGHT, LIGHT_COLOR.r, ATTENUATION, shadow_gdir);
+    } else if (!LIGHT_IS_DIRECTIONAL) {
         float ndl = clamp(dot(NORMAL, LIGHT), 0.0, 1.0);
         DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * ndl / PI;
         vec3 h = normalize(VIEW + LIGHT);
@@ -309,9 +314,10 @@ impl Library {
             sh.set_code(&code);
             sh
         };
-        let vat = mk(VAT_SHADER.to_string());
-        let vat_add = mk(VAT_SHADER.replace("render_mode cull_disabled, depth_draw_opaque;\n#define ENHANCED_LIT", "render_mode cull_disabled, unshaded, blend_add, depth_draw_never;").replace("if (alpha_test && c.a < 0.5) { discard; }", "").replace("min(amb + dcol * max(dot(n, ldir), 0.0), vec3(1.0))", "vec3(0.5)"));
-        let vat_mix = mk(VAT_SHADER.replace("render_mode cull_disabled, depth_draw_opaque;\n#define ENHANCED_LIT", "render_mode cull_disabled, unshaded, blend_mix, depth_draw_never;").replace("if (alpha_test && c.a < 0.5) { discard; }", "ALPHA = c.a;"));
+        let vat_src = VAT_SHADER.replace("// @SHADOW", crate::lamps::GLSL_SHADOW);
+        let vat = mk(vat_src.clone());
+        let vat_add = mk(vat_src.replace("render_mode cull_disabled, depth_draw_opaque;\n#define ENHANCED_LIT", "render_mode cull_disabled, unshaded, blend_add, depth_draw_never;").replace("if (alpha_test && c.a < 0.5) { discard; }", "").replace("min(amb + dcol * max(dot(n, ldir), 0.0), vec3(1.0))", "vec3(0.5)"));
+        let vat_mix = mk(vat_src.replace("render_mode cull_disabled, depth_draw_opaque;\n#define ENHANCED_LIT", "render_mode cull_disabled, unshaded, blend_mix, depth_draw_never;").replace("if (alpha_test && c.a < 0.5) { discard; }", "ALPHA = c.a;"));
         let white = crate::assets::flat_texture(Color::from_rgb(1.0, 1.0, 1.0)).upcast::<Texture2D>();
         let rag_of = |sh: &Gd<Shader>| mk(sh.get_code().to_string().replace(VAT_VERTEX, ""));
         let (rag, rag_add, rag_mix) = (rag_of(&vat), rag_of(&vat_add), rag_of(&vat_mix));

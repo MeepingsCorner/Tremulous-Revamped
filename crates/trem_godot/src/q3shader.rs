@@ -156,6 +156,9 @@ pub struct Q3Shader {
     pub fog: Option<([f32; 3], f32)>,
     pub nodraw: bool,
     pub editor_image: Option<String>,
+    /// `q3map_sun` / `q3map_sunExt`: (intensity, direction towards the sun
+    /// in Quake space)
+    pub sun: Option<(f32, [f32; 3])>,
 }
 
 impl Q3Shader {
@@ -413,6 +416,12 @@ pub fn parse_script(text: &str, out: &mut HashMap<String, Q3Shader>) {
                         let c = a.vec3();
                         let d = a.f();
                         sh.fog = Some((c, d));
+                    }
+                    "q3map_sun" | "q3map_sunext" => {
+                        let _rgb = a.vec3();
+                        let i = a.f();
+                        let (yaw, elev) = (a.f().to_radians(), a.f().to_radians());
+                        sh.sun = Some((i, [yaw.cos() * elev.cos(), yaw.sin() * elev.cos(), elev.sin()]));
                     }
                     "surfaceparm" => {
                         if a.word().eq_ignore_ascii_case("nodraw") {
@@ -733,6 +742,14 @@ pub fn stage_shader_code(v: Variant, depth_write: bool, offset: bool) -> String 
         // GL_ONE GL_ONE_MINUS_SRC_ALPHA: the colour as is over (1 - alpha) of what is under
         Variant::Premul => "ALBEDO = pow(clamp(o.rgb * 2.0, 0.0, 1.0), vec3(R_GAMMA_EXP)); ALPHA = clamp(o.a, 0.0, 1.0);",
     };
+    // the base image's mask scales what the pass adds to what is under it
+    let mask = match v {
+        Variant::Opaque => "",
+        Variant::Mix => "o.a *= q3_m;",
+        Variant::Add => "o.rgb *= q3_m;",
+        Variant::Premul => "o *= q3_m;",
+        Variant::Mul => "o.rgb = mix(vec3(1.0), o.rgb, q3_m);",
+    };
     let mut s = String::new();
     s.push_str("shader_type spatial;\nrender_mode unshaded, cull_disabled, fog_disabled, ");
     s.push_str(&mode);
@@ -745,6 +762,7 @@ pub fn stage_shader_code(v: Variant, depth_write: bool, offset: bool) -> String 
     s.push_str(GLSL_VERTEX_PULL);
     s.push_str("}\nvoid fragment() {\n");
     s.push_str(STAGE_FRAGMENT);
+    s.push_str(mask);
     s.push_str(out);
     if offset {
         s.push_str(GLSL_DEPTH_OFFSET);
@@ -770,6 +788,14 @@ uniform sampler2DArray frames : filter_linear_mipmap, repeat_enable;
 uniform int nframes = 1;
 uniform float anim_freq = 0.0;
 uniform sampler2D lm : filter_linear, repeat_disable;
+// enhanced: the 4K pack's image of the stage (hdtex.rs)
+uniform sampler2D tex_hd : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D tex_hd_c : filter_linear_mipmap_anisotropic, repeat_disable;
+uniform bool has_hd = false;
+// the base image's alpha cuts this pass (an overlay that repeated the base
+// image over it, folded in: bspview.rs plan_passes)
+uniform sampler2D mask_tex : filter_linear_mipmap_anisotropic, repeat_enable;
+uniform bool has_mask = false;
 // tcGen 0 base, 1 lightmap, 2 environment, 3 vector
 uniform int tc_gen = 0;
 uniform vec3 tcv_s;
@@ -826,10 +852,11 @@ const STAGE_VERTEX: &str = r#"
 
 const STAGE_FRAGMENT: &str = r#"
     vec4 tx = vec4(1.0);
+    bool hd = has_hd && trem_gfx > 0.5;
     if (src_kind == 0) {
-        tx = texture(tex, q3_st);
+        tx = hd ? texture(tex_hd, q3_st) : texture(tex, q3_st);
     } else if (src_kind == 1) {
-        tx = texture(tex_c, q3_st);
+        tx = hd ? texture(tex_hd_c, q3_st) : texture(tex_c, q3_st);
     } else if (src_kind == 2) {
         float f = mod(floor(TIME * anim_freq), float(max(nframes, 1)));
         tx = texture(frames, vec3(q3_st, f));
@@ -878,6 +905,7 @@ const STAGE_FRAGMENT: &str = r#"
     else if (out_kind == 6) { o = vec4(vec3(c.a), 1.0); }
     else if (out_kind == 7) { o = vec4(vec3(1.0 - c.a), 1.0); }
     else if (out_kind == 8) { o = vec4(c.rgb * 2.0, 1.0); }
+    float q3_m = has_mask ? 1.0 - texture(mask_tex, UV).a : 1.0;
 "#;
 
 fn wave_v4(w: &Wave) -> godot::prelude::Vector4 {

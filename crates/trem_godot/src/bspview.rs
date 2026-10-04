@@ -55,12 +55,14 @@ uniform float metal = 0.0;
 uniform float wet = 0.0;
 uniform float detail_k = 0.0;
 uniform sampler2D detail : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
-// enhanced dynamic shadows (gfx.rs shadow_sun): how much of the baked light
-// a model's shadow takes away here (the directed share of the light grid,
-// facing it), the darkest a shadow gets
+// enhanced dynamic shadows (lamps.rs): how much of the baked light a
+// model's shadow takes away here (the directed share of the light grid,
+// facing it), the darkest a shadow gets; the grid's direction (view space)
 global uniform float trem_shadow_k;
 varying vec4 grid;
 varying vec3 shadow_irr;
+varying vec3 shadow_gdir;
+// @SHADOW
 void vertex() {
     grid = CUSTOM0;
 // @Q3_DEFORM
@@ -68,6 +70,7 @@ void vertex() {
 }
 void fragment() {
     shadow_irr = vec3(0.0);
+    shadow_gdir = vec3(0.0, 0.0, 1.0);
     vec4 t = ((trem_gfx > 0.5 && has_hd) ? texture(tex_hd, UV) : texture(tex, UV)) * tint;
     if ((alpha_func == 1 && t.a <= 0.0) || (alpha_func == 2 && t.a >= 0.5) || (alpha_func == 3 && t.a < 0.5)) { discard; }
     vec3 light = light_src == 2 ? vec3(0.5) : (use_lm ? texture(lm, UV2).rgb : COLOR.rgb);
@@ -124,17 +127,20 @@ void fragment() {
         RADIANCE = vec4(baked * 0.3 * irr_scale, 1.0);
         vec3 gl = normalize((VIEW_MATRIX * vec4(grid.xyz, 0.0)).xyz + vec3(1e-5));
         float facing = smoothstep(0.0, 0.25, dot(NORMAL, gl));
+        shadow_gdir = gl;
         shadow_irr = baked * k * irr_scale * clamp(grid.w, 0.0, 0.85) * facing * trem_shadow_k;
     }
 }
 // The lights a map surface takes besides its baked light: the dynamic
 // lights (muzzle flashes, explosions: Lambert + a highlight, as the default
-// would) and, enhanced, the shadow sun, which adds nothing and only takes
-// the directed share of the baked light away where a model's shadow falls.
+// would) and, enhanced, the shadow lights (lamps.rs), which add nothing and
+// only take the directed share of the baked light away where a model's
+// shadow falls.
 void light() {
-    if (LIGHT_IS_DIRECTIONAL) {
-        DIFFUSE_LIGHT -= shadow_irr * (1.0 - ATTENUATION);
-    } else {
+    if (LIGHT_COLOR.r < 0.0) {
+        // a world-fixed shadow light (lamps.rs): takes, adds nothing
+        DIFFUSE_LIGHT -= shadow_irr * trem_lamp_shadow(LIGHT, LIGHT_COLOR.r, ATTENUATION, shadow_gdir);
+    } else if (!LIGHT_IS_DIRECTIONAL) {
         float ndl = clamp(dot(NORMAL, LIGHT), 0.0, 1.0);
         DIFFUSE_LIGHT += LIGHT_COLOR * ATTENUATION * ndl / PI;
         vec3 h = normalize(VIEW + LIGHT);
@@ -150,6 +156,7 @@ fn world_shader_code() -> String {
         .replace("// @Q3_COMMON", crate::q3shader::GLSL_COMMON)
         .replace("// @Q3_DEFORM", crate::q3shader::GLSL_VERTEX_DEFORM)
         .replace("// @Q3_PULL", crate::q3shader::GLSL_VERTEX_PULL)
+        .replace("// @SHADOW", crate::lamps::GLSL_SHADOW)
 }
 
 /// The world's opaque triangles for the ray tracer (rt.rs), in Godot space:
@@ -571,6 +578,11 @@ impl BspRender {
         out
     }
 
+    /// The map's shader scripts (q3shader.rs).
+    pub fn shaders(&self) -> &HashMap<String, crate::q3shader::Q3Shader> {
+        &self.q3
+    }
+
     /// A stage image (cached; None when the data has no such image).
     fn image(&mut self, pk3: &mut Pk3Set, path: &str) -> Option<Gd<ImageTexture>> {
         let key = path.to_lowercase();
@@ -648,6 +660,11 @@ impl BspRender {
                 };
                 mat.set_shader_parameter(if st.clamp { "tex_c" } else { "tex" }, &t.to_variant());
                 mat.set_shader_parameter("src_kind", &(if st.clamp { 1 } else { 0 }).to_variant());
+                // enhanced: the 4K pack's image, as the base pass has it
+                if let Some(hd) = crate::hdtex::get(&crate::hdtex::key_of(&frames[0])) {
+                    mat.set_shader_parameter(if st.clamp { "tex_hd_c" } else { "tex_hd" }, &hd.albedo.to_variant());
+                    mat.set_shader_parameter("has_hd", &true.to_variant());
+                }
             }
             Source::Lightmap => {
                 let t = if lm >= 0 && (lm as usize) < self.lightmaps.len() { self.lightmaps[lm as usize].clone() } else { self.white.clone() };
@@ -658,6 +675,12 @@ impl BspRender {
         }
         crate::q3shader::set_stage(&mut mat, st, out_kind);
         crate::q3shader::set_deforms(&mut mat, &plan.deforms);
+        if index < plan.masked {
+            if let Some(m) = plan.base.as_ref().and_then(|b| self.image(pk3, &b.image)) {
+                mat.set_shader_parameter("mask_tex", &m.to_variant());
+                mat.set_shader_parameter("has_mask", &true.to_variant());
+            }
+        }
         if let (Some(k), true) = (plan.lm_mod, variant != Variant::Mul) {
             let t = if lm >= 0 && (lm as usize) < self.lightmaps.len() { self.lightmaps[lm as usize].clone() } else { self.white.clone() };
             mat.set_shader_parameter("lm", &t.to_variant());
@@ -766,6 +789,11 @@ pub struct Plan {
     /// into the earlier passes (exact: the multiply distributes over their
     /// blends) with its constant colour; the base pass then takes the light map
     pub lm_mod: Option<[f32; 3]>,
+    /// the first `masked` stages are cut by the base image's alpha: a later
+    /// stage repeated the base image over them with blendFunc blend (atcs's
+    /// eq2_bounce: the fan shows through the pad's hole only). Folded in,
+    /// exactly, so that the pad itself is the (enhanced) base pass
+    pub masked: usize,
 }
 
 /// Splits a shader into the base pass and the stage passes. None: nothing
@@ -774,7 +802,7 @@ pub fn plan_passes(name: &str, q3: Option<&crate::q3shader::Q3Shader>, lm_ok: bo
     use crate::q3shader::{const_rgb, AlphaGen, RgbGen, Source, TcGen};
     let Some(sh) = q3 else {
         // no script: the implicit shader (texture x light map, or the vertex colours)
-        return Some(Plan { base: Some(BasePass { image: name.to_string(), light_src: if lm_ok { 0 } else { 1 }, tint: [1.0; 3], alpha_func: 0 }), stages: Vec::new(), deforms: Vec::new(), pull: 1.0, polygon_offset: false, sort: 3.0, lm_mod: None });
+        return Some(Plan { base: Some(BasePass { image: name.to_string(), light_src: if lm_ok { 0 } else { 1 }, tint: [1.0; 3], alpha_func: 0 }), stages: Vec::new(), deforms: Vec::new(), pull: 1.0, polygon_offset: false, sort: 3.0, lm_mod: None, masked: 0 });
     };
     if sh.nodraw || sh.stages.is_empty() {
         return None;
@@ -833,7 +861,28 @@ pub fn plan_passes(name: &str, q3: Option<&crate::q3shader::Q3Shader>, lm_ok: bo
             }
         }
     }
-    Some(Plan { base, stages, deforms: sh.deforms.iter().copied().filter(|d| *d != crate::q3shader::Deform::Normal).collect(), pull: if sh.polygon_offset { 0.9995 } else { 1.0 }, polygon_offset: sh.polygon_offset, sort: sh.effective_sort(), lm_mod })
+    // base, A, B, base image again with blendFunc blend: the result is the
+    // base with A and B drawn through the image's transparent texels only
+    let mut masked = 0;
+    if let Some(b) = base.as_ref() {
+        let lm_k = lm_mod.unwrap_or([1.0; 3]);
+        let same_light = (b.light_src == lm_src && lm_mod.is_some()) || (b.light_src == 2 && lm_mod.is_none());
+        let repeat = stages.iter().position(|st| {
+            image_of(st).is_some_and(|i| i.eq_ignore_ascii_case(&b.image))
+                && crate::q3shader::blend_variant(st.blend.as_ref()) == (crate::q3shader::Variant::Mix, 0)
+                && st.tc_gen == TcGen::Base
+                && plain(st)
+                && st.alpha_func == 0
+                && const_rgb(&st.rgb_gen).is_some_and(|c| mul(c, lm_k).iter().zip(b.tint.iter()).all(|(x, y)| (x - y).abs() < 1e-4))
+        });
+        if let (Some(j), true) = (repeat, same_light) {
+            if j > 0 && b.alpha_func == 0 {
+                stages.remove(j);
+                masked = j;
+            }
+        }
+    }
+    Some(Plan { base, stages, deforms: sh.deforms.iter().copied().filter(|d| *d != crate::q3shader::Deform::Normal).collect(), pull: if sh.polygon_offset { 0.9995 } else { 1.0 }, polygon_offset: sh.polygon_offset, sort: sh.effective_sort(), lm_mod, masked })
 }
 
 /// deformVertexes autosprite (tr_shade_calc.c AutoSprite): each quad's
@@ -1158,6 +1207,30 @@ impl LightGrid {
         Some(LightGrid { origin, size, bounds, data })
     }
 
+    /// Every lit cell: (centre, direction towards the light, the strongest
+    /// channel of its directed light, 0..255), Quake space (lamps.rs).
+    pub fn cells(&self) -> Vec<([f32; 3], [f32; 3], f32)> {
+        let mut out = Vec::new();
+        let (bx, by, bz) = (self.bounds[0], self.bounds[1], self.bounds[2]);
+        for z in 0..bz {
+            for y in 0..by {
+                for x in 0..bx {
+                    let o = (((z * by + y) * bx + x) * 8) as usize;
+                    let c = &self.data[o..o + 8];
+                    let l = c[3].max(c[4]).max(c[5]) as f32;
+                    if l <= 0.0 {
+                        continue;
+                    }
+                    let lat = c[7] as f32 * (2.0 * std::f32::consts::PI / 255.0);
+                    let lng = c[6] as f32 * (2.0 * std::f32::consts::PI / 255.0);
+                    let p = [self.origin[0] + x as f32 * self.size[0], self.origin[1] + y as f32 * self.size[1], self.origin[2] + z as f32 * self.size[2]];
+                    out.push((p, [lat.cos() * lng.sin(), lat.sin() * lng.sin(), lng.cos()], l));
+                }
+            }
+        }
+        out
+    }
+
     /// (ambient, directed) in 0..1 gamma units and the light direction (Quake space, towards the light).
     pub fn sample(&self, p: &[f32; 3]) -> ([f32; 3], [f32; 3], [f32; 3]) {
         let mut pos = [0i32; 3];
@@ -1288,7 +1361,9 @@ mod plan_tests {
         let p = plan("t/b\n{\n {\n  map t/b.tga\n  rgbGen identity\n }\n {\n  clampmap t/f.tga\n  tcMod rotate 512\n  blendFunc blend\n  depthWrite\n  rgbGen identity\n }\n {\n  map t/b.tga\n  blendfunc blend\n  rgbGen identity\n }\n {\n  map $lightmap\n  rgbGen identity\n  blendFunc GL_DST_COLOR GL_ZERO\n  depthFunc equal\n }\n}\n", "t/b", true).unwrap();
         let b = p.base.unwrap();
         assert_eq!((b.light_src, b.tint), (0, [1.0; 3]));
-        assert_eq!(p.stages.len(), 2);
+        // the pad drawn again over the fan: folded into a mask of the fan
+        assert_eq!(p.stages.len(), 1);
+        assert_eq!(p.masked, 1);
         assert_eq!(p.lm_mod, Some([1.0; 3]));
         assert!(p.stages[0].explicit_depth_write);
     }

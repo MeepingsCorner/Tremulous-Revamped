@@ -39,6 +39,7 @@ mod rt; // ray-traced effects of the enhanced mode
 mod fmodaudio; // FMOD + Steam Audio sound path
 mod hdtex; // 4K texture packs (enhanced mode)
 mod ragdoll; // ragdoll corpses (enhanced mode)
+mod lamps; // the map's lamps and sun: world-fixed shadows (enhanced mode)
 
 struct TremExtension;
 

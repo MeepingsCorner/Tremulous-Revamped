@@ -85,6 +85,7 @@ struct MapLoad {
     /// the 4K pack's sky faces (hdtex.rs)
     sky_hd: Option<Vec<Gd<godot::classes::Texture2D>>>,
     grid: Option<crate::bspview::LightGrid>,
+    shadow_dirs: Option<crate::lamps::ShadowDirs>,
     /// the world's triangles for the ray-traced effects (gfx.rs / rt.rs)
     rt_geom: Option<crate::bspview::RtGeometry>,
     /// the world's triangles for the acoustic simulation (fmodaudio.rs)
@@ -238,6 +239,8 @@ pub struct TremGame {
     hand: Option<ViewHand>,
     audio: Option<Audio>,
     lightgrid: Option<crate::bspview::LightGrid>,
+    /// the map's world-fixed shadow directions (lamps.rs)
+    shadow_dirs: Option<crate::lamps::ShadowDirs>,
     missiles: HashMap<usize, MissileVis>,
     flashes: Vec<(Gd<godot::classes::OmniLight3D>, f64)>,
     mapents: crate::mapents::MapEnts,
@@ -356,6 +359,7 @@ impl INode3D for TremGame {
             hand: None,
             audio: None,
             lightgrid: None,
+            shadow_dirs: None,
             missiles: HashMap::new(),
             flashes: Vec::new(),
             mapents: Default::default(),
@@ -833,6 +837,7 @@ impl TremGame {
         self.brush_meshes.clear();
         self.effects = None;
         self.lightgrid = None;
+        self.shadow_dirs = None;
         self.feed.clear();
     }
 
@@ -1601,6 +1606,7 @@ impl TremGame {
             sky: None,
             sky_hd: None,
             grid: None,
+            shadow_dirs: None,
             then,
             cheats,
             mode,
@@ -1756,6 +1762,12 @@ impl TremGame {
                 ld.sky = crate::bspview::sky_def(&ld.bsp, &mut ld.set);
                 ld.sky_hd = crate::bspview::sky_textures_hd(&ld.bsp, &mut ld.set);
                 ld.grid = crate::bspview::LightGrid::from_bsp(&ld.bsp);
+                // the world-fixed shadow directions (lamps.rs): the grid's, the sky's sun
+                let sun = match ld.render.as_ref() {
+                    Some(r) => crate::lamps::sun(&ld.bsp, r.shaders()),
+                    None => crate::lamps::sun(&ld.bsp, &crate::q3shader::load_all(&mut ld.set)),
+                };
+                ld.shadow_dirs = ld.grid.as_ref().map(|g| crate::lamps::ShadowDirs::cluster(&g.cells(), sun, crate::lamps::DIRECTIONS));
                 ld.render = None;
                 ld.info.media = 0.9;
             }
@@ -1826,6 +1838,7 @@ impl TremGame {
                 self.populate_world(w, map, ld.meshes.take(), ld.sessions.take());
                 self.brush_meshes = std::mem::take(&mut ld.brush);
                 self.lightgrid = ld.grid.take();
+                self.shadow_dirs = ld.shadow_dirs.take();
                 if let Some(sky) = ld.sky.take() {
                     self.set_sky(sky, ld.sky_hd.take());
                 }
@@ -1875,6 +1888,7 @@ impl TremGame {
 
     fn start_map(&mut self, map: MapId) {
         self.lightgrid = None;
+        self.shadow_dirs = None;
         self.current = CurrentMap::Sheet(map);
         let mut w = World::new(map);
         w.fs = Some(Box::new(crate::hostfs::HostFs::new(&self.pk3_paths)));
@@ -1923,6 +1937,7 @@ impl TremGame {
         self.brush_meshes.clear();
         self.effects = None;
         self.lightgrid = None;
+        self.shadow_dirs = None;
     }
 
     /// Start a level on a new World: effects, audio, server cvars, the
@@ -3174,53 +3189,85 @@ impl TremGame {
         }
     }
 
-    /// Enhanced mode, a BSP map, r_dynamicShadows: the shadow sun (gfx.rs)
-    /// turned to the light grid's direction where the view is. Otherwise
-    /// none (vanilla draws no dynamic shadows).
+    /// Enhanced mode, a BSP map, r_dynamicShadows: the world-fixed shadow
+    /// lights (gfx.rs, lamps.rs). Otherwise none (vanilla draws no dynamic
+    /// shadows).
     fn shadow_sun_on(&self) -> bool {
-        self.client.cvars.integer("r_enhanced") != 0 && self.client.cvars.integer("r_dynamicShadows") != 0 && self.gfx.is_bsp && self.world.is_some() && self.lightgrid.is_some()
+        self.client.cvars.integer("r_enhanced") != 0 && self.client.cvars.integer("r_dynamicShadows") != 0 && self.gfx.is_bsp && self.world.is_some() && self.lightgrid.is_some() && self.shadow_dirs.is_some()
     }
 
+    /// The shadow lights: one along each of the map's light directions that
+    /// light the area around the view (picked four times a second), faded in
+    /// and out (their negative energy), never turned: a shadow keeps its
+    /// direction however the viewer moves.
     fn sync_shadow_sun(&mut self, view: Vector3, dt: f32) {
         use godot::classes::directional_light_3d::ShadowMode;
-        let on = self.shadow_sun_on();
-        if !on {
-            if let Some(mut s) = self.gfx.shadow_sun.take() {
-                if s.is_instance_valid() {
-                    s.queue_free();
+        // Godot draws at most 8 directional lights
+        const MAX_LIGHTS: usize = 8;
+        let mut rs = godot::classes::RenderingServer::singleton();
+        if !self.shadow_sun_on() {
+            if !self.gfx.shadow_lights.is_empty() {
+                for (_, mut l, _) in self.gfx.shadow_lights.drain(..) {
+                    if l.is_instance_valid() {
+                        l.queue_free();
+                    }
                 }
-                godot::classes::RenderingServer::singleton().global_shader_parameter_set(crate::gfx::SHADOW_GLOBAL, &0.0f32.to_variant());
+                rs.global_shader_parameter_set(crate::gfx::SHADOW_GLOBAL, &0.0f32.to_variant());
             }
-            self.gfx.shadow_sun_dir = None;
+            self.gfx.shadow_want.clear();
+            self.gfx.shadow_pick_t = 0.0;
             return;
         }
-        if self.gfx.shadow_sun.as_ref().is_none_or(|s| !s.is_instance_valid()) {
+        self.gfx.shadow_lights.retain(|(_, l, _)| l.is_instance_valid());
+        self.gfx.shadow_pick_t -= dt;
+        if self.gfx.shadow_pick_t <= 0.0 {
+            self.gfx.shadow_pick_t = 0.25;
+            let q = [view.x / crate::geom::SCALE, -view.z / crate::geom::SCALE, view.y / crate::geom::SCALE];
+            let dirs = self.shadow_dirs.as_ref().unwrap();
+            self.gfx.shadow_want = dirs.pick(q, crate::lamps::PICK_RADIUS, crate::lamps::ACTIVE).into_iter().map(|(i, _)| i).collect();
+        }
+        if self.gfx.shadow_lights.is_empty() {
+            rs.global_shader_parameter_set(crate::gfx::SHADOW_GLOBAL, &crate::gfx::SHADOW_STRENGTH.to_variant());
+        }
+        for i in self.gfx.shadow_want.clone() {
+            if self.gfx.shadow_lights.iter().any(|(j, _, _)| *j == i) || self.gfx.shadow_lights.len() >= MAX_LIGHTS {
+                continue;
+            }
+            let d = q2g_dir(&self.shadow_dirs.as_ref().unwrap().dirs[i]).normalized();
             let mut s = DirectionalLight3D::new_alloc();
-            s.set_name("ShadowSun");
+            s.set_name(&format!("ShadowLight{i}"));
             s.set_shadow(true);
+            s.set_color(Color::from_rgb(1.0, 1.0, 1.0));
+            // shadow-only: negative energy marks it for the shaders' light()
+            s.set_param(LightParam::ENERGY, 0.0);
             s.set_cull_mask(crate::gfx::SHADOW_RECEIVER_LAYER);
             s.set("shadow_caster_mask", &((crate::gfx::SHADOW_CASTER_LAYER | crate::gfx::SHADOW_SELF_LAYER) as i64).to_variant());
-            s.set_shadow_mode(ShadowMode::PARALLEL_4_SPLITS);
-            s.set_param(LightParam::SHADOW_MAX_DISTANCE, 40.0);
+            s.set_shadow_mode(ShadowMode::PARALLEL_2_SPLITS);
+            s.set_param(LightParam::SHADOW_MAX_DISTANCE, 30.0);
             s.set_param(LightParam::SHADOW_BIAS, 0.03);
             s.set_param(LightParam::SHADOW_NORMAL_BIAS, 1.0);
             s.set_param(LightParam::SHADOW_BLUR, 1.5);
             s.set_blend_splits(true);
-            self.base_mut().add_child(&s);
-            self.gfx.shadow_sun = Some(s);
-            self.gfx.shadow_sun_dir = None;
-            godot::classes::RenderingServer::singleton().global_shader_parameter_set(crate::gfx::SHADOW_GLOBAL, &crate::gfx::SHADOW_STRENGTH.to_variant());
-        }
-        let q = [view.x / crate::geom::SCALE, -view.z / crate::geom::SCALE, view.y / crate::geom::SCALE];
-        let (_, _, ld) = light_at(self.lightgrid.as_ref(), &q);
-        let d = crate::gfx::shadow_dir(self.gfx.shadow_sun_dir, ld, dt);
-        self.gfx.shadow_sun_dir = Some(d);
-        if let Some(s) = self.gfx.shadow_sun.as_mut() {
             let up = if d.y.abs() > 0.99 { Vector3::FORWARD } else { Vector3::UP };
             // a directional light shines along its -Z: from the light's side
             let x = up.cross(d).normalized();
             s.set_basis(Basis::from_cols(x, d.cross(x).normalized(), d));
+            self.base_mut().add_child(&s);
+            self.gfx.shadow_lights.push((i, s, 0.0));
         }
+        let want = self.gfx.shadow_want.clone();
+        let step = (dt * 3.0).min(1.0);
+        self.gfx.shadow_lights.retain_mut(|(i, l, w)| {
+            let target = if want.contains(i) { 1.0 } else { 0.0 };
+            *w = if target > *w { (*w + step).min(1.0) } else { (*w - step).max(0.0) };
+            if *w <= 0.0 && target == 0.0 {
+                l.queue_free();
+                return false;
+            }
+            // a hair below zero even when faded out: still a shadow light
+            l.set_param(LightParam::ENERGY, -(*w).max(1e-4));
+            true
+        });
     }
 
     /// Enhanced mode: dead players and corpses fall as ragdolls. A ragdoll
@@ -4350,6 +4397,7 @@ impl TremGame {
                         sky: None,
                         sky_hd: None,
                         grid: None,
+                        shadow_dirs: None,
                         then: Vec::new(),
                         cheats: false,
                         mode: LoadMode::Client,
@@ -4421,6 +4469,7 @@ impl TremGame {
         self.build_level(map, ld.meshes.take());
         self.brush_meshes = std::mem::take(&mut ld.brush);
         self.lightgrid = ld.grid.take();
+        self.shadow_dirs = ld.shadow_dirs.take();
         if let Some(sky) = ld.sky.take() {
             self.set_sky(sky, ld.sky_hd.take());
         }
