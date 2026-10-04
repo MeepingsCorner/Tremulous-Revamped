@@ -345,6 +345,21 @@ impl Actor {
         }
     }
 
+    /// The parts a ragdoll is built from: (rig part name, model), in the
+    /// rig's order (the held weapon and upgrades are not part of the body).
+    pub fn body_parts(&self) -> Vec<(&'static str, &ModelInst)> {
+        if self.nonseg {
+            self.parts.first().map(|p| vec![("nonseg", p)]).unwrap_or_default()
+        } else if self.parts.len() >= 3 {
+            vec![("lower", &self.parts[0]), ("upper", &self.parts[1]), ("head", &self.parts[2])]
+        } else {
+            Vec::new()
+        }
+    }
+    pub fn model_scale(&self) -> f32 {
+        self.scale
+    }
+
     pub fn footsteps(&self) -> &str {
         &self.anims.footsteps
     }

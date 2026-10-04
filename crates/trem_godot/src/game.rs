@@ -208,6 +208,13 @@ pub struct TremGame {
     pk3_paths: Vec<String>,
     actors: HashMap<usize, Actor>,
     failed_actors: HashSet<String>,
+    /// enhanced mode: corpses drawn as ragdolls (ragdoll.rs); their
+    /// skeletons (res://data/rigs.txt), the map collider they land on, and
+    /// the push of each victim's killing hit (Godot space, m/s; when)
+    ragdolls: Vec<crate::ragdoll::Ragdoll>,
+    rigs: Option<std::rc::Rc<HashMap<String, crate::ragdoll::Rig>>>,
+    ragdoll_world: Option<Gd<godot::classes::StaticBody3D>>,
+    death_push: HashMap<usize, (Vector3, f64)>,
     hand: Option<ViewHand>,
     audio: Option<Audio>,
     lightgrid: Option<crate::bspview::LightGrid>,
@@ -311,6 +318,10 @@ impl INode3D for TremGame {
             pk3_paths: Vec::new(),
             actors: HashMap::new(),
             failed_actors: HashSet::new(),
+            ragdolls: Vec::new(),
+            rigs: None,
+            ragdoll_world: None,
+            death_push: HashMap::new(),
             hand: None,
             audio: None,
             lightgrid: None,
@@ -778,6 +789,13 @@ impl TremGame {
         self.ghost_model = None;
         self.cgv.reset();
         self.actors.clear();
+        if let Some(mut c) = self.ragdoll_world.take() {
+            c.queue_free();
+        }
+        for r in self.ragdolls.drain(..) {
+            r.free();
+        }
+        self.death_push.clear();
         self.missiles.clear();
         self.flashes.clear();
         self.hand = None;
@@ -1775,7 +1793,7 @@ impl TremGame {
                 let map = w.map;
                 self.gfx.pending_geom = ld.rt_geom.take();
                 self.gfx.pending_fogs = std::mem::take(&mut ld.fogs);
-                self.fmod_scene = ld.acoustic.take();
+                self.set_acoustic(ld.acoustic.take());
                 self.populate_world(w, map, ld.meshes.take(), ld.sessions.take());
                 self.brush_meshes = std::mem::take(&mut ld.brush);
                 self.lightgrid = ld.grid.take();
@@ -1873,6 +1891,10 @@ impl TremGame {
         self.ghost_model = None;
         self.cgv.reset();
         self.actors.clear();
+        for r in self.ragdolls.drain(..) {
+            r.free();
+        }
+        self.death_push.clear();
         self.missiles.clear();
         self.flashes.clear();
         self.hand = None;
@@ -2649,6 +2671,24 @@ impl TremGame {
                 } else {
                     "the world".into()
                 };
+                // the ragdoll's push (enhanced): along attacker -> victim, by weapon
+                if let Some(speed) = MeansOfDeath::from_raw(e.parm as u8).and_then(crate::ragdoll::death_push) {
+                    if victim < MAX_CLIENTS {
+                        let vo = w.clients[victim].ps.origin;
+                        let ao = if attacker >= 0 && (attacker as usize) < w.ents.len() && attacker as usize != victim {
+                            if (attacker as usize) < MAX_CLIENTS { Some(w.clients[attacker as usize].ps.origin) } else { Some(w.ents[attacker as usize].origin) }
+                        } else {
+                            None
+                        };
+                        let dir = ao.map(|a| q2g(&vo) - q2g(&a)).filter(|d| d.length() > 0.01).map(|d| Vector3::new(d.x, 0.0, d.z).normalized()).unwrap_or(Vector3::ZERO);
+                        let push = (dir + Vector3::new(0.0, 0.35, 0.0)) * speed;
+                        self.death_push.insert(victim, (push, self.clock));
+                        for r in self.ragdolls.iter_mut().filter(|r| r.ent == victim && !r.corpse) {
+                            r.push_late(push, self.clock);
+                        }
+                    }
+                }
+                let w = self.world.as_ref().unwrap();
                 let how = MeansOfDeath::from_raw(e.parm as u8).map(|m| m.name()).unwrap_or("?");
                 let line = if attacker == victim as i32 { format!("{vname} killed themself ({how})") } else { format!("{aname} killed {vname} ({how})") };
                 self.feed.push((self.clock, line));
@@ -2916,6 +2956,122 @@ impl TremGame {
         root
     }
 
+    /// A new map's acoustic mesh: for the sound path (fmod_frame) and, as
+    /// the surface ragdolls land on, for physics.
+    fn set_acoustic(&mut self, m: Option<crate::fmodaudio::AcousticMesh>) {
+        if let Some(mut c) = self.ragdoll_world.take() {
+            c.queue_free();
+        }
+        if let Some(a) = m.as_ref().filter(|a| !a.tris.is_empty()) {
+            let body = crate::ragdoll::world_collider(&a.verts, &a.tris);
+            self.base_mut().add_child(&body);
+            self.ragdoll_world = Some(body);
+        }
+        self.fmod_scene = m;
+    }
+
+    /// Enhanced mode: dead players and corpses fall as ragdolls. A ragdoll
+    /// starts at the death (pushed by the killing hit), carries on as the
+    /// server's corpse when it replaces the player, sinks with it and goes
+    /// with it. The original corpse stays where the server has it, hidden:
+    /// the vanilla mode (or F10 back to it) shows it again, unchanged.
+    fn sync_ragdolls(&mut self, me: Option<usize>, first_person: bool) {
+        let on = self.client.cvars.integer("r_enhanced") != 0 && self.client.cvars.integer("r_ragdolls") != 0;
+        if !on || self.world.is_none() || self.lib.is_none() {
+            for r in self.ragdolls.drain(..) {
+                r.free();
+            }
+            return;
+        }
+        if self.rigs.is_none() {
+            let text = godot::classes::FileAccess::get_file_as_string("res://data/rigs.txt").to_string();
+            let rigs = crate::ragdoll::parse_rigs(&text);
+            if rigs.is_empty() {
+                godot_warn!("trem: res://data/rigs.txt missing or empty: no ragdolls");
+            }
+            self.rigs = Some(std::rc::Rc::new(rigs));
+        }
+        let rigs = self.rigs.clone().unwrap();
+        let now = self.clock;
+        let mut new_roots = Vec::new();
+        {
+            let TremGame { world, lib, actors, ragdolls, death_push, lightgrid, .. } = self;
+            let (w, lib) = (world.as_ref().unwrap(), lib.as_ref().unwrap());
+            // dead: PM_DEAD / EF_DEAD (a player waiting to spawn also has no
+            // health, and is not a corpse)
+            let dead_player = |i: usize| -> bool {
+                i < MAX_CLIENTS && w.ents[i].etype == EType::Player && {
+                    let ps = &w.clients[i].ps;
+                    ps.pm_type == trem_sim::gen::enums::PmType::Dead as i32 || ps.e_flags & k::EF_DEAD != 0
+                }
+            };
+            let corpse = |i: usize| i < w.ents.len() && w.ents[i].inuse && w.ents[i].etype == EType::Corpse;
+            // the ragdolls whose body is gone: a corpse freed, a dead player
+            // respawned and not taken over by its corpse within 3 s
+            ragdolls.retain_mut(|r| {
+                let keep = if r.corpse { corpse(r.ent) && actors.contains_key(&r.ent) } else { dead_player(r.ent) || now - r.born < 3.0 };
+                if !keep {
+                    r.free_in_place();
+                }
+                keep
+            });
+            let mut ids: Vec<usize> = actors.keys().copied().collect();
+            ids.sort_unstable();
+            for i in ids {
+                let is_corpse = corpse(i);
+                if !(is_corpse || dead_player(i)) || ragdolls.iter().any(|r| r.ent == i && r.corpse == is_corpse) {
+                    continue;
+                }
+                let a = &actors[&i];
+                if is_corpse {
+                    // the corpse replacing a dying player's ragdoll (CopyToBodyQue)
+                    let at = q2g(&w.ents[i].origin);
+                    if let Some(r) = ragdolls.iter_mut().filter(|r| !r.corpse && r.model_dir == a.model_dir && !dead_player(r.ent)).min_by(|x, y| x.position().distance_to(at).partial_cmp(&y.position().distance_to(at)).unwrap()) {
+                        if r.position().distance_to(at) < 6.0 {
+                            r.ent = i;
+                            r.corpse = true;
+                            r.corpse_z = Some(w.ents[i].origin[2]);
+                            continue;
+                        }
+                    }
+                }
+                let Some(rig) = rigs.get(&a.model_dir) else { continue };
+                let push = if is_corpse { None } else { death_push.get(&i).filter(|(_, t)| now - t < 1.0).map(|(v, _)| *v) };
+                if let Some(mut r) = crate::ragdoll::Ragdoll::build(lib, rig, &a.model_dir, a.model_scale(), &a.body_parts(), i, push, now) {
+                    if is_corpse {
+                        r.corpse = true;
+                        r.corpse_z = Some(w.ents[i].origin[2]);
+                    }
+                    new_roots.push(r.root.clone());
+                    ragdolls.push(r);
+                }
+            }
+            for r in ragdolls.iter_mut() {
+                // the corpse sinks (the server lowers it before freeing it)
+                if let Some(z0) = r.corpse_z {
+                    let below = (z0 - w.ents[r.ent].origin[2]) * crate::geom::SCALE;
+                    if below > 0.01 {
+                        r.sink_to(below);
+                    }
+                }
+                let p = r.position();
+                let q = [p.x / crate::geom::SCALE, -p.z / crate::geom::SCALE, p.y / crate::geom::SCALE];
+                let (amb, dcol, ld) = light_at(lightgrid.as_ref(), &q);
+                r.set_light(amb, dcol, ld);
+                r.set_visible(!(Some(r.ent) == me && first_person && !r.corpse));
+                if let Some(a) = actors.get_mut(&r.ent) {
+                    a.set_visible(false);
+                }
+            }
+        }
+        for n in new_roots {
+            self.base_mut().add_child(&n);
+        }
+        for r in self.ragdolls.iter_mut() {
+            r.start();
+        }
+    }
+
     /// Players, corpses and structures with the original animated models.
     /// Returns the entities drawn this way.
     fn sync_actors(&mut self) -> HashSet<usize> {
@@ -3027,6 +3183,7 @@ impl TremGame {
         for n in new_nodes {
             self.base_mut().add_child(&n);
         }
+        self.sync_ragdolls(me, first_person);
         for s in sounds {
             if let Some(path) = s.path.strip_prefix("@loop:") {
                 // find the actor owning this loop: closest buildable at the origin
@@ -3972,7 +4129,7 @@ impl TremGame {
         self.me = None;
         self.gfx.pending_geom = ld.rt_geom.take();
         self.gfx.pending_fogs = std::mem::take(&mut ld.fogs);
-        self.fmod_scene = ld.acoustic.take();
+        self.set_acoustic(ld.acoustic.take());
         self.build_level(map, ld.meshes.take());
         self.brush_meshes = std::mem::take(&mut ld.brush);
         self.lightgrid = ld.grid.take();
@@ -5071,6 +5228,31 @@ impl TremGame {
     fn fmod_path_far(&self) -> Vector3 {
         Vector3::new(self.fmod_best_path[3], self.fmod_best_path[4], self.fmod_best_path[5])
     }
+    /// Tests: one line per ragdoll: "ent corpse started bones x y z"
+    /// (its root bone, Godot space).
+    #[func]
+    fn ragdoll_info(&self) -> PackedStringArray {
+        self.ragdolls.iter().map(|r| {
+            let p = r.position();
+            GString::from(format!("{} {} {} {} {:.3} {:.3} {:.3}", r.ent, r.corpse as i32, r.started() as i32, r.bone_count(), p.x, p.y, p.z).as_str())
+        }).collect()
+    }
+    /// Tests: the push the next death of `ent` gets (as an obituary would set it).
+    #[func]
+    fn ragdoll_test_push(&mut self, ent: i32, push: Vector3) {
+        self.death_push.insert(ent.max(0) as usize, (push, self.clock));
+    }
+    /// Tests: whether the original (vanilla) model of `ent` is drawn.
+    #[func]
+    fn actor_visible(&self, ent: i32) -> bool {
+        self.actors.get(&(ent.max(0) as usize)).map(|a| a.root_nodes().first().map(|n| n.is_visible()).unwrap_or(false)).unwrap_or(false)
+    }
+    /// Tests: the entity of the local player (-1 none).
+    #[func]
+    fn my_entity(&self) -> i32 {
+        self.me.map(|m| m as i32).unwrap_or(-1)
+    }
+
     /// Tests: freeze the listener where it is (true) or follow the camera.
     #[func]
     fn fmod_lock_listener(&mut self, on: bool) {

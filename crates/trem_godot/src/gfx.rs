@@ -43,6 +43,8 @@ pub const GFX_CVARS: &[(&str, &str)] = &[
     ("r_upscale", "-1"),
     ("r_upscaleScale", "0.77"),
     ("r_dlightShadows", "4"),
+    // r_ragdolls: corpses fall as ragdolls in the enhanced mode (ragdoll.rs)
+    ("r_ragdolls", "1"),
     ("r_modelDebug", "0"),
 ];
 

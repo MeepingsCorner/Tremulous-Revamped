@@ -1,17 +1,16 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene format=3 uid="uid://hcdhiy8wu3ye"]
 
-[ext_resource type="Script" path="res://hud.gd" id="1_hud"]
+[ext_resource type="Script" uid="uid://dblotjqjem2nk" path="res://hud.gd" id="1_hud"]
 
-[node name="Main" type="Node"]
+[node name="Main" type="Node" unique_id=362607630]
 
-[node name="Game" type="TremGame" parent="."]
-bots_per_team = 3
+[node name="Game" type="TremGame" parent="." unique_id=937351440]
 initial_map_rotation = "rotation1"
 
-[node name="HUD" type="CanvasLayer" parent="."]
+[node name="HUD" type="CanvasLayer" parent="." unique_id=2119582135]
 script = ExtResource("1_hud")
 
-[node name="TremHud" type="TremHud" parent="HUD"]
+[node name="TremHud" type="TremHud" parent="HUD" unique_id=1515561774]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -19,7 +18,7 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 
-[node name="TremMenus" type="TremMenus" parent="HUD"]
+[node name="TremMenus" type="TremMenus" parent="HUD" unique_id=1348703253]
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0

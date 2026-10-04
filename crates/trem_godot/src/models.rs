@@ -17,6 +17,15 @@ use godot::prelude::*;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+/// The vertex animation lines of VAT_SHADER (left out of the ragdoll shaders).
+const VAT_VERTEX: &str = "    vec3 pa = texelFetch(pos_tex, ivec2(VERTEX_ID, frame_a), 0).xyz;
+    vec3 pb = texelFetch(pos_tex, ivec2(VERTEX_ID, frame_b), 0).xyz;
+    VERTEX = mix(pb, pa, backlerp);
+    vec3 na = texelFetch(nrm_tex, ivec2(VERTEX_ID, frame_a), 0).xyz;
+    vec3 nb = texelFetch(nrm_tex, ivec2(VERTEX_ID, frame_b), 0).xyz;
+    NORMAL = normalize(mix(nb, na, backlerp));
+";
+
 const VAT_SHADER: &str = r#"
 shader_type spatial;
 // r_gamma 1.3 (a common Tremulous setting): gamma-space result -> linear
@@ -184,6 +193,8 @@ void fragment() {
 const DEPTH_HACK_SCALE: f32 = 0.3;
 
 pub struct SurfRes {
+    /// the surface's index in the MD3 (empty surfaces have no SurfRes)
+    pub md3_index: usize,
     pub name: String,
     pub shader: String,
     pub mesh: Gd<ArrayMesh>,
@@ -247,6 +258,11 @@ pub struct Library {
     vat: Gd<Shader>,
     vat_add: Gd<Shader>,
     vat_mix: Gd<Shader>,
+    /// the same three for ragdolls (ragdoll.rs): the skinned mesh's own
+    /// vertices instead of the animation textures
+    rag: Gd<Shader>,
+    rag_add: Gd<Shader>,
+    rag_mix: Gd<Shader>,
     white: Gd<Texture2D>,
     default_tex: Option<Gd<Texture2D>>,
 }
@@ -268,7 +284,9 @@ impl Library {
         let vat_add = mk(VAT_SHADER.replace("render_mode cull_disabled, depth_draw_opaque;\n#define ENHANCED_LIT", "render_mode cull_disabled, unshaded, blend_add, depth_draw_never;").replace("if (alpha_test && c.a < 0.5) { discard; }", "").replace("min(amb + dcol * max(dot(n, ldir), 0.0), vec3(1.0))", "vec3(0.5)"));
         let vat_mix = mk(VAT_SHADER.replace("render_mode cull_disabled, depth_draw_opaque;\n#define ENHANCED_LIT", "render_mode cull_disabled, unshaded, blend_mix, depth_draw_never;").replace("if (alpha_test && c.a < 0.5) { discard; }", "ALPHA = c.a;"));
         let white = crate::assets::flat_texture(Color::from_rgb(1.0, 1.0, 1.0)).upcast::<Texture2D>();
-        Some(Library { pk3, shader_images, vat_add, vat_mix, textures: HashMap::new(), models: HashMap::new(), skins: HashMap::new(), anims: HashMap::new(), sounds: HashMap::new(), weapons: HashMap::new(), buildables: HashMap::new(), vat, white, default_tex: None })
+        let rag_of = |sh: &Gd<Shader>| mk(sh.get_code().to_string().replace(VAT_VERTEX, ""));
+        let (rag, rag_add, rag_mix) = (rag_of(&vat), rag_of(&vat_add), rag_of(&vat_mix));
+        Some(Library { pk3, shader_images, vat_add, vat_mix, rag, rag_add, rag_mix, textures: HashMap::new(), models: HashMap::new(), skins: HashMap::new(), anims: HashMap::new(), sounds: HashMap::new(), weapons: HashMap::new(), buildables: HashMap::new(), vat, white, default_tex: None })
     }
 
     pub fn text(&mut self, path: &str) -> Option<String> {
@@ -502,10 +520,27 @@ impl Library {
         self.pk3.contains(path)
     }
 
+    /// A model material's ragdoll copy: the same uniforms, the ragdoll
+    /// variant of its shader.
+    pub fn ragdoll_material(&self, m: &Gd<ShaderMaterial>) -> Gd<ShaderMaterial> {
+        let mut c = m.duplicate_resource();
+        let sh = m.get_shader();
+        let rag = if sh.as_ref() == Some(&self.vat_add) {
+            &self.rag_add
+        } else if sh.as_ref() == Some(&self.vat_mix) {
+            &self.rag_mix
+        } else {
+            &self.rag
+        };
+        c.set_shader(rag);
+        c
+    }
+
     /// Instance a model with an optional skin (surface name -> image).
     pub fn instance(&mut self, res: &Rc<ModelRes>, skin: Option<&HashMap<String, String>>) -> ModelInst {
         let mut root = Node3D::new_alloc();
         let mut mis = Vec::new();
+        let mut mis_surf = Vec::new();
         for s in &res.surfs {
             let img = skin.and_then(|sk| sk.get(&s.name.to_lowercase()).cloned()).unwrap_or_else(|| s.shader.clone());
             if img.to_lowercase().starts_with("gfx/null") {
@@ -563,8 +598,9 @@ impl Library {
             mi.set_material_override(&mat);
             root.add_child(&mi);
             mis.push((mi, mat));
+            mis_surf.push(s.md3_index);
         }
-        ModelInst { root, mis, res: res.clone(), last: (-1, -1, -1.0) }
+        ModelInst { root, mis, mis_surf, res: res.clone(), last: (-1, -1, -1.0) }
     }
 }
 
@@ -582,7 +618,7 @@ fn build_res(m: Md3) -> ModelRes {
     let hi = Vector3::new(a.x.max(b.x), a.y.max(b.y), a.z.max(b.z));
     let aabb = Aabb::new(lo - Vector3::splat(0.1), hi - lo + Vector3::splat(0.2));
     let mut surfs = Vec::new();
-    for s in &m.surfaces {
+    for (md3_index, s) in m.surfaces.iter().enumerate() {
         let nv = s.st.len();
         if nv == 0 || s.triangles.is_empty() {
             continue;
@@ -620,7 +656,7 @@ fn build_res(m: Md3) -> ModelRes {
         let mut mesh = ArrayMesh::new_gd();
         mesh.add_surface_from_arrays(PrimitiveType::TRIANGLES, &arrays);
         mesh.set_custom_aabb(aabb);
-        surfs.push(SurfRes { name: s.name.clone(), shader: s.shaders.first().cloned().unwrap_or_default(), mesh, pos, nrm });
+        surfs.push(SurfRes { md3_index, name: s.name.clone(), shader: s.shaders.first().cloned().unwrap_or_default(), mesh, pos, nrm });
     }
     ModelRes { md3: m, surfs }
 }
@@ -629,6 +665,8 @@ fn build_res(m: Md3) -> ModelRes {
 pub struct ModelInst {
     pub root: Gd<Node3D>,
     mis: Vec<(Gd<MeshInstance3D>, Gd<ShaderMaterial>)>,
+    /// the MD3 surface of each entry of `mis`
+    mis_surf: Vec<usize>,
     pub res: Rc<ModelRes>,
     last: (i32, i32, f32),
 }
@@ -636,6 +674,14 @@ pub struct ModelInst {
 impl ModelInst {
     pub fn mesh_count(&self) -> usize {
         self.mis.len()
+    }
+    /// The frames drawn now: (old, new, backlerp), as `set_frames` clamped them.
+    pub fn frames(&self) -> (i32, i32, f32) {
+        self.last
+    }
+    /// The surfaces drawn (MD3 surface index, material).
+    pub fn drawn(&self) -> impl Iterator<Item = (usize, &Gd<ShaderMaterial>)> {
+        self.mis_surf.iter().copied().zip(self.mis.iter().map(|(_, m)| m))
     }
 }
 
@@ -775,5 +821,16 @@ mod sss_tests {
         assert_eq!(sss_class("models/buildables/reactor/reactor.tga"), None);
         assert_eq!(sss_class("models/buildables/mgturret/turret.tga"), None);
         assert_eq!(sss_class("models/weapons/rifle/rifle.tga"), None);
+    }
+}
+
+#[cfg(test)]
+mod ragdoll_shader_tests {
+    #[test]
+    fn the_ragdoll_shaders_drop_the_vertex_animation() {
+        // Library::open builds the ragdoll shaders by removing VAT_VERTEX
+        assert!(super::VAT_SHADER.contains(super::VAT_VERTEX));
+        let rag = super::VAT_SHADER.replace(super::VAT_VERTEX, "");
+        assert!(!rag.contains("texelFetch(pos_tex") && rag.contains("void vertex()") && rag.contains("POSITION ="));
     }
 }
