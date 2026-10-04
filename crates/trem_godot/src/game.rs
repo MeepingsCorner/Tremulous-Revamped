@@ -214,6 +214,17 @@ pub struct TremGame {
     ragdolls: Vec<crate::ragdoll::Ragdoll>,
     rigs: Option<std::rc::Rc<HashMap<String, crate::ragdoll::Rig>>>,
     ragdoll_world: Option<Gd<godot::classes::StaticBody3D>>,
+    /// what ragdolls collide with, built only while they are on (enhanced):
+    /// the map's solid brushes, the movers' (riding with them) and the
+    /// structures' boxes; the hulls are kept from the map load
+    ragdoll_brushes: Option<Gd<godot::classes::StaticBody3D>>,
+    ragdoll_movers: HashMap<usize, Gd<godot::classes::AnimatableBody3D>>,
+    ragdoll_solids: HashMap<usize, (String, Gd<godot::classes::StaticBody3D>)>,
+    world_hulls: std::rc::Rc<Vec<Vec<Vector3>>>,
+    /// the map's drawn opaque triangles (the acoustic mesh's, which FMOD
+    /// takes): the ragdolls' surface collider
+    world_tris: std::rc::Rc<(Vec<[f32; 3]>, Vec<[i32; 3]>)>,
+    mover_hulls: std::rc::Rc<HashMap<i32, Vec<Vec<Vector3>>>>,
     death_push: HashMap<usize, (Vector3, f64)>,
     /// each living player's last velocity (Godot space, m/s): a ragdoll
     /// carries on with the momentum its body had
@@ -324,6 +335,12 @@ impl INode3D for TremGame {
             ragdolls: Vec::new(),
             rigs: None,
             ragdoll_world: None,
+            ragdoll_brushes: None,
+            ragdoll_movers: HashMap::new(),
+            ragdoll_solids: HashMap::new(),
+            world_hulls: Default::default(),
+            world_tris: Default::default(),
+            mover_hulls: Default::default(),
             death_push: HashMap::new(),
             alive_vel: HashMap::new(),
             hand: None,
@@ -793,12 +810,7 @@ impl TremGame {
         self.ghost_model = None;
         self.cgv.reset();
         self.actors.clear();
-        if let Some(mut c) = self.ragdoll_world.take() {
-            c.queue_free();
-        }
-        for r in self.ragdolls.drain(..) {
-            r.free();
-        }
+        self.free_ragdolls();
         self.death_push.clear();
         self.alive_vel.clear();
         self.missiles.clear();
@@ -1798,7 +1810,7 @@ impl TremGame {
                 let map = w.map;
                 self.gfx.pending_geom = ld.rt_geom.take();
                 self.gfx.pending_fogs = std::mem::take(&mut ld.fogs);
-                self.set_acoustic(ld.acoustic.take());
+                self.set_acoustic(ld.acoustic.take(), &ld.bsp);
                 self.populate_world(w, map, ld.meshes.take(), ld.sessions.take());
                 self.brush_meshes = std::mem::take(&mut ld.brush);
                 self.lightgrid = ld.grid.take();
@@ -1896,9 +1908,7 @@ impl TremGame {
         self.ghost_model = None;
         self.cgv.reset();
         self.actors.clear();
-        for r in self.ragdolls.drain(..) {
-            r.free();
-        }
+        self.free_ragdolls();
         self.death_push.clear();
         self.alive_vel.clear();
         self.missiles.clear();
@@ -2964,16 +2974,98 @@ impl TremGame {
 
     /// A new map's acoustic mesh: for the sound path (fmod_frame) and, as
     /// the surface ragdolls land on, for physics.
-    fn set_acoustic(&mut self, m: Option<crate::fmodaudio::AcousticMesh>) {
-        if let Some(mut c) = self.ragdoll_world.take() {
+    /// A new map's acoustic mesh (also the drawn-surface collider of the
+    /// ragdolls) and solid brushes (the ragdolls' brush colliders).
+    fn set_acoustic(&mut self, m: Option<crate::fmodaudio::AcousticMesh>, bsp: &trem_sim::kernel::bsp::Bsp) {
+        self.free_ragdolls();
+        self.world_hulls = std::rc::Rc::new(crate::ragdoll::bsp_hulls(bsp, 0));
+        self.world_tris = std::rc::Rc::new(m.as_ref().map(|a| (a.verts.clone(), a.tris.clone())).unwrap_or_default());
+        self.mover_hulls = std::rc::Rc::new((1..bsp.models.len()).map(|i| (i as i32, crate::ragdoll::bsp_hulls(bsp, i))).filter(|(_, h)| !h.is_empty()).collect());
+        self.fmod_scene = m;
+    }
+
+    /// Every ragdoll and every body they collide with (vanilla has none).
+    fn free_ragdolls(&mut self) {
+        for r in self.ragdolls.drain(..) {
+            r.free();
+        }
+        for mut c in self.ragdoll_world.take().into_iter().chain(self.ragdoll_brushes.take()) {
             c.queue_free();
         }
-        if let Some(a) = m.as_ref().filter(|a| !a.tris.is_empty()) {
-            let body = crate::ragdoll::world_collider(&a.verts, &a.tris);
-            self.base_mut().add_child(&body);
-            self.ragdoll_world = Some(body);
+        for (_, mut c) in self.ragdoll_movers.drain() {
+            if c.is_instance_valid() {
+                c.queue_free();
+            }
         }
-        self.fmod_scene = m;
+        for (_, (_, mut c)) in self.ragdoll_solids.drain() {
+            c.queue_free();
+        }
+    }
+
+    /// The environment ragdolls collide with: the map (drawn surfaces and
+    /// solid brushes), doors / lifts moving with their entities, structures.
+    fn sync_ragdoll_world(&mut self) {
+        if self.ragdoll_world.is_none() {
+            if !self.world_tris.1.is_empty() {
+                let body = crate::ragdoll::world_collider(&self.world_tris.0, &self.world_tris.1);
+                self.base_mut().add_child(&body);
+                self.ragdoll_world = Some(body);
+            }
+        }
+        if self.ragdoll_brushes.is_none() && !self.world_hulls.is_empty() {
+            let body = crate::ragdoll::brush_collider(&self.world_hulls);
+            self.base_mut().add_child(&body);
+            self.ragdoll_brushes = Some(body);
+        }
+        let Some(w) = self.world.as_ref() else { return };
+        // movers: under their drawn node, so they move (and push) with it
+        self.ragdoll_movers.retain(|i, b| {
+            let keep = b.is_instance_valid() && w.ents.get(*i).is_some_and(|e| e.inuse && e.etype == EType::Mover && e.bmodel);
+            if !keep && b.is_instance_valid() {
+                b.queue_free();
+            }
+            keep
+        });
+        for i in 0..w.num_entities {
+            let e = &w.ents[i];
+            if !e.inuse || e.etype != EType::Mover || !e.bmodel || self.ragdoll_movers.contains_key(&i) {
+                continue;
+            }
+            let (Some(h), Some(mut node)) = (self.mover_hulls.get(&e.model_index), self.mapents.brush_node(i)) else { continue };
+            let body = crate::ragdoll::mover_collider(h);
+            node.add_child(&body);
+            self.ragdoll_movers.insert(i, body);
+        }
+        // structures: their server box
+        let mut seen = HashSet::new();
+        let mut add = Vec::new();
+        for i in MAX_CLIENTS..w.num_entities {
+            let e = &w.ents[i];
+            if !e.inuse || e.etype != EType::Buildable || !e.linked || e.maxs[0] <= e.mins[0] {
+                continue;
+            }
+            seen.insert(i);
+            let key = format!("{:?}{:?}{:?}", e.origin, e.mins, e.maxs);
+            if self.ragdoll_solids.get(&i).is_some_and(|(k, _)| *k == key) {
+                continue;
+            }
+            let lo = q2g(&[e.origin[0] + e.mins[0], e.origin[1] + e.mins[1], e.origin[2] + e.mins[2]]);
+            let hi = q2g(&[e.origin[0] + e.maxs[0], e.origin[1] + e.maxs[1], e.origin[2] + e.maxs[2]]);
+            let body = crate::ragdoll::box_collider((lo + hi) * 0.5, (hi - lo).abs());
+            if let Some((_, mut old)) = self.ragdoll_solids.insert(i, (key, body.clone())) {
+                old.queue_free();
+            }
+            add.push(body);
+        }
+        let gone: Vec<usize> = self.ragdoll_solids.keys().copied().filter(|i| !seen.contains(i)).collect();
+        for i in gone {
+            if let Some((_, mut b)) = self.ragdoll_solids.remove(&i) {
+                b.queue_free();
+            }
+        }
+        for b in add {
+            self.base_mut().add_child(&b);
+        }
     }
 
     /// Enhanced mode: dead players and corpses fall as ragdolls. A ragdoll
@@ -2984,11 +3076,13 @@ impl TremGame {
     fn sync_ragdolls(&mut self, me: Option<usize>, first_person: bool) {
         let on = self.client.cvars.integer("r_enhanced") != 0 && self.client.cvars.integer("r_ragdolls") != 0;
         if !on || self.world.is_none() || self.lib.is_none() {
-            for r in self.ragdolls.drain(..) {
-                r.free();
+            // vanilla: no ragdoll and no physics body at all
+            if !self.ragdolls.is_empty() || self.ragdoll_world.is_some() || self.ragdoll_brushes.is_some() || !self.ragdoll_movers.is_empty() || !self.ragdoll_solids.is_empty() {
+                self.free_ragdolls();
             }
             return;
         }
+        self.sync_ragdoll_world();
         if self.rigs.is_none() {
             let text = godot::classes::FileAccess::get_file_as_string("res://data/rigs.txt").to_string();
             let rigs = crate::ragdoll::parse_rigs(&text);
@@ -3063,7 +3157,9 @@ impl TremGame {
                     let v = crate::ragdoll::death_velocity([alive.x, alive.y, alive.z], [dying.x, dying.y, dying.z], [hit.x, hit.y, hit.z]);
                     Some(Vector3::new(v[0], v[1], v[2]))
                 };
-                if let Some(mut r) = crate::ragdoll::Ragdoll::build(lib, rig, &a.model_dir, a.model_scale(), &a.body_parts(), i, push, now) {
+                // the least used self-collision layer
+                let layer = (0..crate::ragdoll::SELF_LAYERS).map(crate::ragdoll::self_layer).min_by_key(|l| ragdolls.iter().filter(|r| r.layer == *l).count()).unwrap();
+                if let Some(mut r) = crate::ragdoll::Ragdoll::build(lib, rig, &a.model_dir, a.model_scale(), &a.body_parts(), i, push, now, layer) {
                     if is_corpse {
                         r.corpse = true;
                         r.corpse_z = Some(w.ents[i].origin[2]);
@@ -4155,7 +4251,7 @@ impl TremGame {
         self.me = None;
         self.gfx.pending_geom = ld.rt_geom.take();
         self.gfx.pending_fogs = std::mem::take(&mut ld.fogs);
-        self.set_acoustic(ld.acoustic.take());
+        self.set_acoustic(ld.acoustic.take(), &ld.bsp);
         self.build_level(map, ld.meshes.take());
         self.brush_meshes = std::mem::take(&mut ld.brush);
         self.lightgrid = ld.grid.take();
@@ -5262,6 +5358,20 @@ impl TremGame {
             let p = r.position();
             GString::from(format!("{} {} {} {} {:.3} {:.3} {:.3}", r.ent, r.corpse as i32, r.started() as i32, r.bone_count(), p.x, p.y, p.z).as_str())
         }).collect()
+    }
+    /// Tests: per ragdoll "worst_overlap_m colliding_pairs".
+    #[func]
+    fn ragdoll_overlaps(&self) -> PackedStringArray {
+        self.ragdolls.iter().filter(|r| r.started() && r.root.is_inside_tree()).map(|r| {
+            let (o, n) = r.worst_overlap();
+            GString::from(format!("{o:.3} {n}").as_str())
+        }).collect()
+    }
+    /// Tests: the ragdolls' colliders: [map surfaces, map brushes, brush
+    /// hulls, movers, structures].
+    #[func]
+    fn ragdoll_colliders(&self) -> PackedInt32Array {
+        PackedInt32Array::from(&[self.ragdoll_world.is_some() as i32, self.ragdoll_brushes.is_some() as i32, self.world_hulls.len() as i32, self.ragdoll_movers.len() as i32, self.ragdoll_solids.len() as i32][..])
     }
     /// Tests: the push the next death of `ent` gets (as an obituary would set it).
     #[func]

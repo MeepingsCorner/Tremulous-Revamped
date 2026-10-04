@@ -154,6 +154,14 @@ func _run() -> void:
 	var stood: float = death_at.z / 32.0
 	_check("it stays on the floor", p2.y > stood - 1.5, "fell %.2f (start y %.2f, now %.2f, stood at %.2f)" % [start.y - p2.y, start.y, p2.y, stood])
 	_check("it comes to rest", p2.distance_to(p1) < 0.1, "moved %.3f in the last second" % p2.distance_to(p1))
+	# a limb does not pass through the body (self-collision), at rest
+	var ov: PackedStringArray = game.ragdoll_overlaps()
+	if not ov.is_empty():
+		var o := ov[0].split(" ")
+		_check("its limbs do not pass through its body", float(o[0]) < 0.06 and int(o[1]) > 0, "deepest overlap %s m over %s colliding bone pairs" % [o[0], o[1]])
+	# what it collides with: the map's surfaces and brushes, the structures
+	var cl: PackedInt32Array = game.ragdoll_colliders()
+	_check("the environment collides: map, brushes, structures", cl[0] == 1 and cl[1] == 1 and cl[2] > 0 and cl[4] > 0, "colliders %s" % [cl])
 	# it travels away from where the server has the body
 	var server_body := Vector2(death_at.x / 32.0, -death_at.y / 32.0)
 	var travelled := Vector2(p2.x, p2.z).distance_to(server_body)
@@ -173,6 +181,8 @@ func _run() -> void:
 	await _wait(0.4)
 	for l in game.actor_info():
 		print("rag: vanilla actor ", l)
+	var vcl: PackedInt32Array = game.ragdoll_colliders()
+	_check("vanilla: no physics bodies at all", vcl[0] == 0 and vcl[1] == 0 and vcl[3] == 0 and vcl[4] == 0, "colliders %s" % [vcl])
 	var body: Vector3 = _body_near(me, death_at)
 	_check("vanilla: no ragdoll, the original corpse back where it died", _info().is_empty() and body.x < 1e8, "ragdolls %d, death at %s, our body drawn %s, nearest corpse %s" % [_info().size(), death_at, game.actor_visible(me), body])
 	await _shot(4)

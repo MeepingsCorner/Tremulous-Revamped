@@ -379,6 +379,92 @@ pub fn class_mass(model_dir: &str) -> f32 {
     }
 }
 
+/// The corners of a convex brush (the planes' inside, `n.p <= d`): every
+/// triple of planes that meets at a point inside all the others.
+pub fn brush_hull(planes: &[[f32; 4]]) -> Vec<V3> {
+    let n = planes.len();
+    let mut out: Vec<V3> = Vec::new();
+    let nv = |p: &[f32; 4]| [p[0], p[1], p[2]];
+    for i in 0..n {
+        for j in i + 1..n {
+            for k in j + 1..n {
+                let (a, b, c) = (nv(&planes[i]), nv(&planes[j]), nv(&planes[k]));
+                let bc = cross(b, c);
+                let det = dot(a, bc);
+                if det.abs() < 1e-6 {
+                    continue;
+                }
+                // p = (d1 (b x c) + d2 (c x a) + d3 (a x b)) / det
+                let p = scale(add(add(scale(bc, planes[i][3]), scale(cross(c, a), planes[j][3])), scale(cross(a, b), planes[k][3])), 1.0 / det);
+                if planes.iter().all(|q| dot(nv(q), p) <= q[3] + 0.05) && !out.iter().any(|o| len(sub(*o, p)) < 0.05) {
+                    out.push(p);
+                }
+            }
+        }
+    }
+    out
+}
+
+fn cross(a: V3, b: V3) -> V3 {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
+/// The closest distance between segments a0-a1 and b0-b1.
+pub fn segment_distance(a0: V3, a1: V3, b0: V3, b1: V3) -> f32 {
+    let (d1, d2, r) = (sub(a1, a0), sub(b1, b0), sub(a0, b0));
+    let (a, e, f) = (dot(d1, d1), dot(d2, d2), dot(d2, r));
+    let (s, t);
+    if a < 1e-9 && e < 1e-9 {
+        return len(r);
+    }
+    if a < 1e-9 {
+        s = 0.0;
+        t = (f / e).clamp(0.0, 1.0);
+    } else {
+        let c = dot(d1, r);
+        if e < 1e-9 {
+            t = 0.0;
+            s = (-c / a).clamp(0.0, 1.0);
+        } else {
+            let b = dot(d1, d2);
+            let den = a * e - b * b;
+            let s0 = if den > 1e-9 { ((b * f - c * e) / den).clamp(0.0, 1.0) } else { 0.0 };
+            let t0 = (b * s0 + f) / e;
+            if t0 < 0.0 {
+                t = 0.0;
+                s = (-c / a).clamp(0.0, 1.0);
+            } else if t0 > 1.0 {
+                t = 1.0;
+                s = ((b - c) / a).clamp(0.0, 1.0);
+            } else {
+                t = t0;
+                s = s0;
+            }
+        }
+    }
+    len(sub(add(a0, scale(d1, s)), add(b0, scale(d2, t))))
+}
+
+/// The bone pairs of one ragdoll that must not collide with each other: a
+/// bone and its parent (they meet at the joint), and pairs whose capsules
+/// (segment, radius) already sink into each other in the death pose by more
+/// than a quarter of the thinner one (they would fly apart). Every other
+/// pair collides: a limb cannot pass through the body.
+pub fn self_collision_exceptions(caps: &[(V3, V3, f32)], parents: &[Option<usize>]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    for a in 0..caps.len() {
+        for b in a + 1..caps.len() {
+            let linked = parents[a] == Some(b) || parents[b] == Some(a);
+            let (ra, rb) = (caps[a].2, caps[b].2);
+            let d = segment_distance(caps[a].0, caps[a].1, caps[b].0, caps[b].1);
+            if linked || d < ra + rb - 0.25 * ra.min(rb) {
+                out.push((a, b));
+            }
+        }
+    }
+    out
+}
+
 // =====================================================================
 // the Godot side
 // =====================================================================
@@ -387,12 +473,20 @@ use crate::geom::{q2g, q2g_dir};
 use crate::models::{Library, ModelInst};
 use godot::classes::mesh::{ArrayType, PrimitiveType};
 use godot::classes::physical_bone_3d::JointType;
-use godot::classes::{ArrayMesh, CapsuleShape3D, CollisionShape3D, ConcavePolygonShape3D, MeshInstance3D, Node3D, PhysicalBone3D, PhysicalBoneSimulator3D, ShaderMaterial, Skeleton3D, StaticBody3D};
+use godot::classes::{AnimatableBody3D, ArrayMesh, BoxShape3D, CapsuleShape3D, CollisionObject3D, CollisionShape3D, ConcavePolygonShape3D, ConvexPolygonShape3D, MeshInstance3D, Node3D, PhysicalBone3D, PhysicalBoneSimulator3D, ShaderMaterial, Skeleton3D, StaticBody3D};
 use godot::prelude::*;
 
-/// Ragdoll bodies collide with the world only (not with each other).
+/// The world (map, movers, structures) is layer 1. Each ragdoll's bones are
+/// on one of the other 31 layers and collide with the world and their own
+/// layer only: a body collides with itself, never with other corpses (nor
+/// with players, who have no physics bodies). Past 31 ragdolls at once,
+/// two may share a layer.
 pub const LAYER_WORLD: u32 = 1;
-pub const LAYER_RAGDOLL: u32 = 2;
+pub const SELF_LAYERS: usize = 31;
+/// The layer bit of self-collision slot `slot` (0..SELF_LAYERS).
+pub fn self_layer(slot: usize) -> u32 {
+    2u32 << (slot % SELF_LAYERS)
+}
 /// The game's gravity (800 units/s^2 = 25 m/s^2) over Godot's default 9.8.
 const GRAVITY_SCALE: f32 = 25.0 / 9.8;
 
@@ -442,6 +536,77 @@ pub fn world_collider(verts: &[V3], tris: &[[i32; 3]]) -> Gd<StaticBody3D> {
     body
 }
 
+/// Convex hulls (Godot space) as shapes of one collision object, without a
+/// node per shape.
+fn add_hulls(body: &Gd<CollisionObject3D>, hulls: &[Vec<Vector3>]) {
+    let mut co = body.clone();
+    let owner = co.create_shape_owner(&body.clone().upcast::<Object>());
+    for h in hulls.iter().filter(|h| h.len() >= 4) {
+        let mut shape = ConvexPolygonShape3D::new_gd();
+        shape.set_points(&h.iter().copied().collect::<PackedVector3Array>());
+        co.shape_owner_add_shape(owner, &shape);
+    }
+}
+
+/// The map's solid brushes (what corpses collide with in the game, CONTENTS_SOLID
+/// and PLAYERCLIP), as a static body: grates and clips the drawn mesh misses.
+pub fn brush_collider(hulls: &[Vec<Vector3>]) -> Gd<StaticBody3D> {
+    let mut body = StaticBody3D::new_alloc();
+    body.set_name("RagdollBrushes");
+    body.set_collision_layer(LAYER_WORLD);
+    body.set_collision_mask(0);
+    add_hulls(&body.clone().upcast(), hulls);
+    body
+}
+
+/// A door, lift or platform's brushes: added under its drawn node, it moves
+/// with it and pushes and carries the ragdolls it meets.
+pub fn mover_collider(hulls: &[Vec<Vector3>]) -> Gd<AnimatableBody3D> {
+    let mut body = AnimatableBody3D::new_alloc();
+    body.set_name("RagdollMover");
+    body.set_sync_to_physics(false);
+    body.set_collision_layer(LAYER_WORLD);
+    body.set_collision_mask(0);
+    add_hulls(&body.clone().upcast(), hulls);
+    body
+}
+
+/// The solid brushes (CONTENTS_SOLID | CONTENTS_PLAYERCLIP: MASK_DEADSOLID,
+/// what a corpse is clipped against) of inline model `model` as convex
+/// hulls, Godot space (a mover's in its own model space).
+pub fn bsp_hulls(bsp: &trem_sim::kernel::bsp::Bsp, model: usize) -> Vec<Vec<Vector3>> {
+    const DEADSOLID: i32 = 1 | 0x10000;
+    let Some(m) = bsp.models.get(model) else { return Vec::new() };
+    let mut out = Vec::new();
+    for b in m.first_brush..m.first_brush + m.num_brushes {
+        let Some(br) = bsp.brushes.get(b as usize) else { continue };
+        if bsp.shaders.get(br.shader as usize).map(|s| s.content_flags & DEADSOLID == 0).unwrap_or(true) {
+            continue;
+        }
+        let planes: Vec<[f32; 4]> = (br.first_side..br.first_side + br.num_sides).filter_map(|i| bsp.brush_sides.get(i as usize)).filter_map(|sd| bsp.planes.get(sd.plane as usize).copied()).collect();
+        let h = brush_hull(&planes);
+        if h.len() >= 4 {
+            out.push(h.iter().map(|p| q2g(p)).collect());
+        }
+    }
+    out
+}
+
+/// A structure's box (its server bounding box, Godot space).
+pub fn box_collider(centre: Vector3, size: Vector3) -> Gd<StaticBody3D> {
+    let mut shape = BoxShape3D::new_gd();
+    shape.set_size(size);
+    let mut cs = CollisionShape3D::new_alloc();
+    cs.set_shape(&shape);
+    let mut body = StaticBody3D::new_alloc();
+    body.set_name("RagdollSolid");
+    body.set_collision_layer(LAYER_WORLD);
+    body.set_collision_mask(0);
+    body.add_child(&cs);
+    body.set_position(centre);
+    body
+}
+
 /// A ragdoll in the scene.
 pub struct Ragdoll {
     /// the entity it draws (the dying player, then its corpse)
@@ -466,12 +631,18 @@ pub struct Ragdoll {
     /// where the server has the body (Godot space): the ragdoll travels
     /// away from it, the corpse entity that takes over spawns at it
     pub server_pos: Vector3,
+    /// its self-collision layer bit
+    pub layer: u32,
+    /// each bone's capsule (core half length, radius) and the bone pairs
+    /// that collide with each other (tests: `worst_overlap`)
+    caps: Vec<(f32, f32)>,
+    colliding: Vec<(usize, usize)>,
 }
 
 impl Ragdoll {
     /// Build a ragdoll of `parts` (the actor's body parts as drawn now).
     /// Not yet simulating: add `root` to the scene, then `start` it.
-    pub fn build(lib: &Library, rig: &Rig, model_dir: &str, model_scale: f32, parts: &[(&str, &ModelInst)], ent: usize, push: Option<Vector3>, now: f64) -> Option<Ragdoll> {
+    pub fn build(lib: &Library, rig: &Rig, model_dir: &str, model_scale: f32, parts: &[(&str, &ModelInst)], ent: usize, push: Option<Vector3>, now: f64, layer: u32) -> Option<Ragdoll> {
         let nb = rig.bones.len();
         if nb == 0 || parts.is_empty() {
             return None;
@@ -629,6 +800,8 @@ impl Ragdoll {
         let total: usize = per_bone.iter().map(|(r, _)| r.len()).sum::<usize>().max(1);
         let mass = class_mass(model_dir);
         let mut pbs = Vec::new();
+        let mut caps: Vec<(V3, V3, f32)> = Vec::new();
+        let mut cap_dims: Vec<(f32, f32)> = Vec::new();
         for b in 0..nb {
             let inv = global[b].affine_inverse();
             let local: Vec<V3> = per_bone[b].1.iter().map(|w| v3(inv * gv(*w))).collect();
@@ -636,6 +809,11 @@ impl Ragdoll {
             let mut cap = CapsuleShape3D::new_gd();
             cap.set_radius(rad);
             cap.set_height(height.max(2.0 * rad + 0.01));
+            // the capsule's core segment, world space (self-collision pairs)
+            let half = (height.max(2.0 * rad + 0.01) * 0.5 - rad).max(0.0);
+            let (e0, e1) = (global[b] * gv(add(centre, scale(axis, half))), global[b] * gv(sub(centre, scale(axis, half))));
+            caps.push((v3(e0), v3(e1), rad));
+            cap_dims.push((half, rad));
             let mut cs = CollisionShape3D::new_alloc();
             cs.set_shape(&cap);
             let body_offset = Transform3D::new(basis_y(axis), gv(centre));
@@ -659,17 +837,23 @@ impl Ragdoll {
             pb.set_linear_damp(0.05);
             pb.set_angular_damp(1.5);
             pb.set_gravity_scale(GRAVITY_SCALE);
-            pb.set_collision_layer(LAYER_RAGDOLL);
-            pb.set_collision_mask(LAYER_WORLD);
+            pb.set_collision_layer(layer);
+            pb.set_collision_mask(LAYER_WORLD | layer);
             pb.add_child(&cs);
             sim.add_child(&pb);
             pbs.push(pb);
         }
+        let except = self_collision_exceptions(&caps, &parents);
+        for &(a, b) in &except {
+            let other = pbs[b].clone();
+            pbs[a].add_collision_exception_with(&other);
+        }
+        let colliding: Vec<(usize, usize)> = (0..nb).flat_map(|a| (a + 1..nb).map(move |b| (a, b))).filter(|p| !except.contains(p)).collect();
         let mut root = Node3D::new_alloc();
         root.set_name(&format!("Ragdoll{ent}"));
         root.add_child(&skel);
         let start_pos = gv(joints[0]);
-        Some(Ragdoll { ent, corpse: false, model_dir: model_dir.to_string(), root, skel, sim, bones: pbs, mats, started: false, push, born: now, start_pos, corpse_z: None, sunk: 0.0, server_pos: start_pos })
+        Some(Ragdoll { ent, corpse: false, model_dir: model_dir.to_string(), root, skel, sim, bones: pbs, mats, started: false, push, born: now, start_pos, corpse_z: None, sunk: 0.0, server_pos: start_pos, layer, caps: cap_dims, colliding })
     }
 
     /// Start the simulation (once `root` is in the scene) and give it the
@@ -686,6 +870,22 @@ impl Ragdoll {
                 pb.apply_central_impulse(v * m);
             }
         }
+    }
+
+    /// How deep (m) the deepest pair of its colliding bones sinks into each
+    /// other now, and how many such pairs it has.
+    pub fn worst_overlap(&self) -> (f32, usize) {
+        let seg = |b: usize| {
+            let t = self.bones[b].get_global_transform();
+            let h = self.caps[b].0;
+            (v3(t * Vector3::new(0.0, h, 0.0)), v3(t * Vector3::new(0.0, -h, 0.0)))
+        };
+        let mut worst = 0.0f32;
+        for &(a, b) in &self.colliding {
+            let ((a0, a1), (b0, b1)) = (seg(a), seg(b));
+            worst = worst.max(self.caps[a].1 + self.caps[b].1 - segment_distance(a0, a1, b0, b1));
+        }
+        (worst, self.colliding.len())
     }
 
     pub fn started(&self) -> bool {
@@ -863,6 +1063,46 @@ mod tests {
         use trem_sim::gen::enums::MeansOfDeath as M;
         assert!(death_push(M::Lcannon).unwrap() > death_push(M::Blaster).unwrap());
         assert!(death_push(M::Falling).is_none());
+    }
+
+    #[test]
+    fn a_brush_hull_has_its_corners() {
+        // the box -1..1 x 0..2 x 0..4
+        let planes = [[1.0, 0.0, 0.0, 1.0], [-1.0, 0.0, 0.0, 1.0], [0.0, 1.0, 0.0, 2.0], [0.0, -1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 4.0], [0.0, 0.0, -1.0, 0.0]];
+        let h = brush_hull(&planes);
+        assert_eq!(h.len(), 8);
+        assert!(h.iter().any(|p| len(sub(*p, [1.0, 2.0, 4.0])) < 1e-4));
+        assert!(h.iter().any(|p| len(sub(*p, [-1.0, 0.0, 0.0])) < 1e-4));
+        // a wedge: 6 corners (a redundant plane adds none)
+        let wedge = [[0.0, 0.0, -1.0, 0.0], [0.0, -1.0, 0.0, 0.0], [0.0, 0.707, 0.707, 0.707], [1.0, 0.0, 0.0, 1.0], [-1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 5.0]];
+        assert_eq!(brush_hull(&wedge).len(), 6);
+    }
+
+    #[test]
+    fn segments_measure_their_closest_distance() {
+        assert!((segment_distance([0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.5, 1.0, -1.0], [0.5, 1.0, 1.0]) - 1.0).abs() < 1e-5);
+        assert!((segment_distance([0.0; 3], [1.0, 0.0, 0.0], [3.0, 0.0, 0.0], [4.0, 0.0, 0.0]) - 2.0).abs() < 1e-5);
+        assert!((segment_distance([0.0; 3], [0.0; 3], [0.0, 2.0, 0.0], [0.0, 2.0, 0.0]) - 2.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn limbs_collide_with_the_body_but_not_with_their_joint() {
+        // torso (0), upper arm (1, child of 0), forearm (2, child of 1) folded
+        // back onto the torso, and a thigh (3) sunk deep into the torso
+        let caps = [
+            ([0.0, 0.0, 0.0], [0.0, 1.0, 0.0], 0.2),
+            ([0.25, 1.0, 0.0], [0.6, 1.0, 0.0], 0.06),
+            ([0.6, 1.0, 0.0], [0.6, 0.4, 0.0], 0.05),
+            ([0.05, 0.1, 0.0], [0.05, -0.8, 0.0], 0.1),
+        ];
+        let parents = [None, Some(0), Some(1), Some(0)];
+        let ex = self_collision_exceptions(&caps, &parents);
+        assert!(ex.contains(&(0, 1)) && ex.contains(&(1, 2)) && ex.contains(&(0, 3)));
+        // the forearm collides with the torso and the thigh
+        assert!(!ex.contains(&(0, 2)) && !ex.contains(&(2, 3)));
+        assert_eq!(self_layer(0), 2);
+        assert_eq!(self_layer(30), 1 << 31);
+        assert_eq!(self_layer(31), 2);
     }
 
     #[test]

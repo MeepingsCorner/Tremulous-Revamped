@@ -84,6 +84,11 @@ impl MapEnts {
     /// Update every map entity; returns nodes to add to the scene and
     /// (sound path, origin) pairs for one-shot speaker sounds.
     #[allow(clippy::too_many_arguments)]
+    /// The drawn node of mover `i` (its brush model), if it is drawn.
+    pub fn brush_node(&self, i: usize) -> Option<Gd<Node3D>> {
+        self.brushes.get(&i).cloned()
+    }
+
     pub fn sync(&mut self, w: &World, lib: Option<&mut Library>, meshes: &mut BrushMeshes, now: i32, view: [f32; 3], view_fwd: [f32; 3], me: Option<usize>, light: impl Fn(&[f32; 3]) -> ([f32; 3], [f32; 3], Vector3)) -> (Vec<Gd<Node3D>>, Vec<(String, [f32; 3])>) {
         let mut add: Vec<Gd<Node3D>> = Vec::new();
         let mut sounds = Vec::new();
