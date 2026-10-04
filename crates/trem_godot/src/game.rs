@@ -81,7 +81,7 @@ struct MapLoad {
     render: Option<crate::bspview::BspRender>,
     meshes: Option<Vec<Gd<MeshInstance3D>>>,
     brush: crate::mapents::BrushMeshes,
-    sky: Option<Vec<Gd<ImageTexture>>>,
+    sky: Option<crate::bspview::SkyDef>,
     /// the 4K pack's sky faces (hdtex.rs)
     sky_hd: Option<Vec<Gd<godot::classes::Texture2D>>>,
     grid: Option<crate::bspview::LightGrid>,
@@ -1753,7 +1753,7 @@ impl TremGame {
             }
             5 => {
                 // the sky and the light grid
-                ld.sky = crate::bspview::sky_textures(&ld.bsp, &mut ld.set);
+                ld.sky = crate::bspview::sky_def(&ld.bsp, &mut ld.set);
                 ld.sky_hd = crate::bspview::sky_textures_hd(&ld.bsp, &mut ld.set);
                 ld.grid = crate::bspview::LightGrid::from_bsp(&ld.bsp);
                 ld.render = None;
@@ -1841,21 +1841,13 @@ impl TremGame {
         self.loading = Some(ld);
     }
 
-    /// Replace the background colour with the map's Q3 skybox.
-    fn set_sky(&mut self, faces: Vec<Gd<ImageTexture>>, hd: Option<Vec<Gd<godot::classes::Texture2D>>>) {
-        let mut sh = godot::classes::Shader::new_gd();
-        sh.set_code(crate::bspview::SKY_SHADER);
-        let mut mat = godot::classes::ShaderMaterial::new_gd();
-        mat.set_shader(&sh);
-        for (name, t) in ["rt", "lf", "bk", "ft", "up", "dn"].iter().zip(faces.iter()) {
-            mat.set_shader_parameter(*name, &t.to_variant());
-        }
-        if let Some(hd) = hd.filter(|h| h.len() == 6) {
-            for (name, t) in ["rt_hd", "lf_hd", "bk_hd", "ft_hd", "up_hd", "dn_hd"].iter().zip(hd.iter()) {
-                mat.set_shader_parameter(*name, &t.to_variant());
-            }
-            mat.set_shader_parameter("has_hd", &true.to_variant());
-        }
+    /// Replace the background colour with the map's Q3 sky (box and clouds).
+    fn set_sky(&mut self, def: crate::bspview::SkyDef, hd: Option<Vec<Gd<godot::classes::Texture2D>>>) {
+        let mat = crate::bspview::sky_material(&def, hd.as_ref());
+        let faces: Vec<Gd<ImageTexture>> = match def.faces.as_ref() {
+            Some(f) => f.clone(),
+            None => def.clouds.iter().map(|c| c.0.clone()).take(1).collect(),
+        };
         // the sky's mean colour: the ray tracer's radiance for rays that leave the map
         let mut sum = [0f32; 3];
         for t in faces.iter() {

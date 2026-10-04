@@ -5,6 +5,7 @@ mod actors;
 mod assets;
 mod audio;
 mod bspview;
+mod q3shader; // the full shader-script language for map surfaces
 mod cinematic;
 mod cgcmds;
 mod clientcmd;

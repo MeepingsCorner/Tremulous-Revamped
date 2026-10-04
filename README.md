@@ -71,8 +71,10 @@ with the original:
   destroy), interpolated per frame on the GPU (vertex-animation textures);
 * sounds — weapon fire/impacts, footsteps, jumps, falls, pain/death,
   buildable loops and events, stage announcements;
-* maps with lightmaps, shader-script blending, skies and light-grid lighting
-  for models, curved-patch collision, doors/lifts/trains/buttons and every
+* maps drawn stage by stage from their shader scripts (every stage's blend,
+  rgbGen / alphaGen waves, tcGen / tcMods, animMap, deformVertexes and
+  polygonOffset decals; dec043), skies with their cloud layers, fog volumes,
+  lightmaps and light-grid lighting for models, curved-patch collision, doors/lifts/trains/buttons and every
   trigger, target and misc entity of the 8 maps;
 * the cgame effects: every particle system and trail of `scripts/*.particle`
   and `*.trail` (impacts, muzzles, missiles, blood, explosions and gibs,

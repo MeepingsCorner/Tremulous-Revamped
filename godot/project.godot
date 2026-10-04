@@ -44,3 +44,7 @@ trem_shadow_k={
 "type": "float",
 "value": 0.0
 }
+trem_mul_k={
+"type": "float",
+"value": 1.0
+}

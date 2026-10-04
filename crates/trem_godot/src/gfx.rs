@@ -743,6 +743,8 @@ pub struct GfxRuntime {
     /// the next map's fog brushes, and the volumes made from them
     pub pending_fogs: Vec<crate::bspview::FogBox>,
     pub fog_nodes: Vec<Gd<godot::classes::FogVolume>>,
+    /// the vanilla mode's fog (tr_shade.c RB_FogPass): one screen pass per fog brush
+    pub fog_quads: Vec<Gd<godot::classes::MeshInstance3D>>,
     pub upscale: (i32, f32),
     pub model_debug: i32,
     pub shadow_max: usize,
@@ -772,6 +774,12 @@ impl GfxRuntime {
         if let (Some(env), Some(v)) = (self.env.as_mut(), self.vanilla.as_ref()) {
             configure_environment(env, enhanced, mode, v);
         }
+        // the Compatibility renderer keeps its HDR buffer (glow) at 1/4
+        // brightness and applies that to a multiply blend's colour too:
+        // the map's multiply passes (q3shader.rs) make up for it
+        let compat = RenderingServer::singleton().get_current_rendering_method().to_string() == "gl_compatibility";
+        let glow = self.env.as_ref().is_some_and(|e| e.is_glow_enabled());
+        RenderingServer::singleton().global_shader_parameter_set("trem_mul_k", &(if compat && glow { 4.0f32 } else { 1.0 }).to_variant());
         // r_modelDebug 4: the enhanced mode without AgX (linear tone mapping)
         if let (Some(env), true) = (self.env.as_mut(), enhanced && self.model_debug == 4) {
             env.set_tonemapper(ToneMapper::LINEAR);
@@ -836,6 +844,10 @@ impl GfxRuntime {
         for mut f in self.fog_nodes.drain(..) {
             f.queue_free();
         }
+        self.fog_quads.retain(|f| f.is_instance_valid());
+        for mut f in self.fog_quads.drain(..) {
+            f.queue_free();
+        }
         for b in std::mem::take(&mut self.pending_fogs) {
             let c = [0, 1, 2].map(|k| (b.mins[k] + b.maxs[k]) * 0.5);
             let size = crate::geom::q2g_dir(&[b.maxs[0] - b.mins[0], b.maxs[1] - b.mins[1], b.maxs[2] - b.mins[2]]).abs() * crate::geom::SCALE;
@@ -852,6 +864,9 @@ impl GfxRuntime {
             v.set_visible(self.enhanced);
             parent.add_child(&v);
             self.fog_nodes.push(v);
+            let q = vanilla_fog_quad(&b);
+            parent.add_child(&q);
+            self.fog_quads.push(q);
         }
     }
 
@@ -882,3 +897,77 @@ impl GfxRuntime {
         )
     }
 }
+
+/// The vanilla fog of one fog brush: a screen pass that fogs what lies
+/// behind each pixel by the length of the view ray inside the brush, as
+/// the fog image does (alpha = sqrt(distance in fog / distanceToOpaque),
+/// colour fogparms x identityLight under the x2 overbright). Hidden in the
+/// enhanced mode (its volumetric fog).
+fn vanilla_fog_quad(b: &crate::bspview::FogBox) -> Gd<godot::classes::MeshInstance3D> {
+    use godot::classes::{MeshInstance3D, QuadMesh, Shader, ShaderMaterial};
+    let c0 = crate::geom::q2g(&b.mins);
+    let c1 = crate::geom::q2g(&b.maxs);
+    let (lo, hi) = (c0.coord_min(c1), c0.coord_max(c1));
+    let mut sh = Shader::new_gd();
+    sh.set_code(VANILLA_FOG_SHADER);
+    let mut mat = ShaderMaterial::new_gd();
+    mat.set_shader(&sh);
+    mat.set_shader_parameter("bmin", &lo.to_variant());
+    mat.set_shader_parameter("bmax", &hi.to_variant());
+    let lin = |x: f32| x.clamp(0.0, 1.0).powf(R_GAMMA_EXP);
+    mat.set_shader_parameter("fog_color", &Vector3::new(lin(b.color[0]), lin(b.color[1]), lin(b.color[2])).to_variant());
+    mat.set_shader_parameter("opaque_dist", &b.dist.to_variant());
+    mat.set_render_priority(127);
+    let mut quad = QuadMesh::new_gd();
+    quad.set_size(Vector2::new(2.0, 2.0));
+    let mut mi = MeshInstance3D::new_alloc();
+    mi.set_mesh(&quad);
+    mi.set_material_override(&mat);
+    mi.set_cast_shadows_setting(godot::classes::geometry_instance_3d::ShadowCastingSetting::OFF);
+    // never culled: it covers the screen wherever the camera is
+    mi.set_custom_aabb(godot::builtin::Aabb::new(Vector3::splat(-1.0e5), Vector3::splat(2.0e5)));
+    mi.set_name("vanilla_fog");
+    mi
+}
+
+const VANILLA_FOG_SHADER: &str = r#"
+shader_type spatial;
+render_mode unshaded, blend_mix, depth_draw_never, depth_test_disabled, cull_disabled, fog_disabled, shadows_disabled;
+global uniform float trem_gfx;
+uniform sampler2D depth_tex : hint_depth_texture, filter_nearest;
+uniform vec3 bmin;
+uniform vec3 bmax;
+uniform vec3 fog_color;
+uniform float opaque_dist = 512.0;
+void vertex() {
+    POSITION = vec4(VERTEX.xy, 0.5, 1.0);
+}
+void fragment() {
+    if (trem_gfx > 0.5) { discard; }
+    float depth = texture(depth_tex, SCREEN_UV).r;
+#if CURRENT_RENDERER == RENDERER_COMPATIBILITY
+    vec3 ndc = vec3(SCREEN_UV, depth) * 2.0 - 1.0;
+#else
+    vec3 ndc = vec3(SCREEN_UV * 2.0 - 1.0, depth);
+#endif
+    vec4 view = INV_PROJECTION_MATRIX * vec4(ndc, 1.0);
+    vec3 cam = INV_VIEW_MATRIX[3].xyz;
+    // the sky (no depth) is fogged like a wall far away
+    float far_d = 2048.0;
+    vec3 vp = abs(view.w) > 1e-6 ? view.xyz / view.w : vec3(0.0, 0.0, -far_d);
+    vec3 world = (INV_VIEW_MATRIX * vec4(vp, 1.0)).xyz;
+    vec3 rd = world - cam;
+    float len = min(length(rd), far_d);
+    rd = normalize(rd);
+    vec3 inv = 1.0 / (rd + vec3(1e-7));
+    vec3 t0 = (bmin - cam) * inv;
+    vec3 t1 = (bmax - cam) * inv;
+    vec3 tmin = min(t0, t1);
+    vec3 tmax = max(t0, t1);
+    float tn = max(max(tmin.x, tmin.y), max(tmin.z, 0.0));
+    float tf = min(min(tmax.x, tmax.y), min(tmax.z, len));
+    float d = max(tf - tn, 0.0) * 32.0;
+    ALBEDO = fog_color;
+    ALPHA = sqrt(clamp(d / max(opaque_dist, 1.0), 0.0, 1.0));
+}
+"#;
