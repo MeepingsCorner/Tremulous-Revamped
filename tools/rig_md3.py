@@ -13,12 +13,22 @@ joint's swing limit is the largest bend the animation shows, plus 25 %.
 
 Humans are three MD3s (lower, upper, head) joined at tag_torso and
 tag_head: the lower and upper parts are decomposed separately; the head is
-one bone; the parts are joined at the tags of the standing frames.
+one bone; the parts are joined at the tags of the standing frames. Their
+joints are anatomical: the lower part is cut into pelvis, thighs, shins and
+feet (seeded by height and side, refined by the animation), the upper part's
+groups are named by the tree (torso, arms of two or more segments, the last
+the forearm). Knees and elbows are hinges about the axis they bend on,
+limited to the range a human joint allows (a knee never bends forward);
+hips, shoulders, ankles, waist and neck are cones of anatomical size.
 
     python3 tools/rig_md3.py PK3 OUT.txt
 
 OUT.txt, per model: its rest frame per part, its bones (name, parent, part,
-joint position, swing limit in degrees) and the bone of every vertex of
+joint position, swing limit in degrees, then optionally the joint's kind:
+"cone SWING TWIST", or "hinge AX AY AZ MIN MAX TX TY TZ": the hinge axis,
+the flexion range (degrees: the signed angle, about the axis, from the
+parent's direction (its joint to this joint) to this bone's (this joint to
+its tip point T))) and the bone of every vertex of
 every surface; positions are in the MD3 space of the rest frames (the human
 upper and head parts placed in the lower part's space by the tags). Only
 these numbers are kept, none of the model data.
@@ -31,8 +41,8 @@ import numpy as np
 
 # (model dir, bones per part, rest frames): rest = a standing frame
 MODELS = {
-    "human_base": {"lower": 6, "upper": 8},
-    "human_bsuit": {"lower": 6, "upper": 8},
+    "human_base": {"lower": 7, "upper": 6},
+    "human_bsuit": {"lower": 7, "upper": 8},  # its arms need 8 to come apart from the torso
     "builder": {"nonseg": 9},
     "builderupg": {"nonseg": 9},
     "level0": {"nonseg": 8},
@@ -130,6 +140,156 @@ def decompose(frames, rest, k, seed, iters=30):
     return lab, Rs, ts, np.sqrt(err.min(0))
 
 
+def solve_joint(frames, rest, tris, lab, Rs, ts, a, b):
+    """The point bones a and b carry alike in every frame, held near their seam."""
+    P = frames[rest]
+    cen_b = P[lab == b].mean(0)
+    cen_a = P[lab == a].mean(0)
+    bd = [v for t in tris for v in t if lab[v] == b and (lab[t] == a).any()]
+    near = P[bd].mean(0) if bd else (cen_a + cen_b) / 2
+    # (R_a - R_b) p = t_b - t_a in every frame, held near the boundary:
+    # a weak pull (0.3) where the animation pins it, the boundary where it does not
+    M = (Rs[:, a] - Rs[:, b]).reshape(-1, 3)
+    y = (ts[:, b] - ts[:, a]).reshape(-1)
+    lam = 0.3 * len(frames)
+    p = np.linalg.solve(M.T @ M + lam * np.eye(3), M.T @ y + lam * near)
+    if np.linalg.norm(p - near) > 0.6 * np.linalg.norm(cen_b - near) + 2.0:
+        p = near  # an unpinned joint stays on the seam
+    return p
+
+
+def refine(frames, rest, lab, k, iters=30):
+    """decompose's alternation from given labels (no k-means)."""
+    T = len(frames)
+    P = frames[rest]
+    for _ in range(iters):
+        Rs = np.tile(np.eye(3), (T, k, 1, 1))
+        ts = np.zeros((T, k, 3))
+        for j in range(k):
+            m = lab == j
+            if m.sum() < 3:
+                continue
+            for f in range(T):
+                Rs[f, j], ts[f, j] = kabsch(P[m], frames[f, m])
+        pred = np.einsum("tkab,nb->tkna", Rs, P) + ts[:, :, None, :]
+        err = ((pred - frames[:, None]) ** 2).sum(-1).mean(0)
+        for j in range(k):
+            if (lab == j).sum() < 3:
+                err[j] = np.inf
+        new = err.argmin(0)
+        if (new == lab).all():
+            break
+        lab = new
+    return lab, Rs, ts, np.sqrt(err.min(0))
+
+
+def flexion(pd, cd, axis):
+    """The signed angle (degrees) from pd to cd about axis."""
+    pd = pd - axis * (pd @ axis)
+    cd = cd - axis * (cd @ axis)
+    return float(np.degrees(np.arctan2(axis @ np.cross(pd, cd), pd @ cd)))
+
+
+def unit(v):
+    return v / max(np.linalg.norm(v), 1e-9)
+
+
+# anatomical ranges (degrees): flexion of the hinges, from straight; cones
+# (swing, twist) about the death pose
+KNEE = (0.0, 155.0)  # straight at most (the solver gives a few degrees)
+ELBOW = (0.0, 150.0)
+ANKLE = (30.0, 15.0)  # a cone: the foot is too short a group to hinge reliably
+HIP = (60.0, 20.0)
+SHOULDER = (75.0, 40.0)
+UPPER_ARM_MID = (45.0, 30.0)
+TORSO_PIECE = (12.0, 10.0)
+WAIST = (30.0, 20.0)
+NECK = (35.0, 45.0)
+
+
+def human_lower(frames, rest, tris):
+    """Pelvis 0, then per leg (left +Y first) thigh, shin, foot: seeded by
+    height (fractions of the standing model) and side, refined by the
+    animation. Joints pinned by the animation; the knee and ankle hinge
+    about the leg's sideways axis, its sign so that the knee bends back."""
+    P = frames[rest]
+    z0, z1 = P[:, 2].min(), P[:, 2].max()
+    h = z1 - z0
+    lab = np.zeros(len(P), int)
+    for left, base in ((True, 1), (False, 4)):
+        m = (P[:, 1] > 0) == left
+        lab[m & (P[:, 2] < z0 + 0.80 * h)] = base
+        lab[m & (P[:, 2] < z0 + 0.47 * h)] = base + 1
+        lab[m & (P[:, 2] < z0 + 0.14 * h)] = base + 2
+    lab, Rs, ts, e = refine(frames, rest, lab, 7)
+    parent = [-1, 0, 1, 2, 0, 4, 5]
+    joints = [P[lab == 0].mean(0)] + [solve_joint(frames, rest, tris, lab, Rs, ts, parent[b], b) for b in range(1, 7)]
+    kinds = [None] * 7
+    T = len(frames)
+    for thigh in (1, 4):
+        shin, foot = thigh + 1, thigh + 2
+        kinds[thigh] = ("cone",) + HIP
+        hip, knee, ankle = joints[thigh], joints[shin], joints[foot]
+        toe = P[lab == foot].mean(0)
+        td = unit(knee - hip)
+        axis = unit(np.array([0.0, 1.0, 0.0]) - td * td[1])
+        # the knee bends back in the animation: flexion positive (else flip)
+        def at(f, b, p):
+            return Rs[f, b] @ p + ts[f, b]
+        fl = [flexion(at(f, shin, knee) - at(f, thigh, hip), at(f, shin, ankle) - at(f, shin, knee), Rs[f, thigh] @ axis) for f in range(T)]
+        if np.median(fl) < 0:
+            axis = -axis
+            fl = [-x for x in fl]
+        kinds[shin] = ("hinge", axis, KNEE[0], KNEE[1], ankle)
+        kinds[foot] = ("cone",) + ANKLE
+        print(f"  knee {thigh}: animation flexion {min(fl):.0f}..{max(fl):.0f}", flush=True)
+    return dict(lab=lab, parent=parent, joints=joints, limits=[0.0] + [110.0] * 6, kinds=kinds, err=e, root=0, k=7)
+
+
+def human_upper_kinds(r, frames, rest):
+    """Name the upper part's groups by the tree: the root is the torso;
+    a chain of two or more groups from it is an arm (the first is the
+    shoulder, the last the forearm, hinged at the elbow on the axis it
+    bends about in the animation); a single group is a piece of the torso."""
+    k, parent, joints, lab = r["k"], r["parent"], r["joints"], r["lab"]
+    P = frames[rest]
+    kids = {b: [c for c in range(k) if parent[c] == b] for b in range(k)}
+    kinds = [None] * k
+    root = r["root"]
+    for c in kids[root]:
+        chain = [c]
+        while len(kids[chain[-1]]) == 1:
+            chain.append(kids[chain[-1]][0])
+        if len(chain) == 1:
+            kinds[c] = ("cone",) + (TORSO_PIECE if not kids[c] else UPPER_ARM_MID)
+            continue
+        kinds[chain[0]] = ("cone",) + SHOULDER
+        for m in chain[1:-1]:
+            kinds[m] = ("cone",) + UPPER_ARM_MID
+        fore, up = chain[-1], chain[-2]
+        elbow = joints[fore]
+        tip = P[lab == fore].mean(0)
+        sh = joints[up]
+        Rs, ts = r["Rs"], r["ts"]
+        # the axis the elbow bends about, averaged in the upper arm's frame
+        acc = np.zeros(3)
+        for f in range(len(frames)):
+            ud = Rs[f, fore] @ elbow + ts[f, fore] - (Rs[f, up] @ sh + ts[f, up])
+            fd = Rs[f, fore] @ tip + ts[f, fore] - (Rs[f, fore] @ elbow + ts[f, fore])
+            acc += Rs[f, up].T @ np.cross(unit(ud), unit(fd))
+        axis = unit(acc)
+        fr = flexion(elbow - sh, tip - elbow, axis)
+        kinds[fore] = ("hinge", axis, ELBOW[0], ELBOW[1], tip)
+        fe = [flexion(Rs[f, fore] @ elbow + ts[f, fore] - (Rs[f, up] @ sh + ts[f, up]), Rs[f, fore] @ (tip - elbow), Rs[f, up] @ axis) for f in range(len(frames))]
+        print(f"  elbow {fore}: standing flexion {fr:.0f}, animation {min(fe):.0f}..{max(fe):.0f}", flush=True)
+        for g in kids[fore]:
+            kinds[g] = ("cone",) + UPPER_ARM_MID
+    for b in range(k):
+        if kinds[b] is None and b != root:
+            kinds[b] = ("cone",) + UPPER_ARM_MID
+    return kinds
+
+
 def tree(frames, rest, tris, k, seed):
     lab, Rs, ts, e = decompose(frames, rest, k, seed)
     used = sorted(set(lab.tolist()))
@@ -172,10 +332,10 @@ def tree(frames, rest, tris, k, seed):
         parent[b], joints[b], limits[b] = a, p, float(np.clip(max(ang) * 1.25, 15.0, 110.0))
         inside.add(b)
     joints[root] = cen[root]
-    return dict(lab=lab, parent=parent, joints=joints, limits=limits, err=e, root=root, k=k)
+    return dict(lab=lab, parent=parent, joints=joints, limits=limits, err=e, root=root, k=k, Rs=Rs, ts=ts)
 
 
-def part_rig(z, path, rest, k):
+def part_rig(z, path, rest, k, human_lower_part=False):
     nf, tags, surfs = parse(z, path)
     xyz = np.concatenate([s[1] for s in surfs], axis=1)
     off = np.cumsum([0] + [s[1].shape[1] for s in surfs])
@@ -184,6 +344,11 @@ def part_rig(z, path, rest, k):
         return dict(lab=np.zeros(xyz.shape[1], int), parent=[-1], joints=[xyz[rest].mean(0)], limits=[0.0], err=np.zeros(1), root=0, k=1), [s[1].shape[1] for s in surfs], tags, 0
     idx, inv = weld(xyz, rest)
     fr = xyz[:, idx]
+    if human_lower_part:
+        r = human_lower(fr, rest, inv[tris])
+        s = float(np.sqrt((r["err"] ** 2).mean()))
+        r["lab"] = r["lab"][inv]
+        return r, [sh[1].shape[1] for sh in surfs], tags, s
     best = None
     for seed in range(3):
         r = tree(fr, rest, inv[tris], k, seed)
@@ -191,6 +356,8 @@ def part_rig(z, path, rest, k):
         if best is None or s < best[0]:
             best = (s, r)
     s, r = best
+    r["frames"], r["rest"] = fr, rest
+    r["lab_w"] = r["lab"]
     r["lab"] = r["lab"][inv]
     return r, [sh[1].shape[1] for sh in surfs], tags, s
 
@@ -219,26 +386,36 @@ def main(pk3, out_path):
             lrest = an["LEGS_IDLE"][0]
             urest = an["TORSO_STAND"][0]
             rest_of.update(lower=lrest, upper=urest, head=0)
-            lr, lsz, ltags, ls = part_rig(z, f"models/players/{d}/lower.md3", lrest, parts["lower"])
+            lr, lsz, ltags, ls = part_rig(z, f"models/players/{d}/lower.md3", lrest, parts["lower"], human_lower_part=True)
             ur, usz, utags, us = part_rig(z, f"models/players/{d}/upper.md3", urest, parts["upper"])
+            ur["lab_rest"] = ur["lab"]
+            ur["lab"] = ur["lab_w"]
+            ukinds = human_upper_kinds(ur, ur["frames"], urest)
+            ur["lab"] = ur["lab_rest"]
             hr, hsz, _, _ = part_rig(z, f"models/players/{d}/head.md3", 0, 1)
             to, tax = ltags[lrest]["tag_torso"]
             ho, hax = utags[urest]["tag_head"]
+            lnames = ["pelvis", "thigh_l", "shin_l", "foot_l", "thigh_r", "shin_r", "foot_r"]
             for j in range(lr["k"]):
-                bones.append(dict(name=f"l{j}", parent=lr["parent"][j], part="lower", joint=[round(float(v), 3) for v in lr["joints"][j]], limit=round(lr["limits"][j], 1)))
+                bones.append(dict(name=lnames[j], parent=lr["parent"][j], part="lower", joint=[round(float(v), 3) for v in lr["joints"][j]], limit=round(lr["limits"][j], 1), kind=lr["kinds"][j]))
             ubase = len(bones)
             # the upper root hangs on the lower bone nearest tag_torso
             for j in range(ur["k"]):
                 par = ur["parent"][j]
                 jp = to_space(ur["joints"][j], to, tax)
                 limit = ur["limits"][j]
+                kind = ukinds[j]
                 if par < 0:
                     jp = to  # the waist: tag_torso
                     limit = 45.0
-                bones.append(dict(name=f"u{j}", parent=(ubase + par) if par >= 0 else None, part="upper", joint=[round(float(v), 3) for v in jp], limit=round(limit, 1)))
+                    kind = ("cone",) + WAIST
+                elif kind[0] == "hinge":
+                    # the hinge in the lower part's space
+                    kind = ("hinge", kind[1] @ tax, kind[2], kind[3], to_space(kind[4], to, tax))
+                bones.append(dict(name=f"u{j}", parent=(ubase + par) if par >= 0 else None, part="upper", joint=[round(float(v), 3) for v in jp], limit=round(limit, 1), kind=kind))
             hbase = len(bones)
             hp = to_space(ho, to, tax)
-            bones.append(dict(name="h0", parent=None, part="head", joint=[round(float(v), 3) for v in hp], limit=50.0))
+            bones.append(dict(name="head", parent=None, part="head", joint=[round(float(v), 3) for v in hp], limit=50.0, kind=("cone",) + NECK))
             labels["lower"] = np.split(lr["lab"], np.cumsum(lsz)[:-1])
             labels["upper"] = [l + ubase for l in np.split(ur["lab"], np.cumsum(usz)[:-1])]
             labels["head"] = [l * 0 + hbase for l in np.split(hr["lab"], np.cumsum(hsz)[:-1])]
@@ -273,7 +450,14 @@ def main(pk3, out_path):
                 f.write(f"rest {part} {fr}\n")
             for bo in m["bones"]:
                 par = "-" if bo["parent"] is None else str(bo["parent"])
-                f.write(f"bone {bo['name']} {par} {bo['part']} {bo['joint'][0]} {bo['joint'][1]} {bo['joint'][2]} {bo['limit']}\n")
+                kd = bo.get("kind")
+                extra = ""
+                if kd and kd[0] == "cone":
+                    extra = f" cone {kd[1]:g} {kd[2]:g}"
+                elif kd and kd[0] == "hinge":
+                    ax, tp = kd[1], kd[4]
+                    extra = f" hinge {ax[0]:.4f} {ax[1]:.4f} {ax[2]:.4f} {kd[2]:.1f} {kd[3]:.1f} {tp[0]:.3f} {tp[1]:.3f} {tp[2]:.3f}"
+                f.write(f"bone {bo['name']} {par} {bo['part']} {bo['joint'][0]} {bo['joint'][1]} {bo['joint'][2]} {bo['limit']}{extra}\n")
             for part, surfs in m["labels"].items():
                 for si, ls in enumerate(surfs):
                     f.write(f"labels {part} {si} " + " ".join(map(str, ls)) + "\n")

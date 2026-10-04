@@ -9,6 +9,7 @@ var game
 var team := "humans"
 var klass := "rifle"
 var fails := []
+var hinge_sign := -1
 ## the test's own camera on the body (the game's goes to the team menu / spectating after a death)
 var cam: Camera3D
 var cam_on := false
@@ -19,11 +20,14 @@ func _ready() -> void:
 			team = a.substr(7)
 		if a.begins_with("--class="):
 			klass = a.substr(8)
+		if a.begins_with("--hinge-sign="):
+			hinge_sign = int(a.substr(13))
 	main = load("res://main.tscn").instantiate()
 	add_child(main)
 	game = main.get_node("Game")
 	game.exec("r_enhanced 1")
 	game.exec("r_ragdolls 1")
+	game.ragdoll_test_hinge_sign(hinge_sign)
 	print("rag: load -> '", game.load_bsp(game.pk3_paths(), "atcs"), "'")
 	main.get_node("HUD").close_menu()
 	_run()
@@ -70,7 +74,7 @@ func _run() -> void:
 	game.set_cheats(true)
 	var evolve := team == "aliens" and not klass in ["builder", "level0"]
 	game.exec("team " + team)
-	game.exec("class " + ("level0" if evolve else klass))
+	game.exec("class " + ("level0" if evolve else ("rifle" if klass == "bsuit" else klass)))
 	var t := 0.0
 	while t < 20.0:
 		var h: Dictionary = game.get_hud()
@@ -109,6 +113,32 @@ func _run() -> void:
 					break
 		print("rag: evolved to class ", game.get_hud().get("class", "?"), " (", game.get_hud().get("center_print", ""), ")")
 		await _wait(2.0)
+	if klass == "bsuit":
+		# the battlesuit: stage 3, funds, bought at the armoury
+		game.exec("set g_humanStage2Threshold 0")
+		game.exec("set g_humanStage3Threshold 0")
+		await _wait(1.0)
+		game.exec("give funds")
+		await _wait(0.5)
+		var before = str(game.get_hud().get("class_id", ""))
+		var arms: PackedVector3Array = game.find_entities("team_human_armoury")
+		arms.append_array(game.find_entities("arm"))
+		print("rag: armouries ", arms)
+		for p in arms:
+			for a in range(8):
+				var off := Vector3(cos(a * PI / 4.0), 0, sin(a * PI / 4.0)) * 2.4
+				var q: Vector3 = p + off
+				game.exec("setviewpos %d %d %d 0" % [int(q.x * 32), int(-q.z * 32), int(q.y * 32 + 24)])
+				await _wait(0.4)
+				var said = game.exec("buy bsuit")
+				await _wait(0.8)
+				print("rag: buy bsuit -> '", said, "' ", game.get_hud().get("center_print", ""))
+				if str(game.get_hud().get("class_id", "")) != before:
+					break
+			if str(game.get_hud().get("class_id", "")) != before:
+				break
+		print("rag: bought the battlesuit: class ", game.get_hud().get("class", "?"), " (", game.get_hud().get("center_print", ""), ")")
+		await _wait(1.0)
 	var alive: bool = not game.get_hud().is_empty() and game.get_hud().alive
 	_check("spawned", alive, "%s %s after %.1f s" % [team, klass, t])
 	var me: int = game.my_entity()
@@ -152,8 +182,35 @@ func _run() -> void:
 	# (the root bone of a tall class starts well above the floor: measured
 	# from where we stood, through the floor would be far below it)
 	var stood: float = death_at.z / 32.0
-	_check("it stays on the floor", p2.y > stood - 1.5, "fell %.2f (start y %.2f, now %.2f, stood at %.2f)" % [start.y - p2.y, start.y, p2.y, stood])
+	# (or on a lower floor it fell to: there is world just under it)
+	var below: Dictionary = get_viewport().world_3d.direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(p2 + Vector3(0, 0.5, 0), p2 + Vector3(0, -1.5, 0), 1))
+	_check("it stays on the floor", p2.y > stood - 1.5 or not below.is_empty(), "fell %.2f (start y %.2f, now %.2f, stood at %.2f, floor under it %s)" % [start.y - p2.y, start.y, p2.y, stood, not below.is_empty()])
 	_check("it comes to rest", p2.distance_to(p1) < 0.1, "moved %.3f in the last second" % p2.distance_to(p1))
+	# a close look at the body at rest, from above and from the side
+	if cam:
+		cam.global_position = p2 + Vector3(0.3, 2.6, 0.3)
+		cam.look_at(p2, Vector3.FORWARD)
+		await _shot(6)
+		_aim(p2, 1.8)
+		await _shot(7)
+	# knees and elbows bend only the way (and as far as) a human's do: at
+	# rest within their range (widened to hold the death pose they started
+	# in, 5 degrees of solver give), never far out of it during the fall
+	var hinges: PackedStringArray = game.ragdoll_hinges()
+	if team == "humans":
+		var bad := []
+		var bad_rest := []
+		for l in hinges:
+			var w := l.split(" ")
+			var lo: float = min(float(w[1]), float(w[5]))
+			var hi: float = max(float(w[2]), float(w[5]))
+			if float(w[3]) < lo - 25.0 or float(w[4]) > hi + 25.0:
+				bad.append(l)
+			if float(w[6]) < lo - 5.0 or float(w[6]) > hi + 5.0:
+				bad_rest.append(l)
+		print("rag: hinges (bone min max seen_min seen_max start now) ", hinges)
+		_check("its knees and elbows rest only as a human's can", hinges.size() >= 4 and bad_rest.is_empty(), "%d hinges, out of range: %s" % [hinges.size(), bad_rest])
+		_check("its knees and elbows never bend far the wrong way", bad.is_empty(), "out of range by over 25 degrees in the fall: %s" % [bad])
 	# a limb does not pass through the body (self-collision), at rest
 	var ov: PackedStringArray = game.ragdoll_overlaps()
 	if not ov.is_empty():

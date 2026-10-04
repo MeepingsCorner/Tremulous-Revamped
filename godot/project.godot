@@ -27,6 +27,8 @@ window/size/viewport_height=720
 [physics]
 
 3d/physics_engine="Jolt Physics"
+jolt_physics_3d/simulation/velocity_steps=16
+jolt_physics_3d/simulation/position_steps=8
 
 [rendering]
 

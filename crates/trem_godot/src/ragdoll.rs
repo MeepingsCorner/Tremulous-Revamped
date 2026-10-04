@@ -27,6 +27,19 @@ pub struct BoneDef {
     pub part: String,
     pub joint: [f32; 3],
     pub limit: f32,
+    pub kind: JointKind,
+}
+
+/// How a bone hangs on its parent.
+#[derive(Clone, Debug, PartialEq)]
+pub enum JointKind {
+    /// swings within `swing` degrees of the death pose, twists `twist`
+    Cone { swing: f32, twist: f32 },
+    /// bends about `axis` (rig space) only, its flexion (the signed angle
+    /// about the axis from the parent's direction, parent joint to this
+    /// joint, to this bone's, this joint to `tip`) within min..max degrees:
+    /// a knee or an elbow never bends the wrong way
+    Hinge { axis: [f32; 3], min: f32, max: f32, tip: [f32; 3] },
 }
 
 /// A model's skeleton: rest frame per part, bones (parents before their
@@ -55,7 +68,13 @@ pub fn parse_rigs(text: &str) -> HashMap<String, Rig> {
             Some("bone") if w.len() >= 8 => {
                 if let Some((_, r)) = cur.as_mut() {
                     let f = |s: &str| s.parse::<f32>().unwrap_or(0.0);
-                    r.bones.push(BoneDef { name: w[1].to_string(), parent: w[2].parse().ok(), part: w[3].to_string(), joint: [f(w[4]), f(w[5]), f(w[6])], limit: f(w[7]) });
+                    let g = |i: usize| w.get(i).map(|x| f(x)).unwrap_or(0.0);
+                    let kind = match w.get(8).copied() {
+                        Some("cone") => JointKind::Cone { swing: g(9), twist: g(10) },
+                        Some("hinge") if w.len() >= 17 => JointKind::Hinge { axis: [g(9), g(10), g(11)], min: g(12), max: g(13), tip: [g(14), g(15), g(16)] },
+                        _ => JointKind::Cone { swing: f(w[7]).clamp(15.0, 110.0), twist: 25.0 },
+                    };
+                    r.bones.push(BoneDef { name: w[1].to_string(), parent: w[2].parse().ok(), part: w[3].to_string(), joint: [f(w[4]), f(w[5]), f(w[6])], limit: f(w[7]), kind });
                 }
             }
             Some("labels") if w.len() >= 3 => {
@@ -445,6 +464,21 @@ pub fn segment_distance(a0: V3, a1: V3, b0: V3, b1: V3) -> f32 {
     len(sub(add(a0, scale(d1, s)), add(b0, scale(d2, t))))
 }
 
+/// The signed angle (degrees) from `pd` to `cd` about `axis` (unit), both
+/// seen in the plane across the axis: a hinge's flexion.
+pub fn flexion(pd: V3, cd: V3, axis: V3) -> f32 {
+    let pd = sub(pd, scale(axis, dot(pd, axis)));
+    let cd = sub(cd, scale(axis, dot(cd, axis)));
+    dot(axis, cross(pd, cd)).atan2(dot(pd, cd)).to_degrees()
+}
+
+/// A hinge's limits about the pose it is built in (flexion `now`): the
+/// anatomical range min..max shifted by it, always holding the pose itself
+/// (a death pose a little outside the range stays where it is).
+pub fn hinge_limits(min: f32, max: f32, now: f32) -> (f32, f32) {
+    ((min - now).min(0.0), (max - now).max(0.0))
+}
+
 /// The bone pairs of one ragdoll that must not collide with each other: a
 /// bone and its parent (they meet at the joint), and pairs whose capsules
 /// (segment, radius) already sink into each other in the death pose by more
@@ -505,6 +539,19 @@ fn basis_y(y: V3) -> Basis {
     let z = x.cross(y).normalized();
     Basis::from_cols(x, y, z)
 }
+/// A basis whose Z axis is `z` (unit): the hinge joint's axis.
+fn basis_z(z: V3) -> Basis {
+    let z = gv(z).normalized();
+    let helper = if z.y.abs() < 0.9 { Vector3::UP } else { Vector3::RIGHT };
+    let x = helper.cross(z).normalized();
+    let y = z.cross(x).normalized();
+    Basis::from_cols(x, y, z)
+}
+fn norm(v: V3) -> V3 {
+    let l = len(v);
+    if l > 1e-9 { scale(v, 1.0 / l) } else { [0.0, 1.0, 0.0] }
+}
+
 /// A basis whose X axis is `x` (unit): the cone joint's twist axis.
 fn basis_x(x: V3) -> Basis {
     let x = gv(x).normalized();
@@ -637,6 +684,37 @@ pub struct Ragdoll {
     /// that collide with each other (tests: `worst_overlap`)
     caps: Vec<(f32, f32)>,
     colliding: Vec<(usize, usize)>,
+    hinges: Vec<HingeWatch>,
+}
+
+/// A hinge (knee, ankle, elbow) and the flexion range it has gone through.
+struct HingeWatch {
+    bone: usize,
+    parent: usize,
+    /// the parent's joint (in the parent body), this joint and the tip (in
+    /// this bone's body), the axis (in the parent body)
+    hip: Vector3,
+    knee: Vector3,
+    tip: Vector3,
+    axis: Vector3,
+    min: f32,
+    max: f32,
+    /// the flexion it was built in (the death pose)
+    start: f32,
+    seen: (f32, f32),
+    /// the latest flexion
+    last: f32,
+}
+
+/// The sign of Godot's (Jolt's) hinge angle against the rig's flexion: it
+/// runs the other way (measured: with +1 the elbows and knees bend backwards).
+/// Tests can flip it.
+static HINGE_SIGN: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(-1);
+pub fn hinge_sign() -> f32 {
+    HINGE_SIGN.load(std::sync::atomic::Ordering::Relaxed) as f32
+}
+pub fn set_hinge_sign(s: i32) {
+    HINGE_SIGN.store(if s < 0 { -1 } else { 1 }, std::sync::atomic::Ordering::Relaxed);
 }
 
 impl Ragdoll {
@@ -802,6 +880,8 @@ impl Ragdoll {
         let mut pbs = Vec::new();
         let mut caps: Vec<(V3, V3, f32)> = Vec::new();
         let mut cap_dims: Vec<(f32, f32)> = Vec::new();
+        let mut body_offsets: Vec<Transform3D> = Vec::new();
+        let mut hinge_defs: Vec<(usize, usize, V3, V3, V3, V3, f32, f32, f32)> = Vec::new();
         for b in 0..nb {
             let inv = global[b].affine_inverse();
             let local: Vec<V3> = per_bone[b].1.iter().map(|w| v3(inv * gv(*w))).collect();
@@ -823,15 +903,42 @@ impl Ragdoll {
             // the joint at the bone's origin (its rig joint), twisting about
             // the direction into the bone
             let into = if len(centre) > 1e-4 { scale(centre, 1.0 / len(centre)) } else { [1.0, 0.0, 0.0] };
-            pb.set_joint_offset(body_offset.affine_inverse() * Transform3D::new(basis_x(into), Vector3::ZERO));
-            if parents[b].is_some() {
-                pb.set_joint_type(JointType::CONE);
-                pb.set("joint_constraints/swing_span", &rig.bones[b].limit.clamp(15.0, 110.0).to_variant());
-                pb.set("joint_constraints/twist_span", &25.0f32.to_variant());
-            } else {
-                pb.set_joint_type(JointType::NONE);
+            body_offsets.push(body_offset);
+            match (parents[b], &rig.bones[b].kind) {
+                (Some(p), JointKind::Hinge { axis: hax, min, max, tip }) => {
+                    // the hinge axis where the parent has it now, and the
+                    // flexion of the pose: the limits are about this pose
+                    let ax_w = norm(mul(&xf[p].0, v3(q2g_dir(hax))));
+                    let tip_w = add(mul(&xf[b].0, scale(v3(q2g(tip)), model_scale)), xf[b].1);
+                    let now = flexion(sub(joints[b], joints[p]), sub(tip_w, joints[b]), ax_w);
+                    let (lo, hi) = hinge_limits(*min, *max, now);
+                    let (lo, hi) = if hinge_sign() > 0.0 { (lo, hi) } else { (-hi, -lo) };
+                    let ax_local = global[b].basis.inverse() * gv(ax_w);
+                    pb.set_joint_offset(body_offset.affine_inverse() * Transform3D::new(basis_z(v3(ax_local)), Vector3::ZERO));
+                    pb.set_joint_type(JointType::HINGE);
+                    pb.set("joint_constraints/angular_limit_enabled", &true.to_variant());
+                    pb.set("joint_constraints/angular_limit_lower", &lo.to_variant());
+                    pb.set("joint_constraints/angular_limit_upper", &hi.to_variant());
+                    hinge_defs.push((b, p, joints[p], joints[b], tip_w, ax_w, *min, *max, now));
+                }
+                (Some(_), kind) => {
+                    let (swing, twist) = match kind {
+                        JointKind::Cone { swing, twist } => (*swing, *twist),
+                        JointKind::Hinge { .. } => (rig.bones[b].limit.clamp(15.0, 110.0), 25.0),
+                    };
+                    pb.set_joint_offset(body_offset.affine_inverse() * Transform3D::new(basis_x(into), Vector3::ZERO));
+                    pb.set_joint_type(JointType::CONE);
+                    pb.set("joint_constraints/swing_span", &swing.to_variant());
+                    pb.set("joint_constraints/twist_span", &twist.to_variant());
+                }
+                (None, _) => {
+                    pb.set_joint_offset(body_offset.affine_inverse() * Transform3D::new(basis_x(into), Vector3::ZERO));
+                    pb.set_joint_type(JointType::NONE);
+                }
             }
-            pb.set_mass((mass * per_bone[b].0.len() as f32 / total as f32).max(0.5));
+            // a share of the mass by vertices, but no bone under 5 % of it:
+            // light bones on heavy ones let the joint limits give
+            pb.set_mass((mass * per_bone[b].0.len() as f32 / total as f32).max(mass * 0.05).max(0.5));
             pb.set_friction(0.45);
             pb.set_bounce(0.05);
             pb.set_linear_damp(0.05);
@@ -848,12 +955,19 @@ impl Ragdoll {
             let other = pbs[b].clone();
             pbs[a].add_collision_exception_with(&other);
         }
+        // each hinge's points and axis held in its bodies (the flexion the
+        // simulation gives it, for the tests)
+        let body_global = |b: usize| global[b] * body_offsets[b];
+        let hinges: Vec<HingeWatch> = hinge_defs.iter().map(|&(b, p, hip, knee, tip, ax, min, max, start)| {
+            let (gp, gb) = (body_global(p).affine_inverse(), body_global(b).affine_inverse());
+            HingeWatch { bone: b, parent: p, hip: gp * gv(hip), knee: gb * gv(knee), tip: gb * gv(tip), axis: gp.basis * gv(ax), min, max, start, seen: (f32::MAX, f32::MIN), last: start }
+        }).collect();
         let colliding: Vec<(usize, usize)> = (0..nb).flat_map(|a| (a + 1..nb).map(move |b| (a, b))).filter(|p| !except.contains(p)).collect();
         let mut root = Node3D::new_alloc();
         root.set_name(&format!("Ragdoll{ent}"));
         root.add_child(&skel);
         let start_pos = gv(joints[0]);
-        Some(Ragdoll { ent, corpse: false, model_dir: model_dir.to_string(), root, skel, sim, bones: pbs, mats, started: false, push, born: now, start_pos, corpse_z: None, sunk: 0.0, server_pos: start_pos, layer, caps: cap_dims, colliding })
+        Some(Ragdoll { ent, corpse: false, model_dir: model_dir.to_string(), root, skel, sim, bones: pbs, mats, started: false, push, born: now, start_pos, corpse_z: None, sunk: 0.0, server_pos: start_pos, layer, caps: cap_dims, colliding, hinges })
     }
 
     /// Start the simulation (once `root` is in the scene) and give it the
@@ -886,6 +1000,26 @@ impl Ragdoll {
             worst = worst.max(self.caps[a].1 + self.caps[b].1 - segment_distance(a0, a1, b0, b1));
         }
         (worst, self.colliding.len())
+    }
+
+    /// Follow each hinge's flexion (once a frame while it simulates).
+    pub fn track_hinges(&mut self) {
+        if !self.started || self.sunk > 0.0 || !self.root.is_inside_tree() {
+            return;
+        }
+        for h in self.hinges.iter_mut() {
+            let (tp, tb) = (self.bones[h.parent].get_global_transform(), self.bones[h.bone].get_global_transform());
+            let (hip, knee, tip) = (tp * h.hip, tb * h.knee, tb * h.tip);
+            let ax = (tp.basis * h.axis).normalized();
+            let f = flexion(v3(knee - hip), v3(tip - knee), v3(ax));
+            h.seen = (h.seen.0.min(f), h.seen.1.max(f));
+            h.last = f;
+        }
+    }
+
+    /// Tests: "bone min max seen_min seen_max start now" per hinge.
+    pub fn hinge_report(&self) -> Vec<String> {
+        self.hinges.iter().map(|h| format!("{} {:.0} {:.0} {:.1} {:.1} {:.1} {:.1}", self.skel.get_bone_name(h.bone as i32), h.min, h.max, h.seen.0, h.seen.1, h.start, h.last)).collect()
     }
 
     pub fn started(&self) -> bool {
@@ -1063,6 +1197,48 @@ mod tests {
         use trem_sim::gen::enums::MeansOfDeath as M;
         assert!(death_push(M::Lcannon).unwrap() > death_push(M::Blaster).unwrap());
         assert!(death_push(M::Falling).is_none());
+    }
+
+    #[test]
+    fn joints_read_their_kind() {
+        let t = "model m\nrest lower 0\nbone pelvis - lower 0 0 0 0.0\nbone thigh 0 lower 0 1 0 110 cone 60 20\nbone shin 1 lower 0 1 -10 110 hinge 0 1 0 -8 155 0 1 -20\nbone old 0 lower 0 0 1 40\nend\n";
+        let r = &parse_rigs(t)["m"];
+        assert_eq!(r.bones[1].kind, JointKind::Cone { swing: 60.0, twist: 20.0 });
+        assert_eq!(r.bones[2].kind, JointKind::Hinge { axis: [0.0, 1.0, 0.0], min: -8.0, max: 155.0, tip: [0.0, 1.0, -20.0] });
+        // the files without kinds (aliens): a cone of the bone's limit
+        assert_eq!(r.bones[3].kind, JointKind::Cone { swing: 40.0, twist: 25.0 });
+    }
+
+    #[test]
+    fn a_knee_bends_back_only() {
+        // facing +X, the lateral axis +Y: a straight leg, a bent one, a
+        // knee bent forward (impossible)
+        let ax = [0.0, 1.0, 0.0];
+        let down = [0.0, 0.0, -1.0];
+        assert!(flexion(down, down, ax).abs() < 1e-3);
+        assert!((flexion(down, [-1.0, 0.0, 0.0], ax) - 90.0).abs() < 1e-3);
+        assert!(flexion(down, [0.5, 0.0, -1.0], ax) < 0.0);
+        // a knee dying bent at 60: from there it may straighten by 68 and bend by 95 more
+        assert_eq!(hinge_limits(-8.0, 155.0, 60.0), (-68.0, 95.0));
+        // a pose a little outside the range is held, not snapped
+        assert_eq!(hinge_limits(-8.0, 155.0, -12.0), (0.0, 167.0));
+    }
+
+    #[test]
+    fn the_shipped_human_rigs_have_anatomical_joints() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../godot/data/rigs.txt");
+        let Ok(t) = std::fs::read_to_string(&p) else { return };
+        let rigs = parse_rigs(&t);
+        for m in ["human_base", "human_bsuit"] {
+            let r = &rigs[m];
+            let hinges: Vec<&BoneDef> = r.bones.iter().filter(|b| matches!(b.kind, JointKind::Hinge { .. })).collect();
+            // two knees, two elbows
+            assert_eq!(hinges.len(), 4, "{m}");
+            for name in ["shin_l", "shin_r"] {
+                let b = r.bones.iter().find(|b| b.name == name).unwrap();
+                assert!(matches!(b.kind, JointKind::Hinge { min, max, .. } if min > -1.0 && max < 160.0 && max > 120.0), "{m} {name}");
+            }
+        }
     }
 
     #[test]

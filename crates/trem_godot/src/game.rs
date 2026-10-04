@@ -3181,6 +3181,7 @@ impl TremGame {
                 let (amb, dcol, ld) = light_at(lightgrid.as_ref(), &q);
                 r.set_light(amb, dcol, ld);
                 r.set_visible(!(Some(r.ent) == me && first_person && !r.corpse));
+                r.track_hinges();
                 if let Some(a) = actors.get_mut(&r.ent) {
                     a.set_visible(false);
                 }
@@ -5366,6 +5367,16 @@ impl TremGame {
             let (o, n) = r.worst_overlap();
             GString::from(format!("{o:.3} {n}").as_str())
         }).collect()
+    }
+    /// Tests: per ragdoll hinge "bone min max seen_min seen_max" (flexion, degrees).
+    #[func]
+    fn ragdoll_hinges(&self) -> PackedStringArray {
+        self.ragdolls.iter().flat_map(|r| r.hinge_report()).map(|l| GString::from(l.as_str())).collect()
+    }
+    /// Tests: the sign of the hinge angle against the flexion (+1 / -1).
+    #[func]
+    fn ragdoll_test_hinge_sign(&mut self, s: i32) {
+        crate::ragdoll::set_hinge_sign(s);
     }
     /// Tests: the ragdolls' colliders: [map surfaces, map brushes, brush
     /// hulls, movers, structures].
