@@ -6661,12 +6661,165 @@ impl Ui {
 // loading from the game data
 // =====================================================================
 
+/// The port's enhanced-audio page (fmodaudio.rs cvars), opened from the
+/// options' Sound panel; built in, never read from (or added to) the pk3s.
+pub const PORT_AUDIO_MENU_FILE: &str = "ui/port_audio.menu";
+pub const PORT_AUDIO_MENU: &str = r#"// numbers, not ui/menudef.h names: not every data set defines them
+{
+  menuDef
+  {
+    name "port_audio"
+    visible 0
+    fullScreen 0
+    outOfBoundsClick
+    rect 150 70 340 290
+    focusColor 1 .75 0 1
+    onESC { close port_audio }
+
+    itemDef
+    {
+      name frame
+      style 1
+      rect 0 0 340 290
+      backcolor 0 0 0 .9
+      visible 1
+      decoration
+      border 4
+      borderSize 2.0
+      borderColor 0.5 0.5 0.5 1
+    }
+    itemDef
+    {
+      name title
+      text "Enhanced Audio"
+      style 0
+      rect 0 8 340 20
+      textalign 1
+      textalignx 170
+      textaligny 17
+      textscale .3
+      forecolor 1 1 1 1
+      visible 1
+      decoration
+    }
+    itemDef
+    {
+      name note
+      text "Applies in the enhanced mode (F10); vanilla sound is unchanged"
+      style 0
+      rect 0 30 340 14
+      textalign 1
+      textalignx 170
+      textaligny 12
+      textscale .2
+      forecolor .7 .7 .7 1
+      visible 1
+      decoration
+    }
+@ROWS@
+    itemDef
+    {
+      name back
+      type 1
+      text "BACK"
+      style 0
+      rect 132 258 75 20
+      textalign 1
+      textalignx 37
+      textaligny 15
+      textscale .25
+      forecolor 1 1 1 1
+      visible 1
+      action
+      {
+        play "sound/misc/menu1.wav";
+        close port_audio
+      }
+    }
+  }
+}
+"#;
+
+/// The rows of the enhanced-audio page: (label, cvar, value list; None = yes / no).
+const PORT_AUDIO_ROWS: &[(&str, &str, Option<&str>)] = &[
+    ("Output:", "s_hrtf", Some(r#""Headphones (3D)" 1 "Speakers" 0"#)),
+    ("Occlusion:", "s_occlusion", Some(r#""Auto" -1 "On" 1 "Off" 0"#)),
+    ("Sound Pathing:", "s_pathing", None),
+    ("Reflections:", "s_reverb", None),
+    ("Air Absorption:", "s_airAbsorption", None),
+    ("Wall Thickness:", "s_wallThickness", None),
+    ("HD Sounds:", "s_hdSounds", None),
+    ("Doppler:", "s_doppler", None),
+];
+
+/// PORT_AUDIO_MENU with its rows.
+fn port_audio_menu() -> String {
+    let mut rows = String::new();
+    for (i, (label, cvar, list)) in PORT_AUDIO_ROWS.iter().enumerate() {
+        let y = 52 + i * 25;
+        let kind = match list {
+            Some(l) => format!("type 12\n      cvar \"{cvar}\"\n      cvarFloatList {{ {l} }}"),
+            None => format!("type 11\n      cvar \"{cvar}\""),
+        };
+        rows += &format!(
+            "    itemDef\n    {{\n      name row{i}\n      {kind}\n      text \"{label}\"\n      rect 20 {y} 300 20\n      textalign 2\n      textalignx 150\n      textaligny 15\n      textscale .25\n      forecolor 1 1 1 1\n      visible 1\n      action\n      {{\n        play \"sound/misc/menu1.wav\"\n      }}\n    }}\n"
+        );
+    }
+    PORT_AUDIO_MENU.replace("@ROWS@", &rows)
+}
+
+/// The options' Sound panel: its OpenAL switch (meaningless in the port)
+/// becomes the button to the enhanced-audio page.
+fn patch_sound_options(text: &str) -> String {
+    let Some(k) = text.find("\"s_useOpenAL\"") else { return text.to_string() };
+    let Some(start) = text[..k].rfind("itemDef") else { return text.to_string() };
+    // the item's closing brace
+    let Some(open) = text[start..].find('{').map(|o| start + o) else { return text.to_string() };
+    let mut depth = 0;
+    let mut end = None;
+    for (i, ch) in text[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(open + i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(end) = end else { return text.to_string() };
+    let button = "itemDef\n    {\n      name netsound\n      group optionsGrp\n      type 1\n      text \"Enhanced Audio...\"\n      style 0\n      rect 96 120 192 15\n      textalign 1\n      textalignx 96\n      textaligny 12\n      textscale .25\n      forecolor 1 1 1 1\n      visible 0\n      action\n      {\n        play \"sound/misc/menu1.wav\";\n        open port_audio\n      }\n    }";
+    format!("{}{}{}", &text[..start], button, &text[end..])
+}
+
 /// `UI_Init`'s loading: menus (ui + cgame scoreboard), fonts, help,
 /// arenas, weapon icons.
 fn load_ui(lib: &mut Library) -> Result<Ui, String> {
+    // the port's enhanced-audio page and its button in the options; if
+    // they fail to load with this data set, the original menus alone
+    let mut files = menu_list_files(&mut |p: &str| lib.text(p))?;
+    let mut with_port = files.clone();
+    with_port.push(PORT_AUDIO_MENU_FILE.to_string());
+    let port = load_menu_files(&with_port, &mut |p: &str| match p {
+        PORT_AUDIO_MENU_FILE => Some(port_audio_menu()),
+        "ui/ingame_options.menu" => lib.text(p).map(|t| patch_sound_options(&t)),
+        _ => lib.text(p),
+    });
+    let (ui, defines) = match port {
+        Ok(r) => {
+            files = with_port;
+            r
+        }
+        Err(e) => {
+            godot_warn!("TremMenus: the enhanced-audio page did not load ({e}); the options keep their original Sound panel");
+            load_menu_files(&files, &mut |p: &str| lib.text(p))?
+        }
+    };
+    let _ = &files;
     let mut read = |p: &str| lib.text(p);
-    let files = menu_list_files(&mut read)?;
-    let (ui, defines) = load_menu_files(&files, &mut read)?;
     let cg_files: Vec<String> = CG_MENU_FILES.iter().map(|s| s.to_string()).collect();
     let (cg, _) = load_menu_files(&cg_files, &mut read)?;
     let help = read("ui/help.txt").map(|t| parse_help(&t)).unwrap_or_default();
@@ -7395,7 +7548,7 @@ impl TremMenus {
                 vidsnd::register(gm.client_cvars(), windowed);
             }
             let ui = self.ui.as_mut().unwrap();
-            let names: Vec<String> = ui.cvars.keys().cloned().chain(vidsnd::VIDEO_CVARS.iter().chain(vidsnd::SOUND_CVARS).chain(vidsnd::CLIENT_CVARS).chain(vidsnd::UI_CVARS).map(|(n, _)| n.to_ascii_lowercase())).chain(vidsnd::SERVER_CVARS.iter().map(|(n, _, _)| n.to_ascii_lowercase())).chain(["name", "rate", "r_availablemodes", "cl_motdstring"].map(String::from)).collect();
+            let names: Vec<String> = ui.cvars.keys().cloned().chain(vidsnd::VIDEO_CVARS.iter().chain(vidsnd::SOUND_CVARS).chain(vidsnd::CLIENT_CVARS).chain(vidsnd::UI_CVARS).map(|(n, _)| n.to_ascii_lowercase())).chain(vidsnd::SERVER_CVARS.iter().map(|(n, _, _)| n.to_ascii_lowercase())).chain(crate::fmodaudio::FMOD_CVARS.iter().map(|(n, _)| n.to_ascii_lowercase())).chain(["name", "rate", "r_availablemodes", "cl_motdstring"].map(String::from)).collect();
             let gm = game.bind();
             let c = gm.client_cvars_ref();
             let mut synced: Vec<String> = names.into_iter().filter(|n| c.find(n).is_some()).collect();
@@ -8000,6 +8153,32 @@ mod tests {
             eprintln!("{DATA} missing: skipping");
         }
         ok
+    }
+
+    #[test]
+    fn port_audio_page_loads_and_options_link_to_it() {
+        // the 1.1.0 data's ui/ (unzipped from data-1.1.0.pk3)
+        const D110: &str = "/tmp/claude-0/data110";
+        let read = |p: &str| std::fs::read_to_string(std::path::Path::new(D110).join(p)).ok();
+        let Some(opts) = read("ui/ingame_options.menu") else {
+            eprintln!("{D110} missing: skipping");
+            return;
+        };
+        let patched = patch_sound_options(&opts);
+        assert!(!patched.contains("s_useOpenAL") && patched.contains("open port_audio"));
+        let mut r = |p: &str| match p {
+            PORT_AUDIO_MENU_FILE => Some(port_audio_menu()),
+            "ui/ingame_options.menu" => Some(patched.clone()),
+            _ => read(p),
+        };
+        let files = vec!["ui/ingame_options.menu".to_string(), PORT_AUDIO_MENU_FILE.to_string()];
+        let (menus, _) = load_menu_files(&files, &mut r).unwrap();
+        let page = menus.iter().find(|m| m.name() == "port_audio").expect("port_audio parsed");
+        let txt = format!("{page:?}");
+        for (_, cvar, _) in PORT_AUDIO_ROWS {
+            assert!(txt.contains(cvar), "{cvar} missing from the page");
+        }
+        assert!(menus.iter().any(|m| m.name() == "ingame_options"));
     }
 
     fn fonts() -> Fonts {

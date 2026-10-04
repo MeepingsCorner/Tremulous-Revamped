@@ -257,6 +257,15 @@ pub struct TremGame {
     fmod_scene: Option<crate::fmodaudio::AcousticMesh>,
     /// FMOD voices that follow an entity (S_UpdateEntityPosition): (voice, entity)
     fmod_attached: Vec<(i32, usize)>,
+    /// positioned FMOD voices (not the player's own): (voice, Quake origin),
+    /// for the wall thickness between them and the listener
+    fmod_voices: Vec<(i32, [f32; 3])>,
+    fmod_frames: u32,
+    /// tests: the listener stays where it is (the camera may move)
+    fmod_listener_locked: bool,
+    /// tests: the blocked point with the strongest path, the farthest
+    /// visible point (fmod_path_scan)
+    fmod_best_path: [f32; 6],
 }
 
 #[godot_api]
@@ -329,6 +338,10 @@ impl INode3D for TremGame {
             fmod_tried: false,
             fmod_scene: None,
             fmod_attached: Vec::new(),
+            fmod_voices: Vec::new(),
+            fmod_frames: 0,
+            fmod_best_path: [0.0; 6],
+            fmod_listener_locked: false,
         }
     }
 
@@ -2179,7 +2192,7 @@ impl TremGame {
                 godot_warn!("trem: acoustic scene failed: {}", fm.error());
             }
         }
-        if let Some(cam) = self.camera.as_ref().filter(|c| c.is_inside_tree()) {
+        if let Some(cam) = self.camera.as_ref().filter(|c| c.is_inside_tree() && !self.fmod_listener_locked) {
             let t = cam.get_global_transform();
             let f = -t.basis.col_c();
             let u = t.basis.col_b();
@@ -2193,19 +2206,42 @@ impl TremGame {
         let occ = crate::fmodaudio::occlusion_on(self.client.cvars.integer("s_occlusion"), self.client.cvars.integer("r_enhanced") != 0);
         let rev = self.client.cvars.integer("s_reverb") != 0;
         fm.set_options(occ, rev, master);
-        fm.set_enhanced(self.client.cvars.integer("r_enhanced") != 0);
+        let enhanced = self.client.cvars.integer("r_enhanced") != 0;
+        fm.set_enhanced(enhanced);
+        let cv = |n: &str| self.client.cvars.integer(n) != 0;
+        let thick_on = enhanced && cv("s_wallThickness") && occ;
+        fm.set_features(crate::fmodaudio::feature_bits(enhanced, cv("s_hrtf"), cv("s_airAbsorption"), cv("s_doppler"), cv("s_wallThickness"), cv("s_pathing")));
         // sounds follow their entity while they play (S_UpdateEntityPosition)
+        let voices = &mut self.fmod_voices;
         if let Some(w) = self.world.as_ref() {
             self.fmod_attached.retain(|&(v, e)| {
                 if e >= w.ents.len() || !fm.playing(v) {
                     return false;
                 }
-                let g = q2g(&crate::mapents::sound_origin(w, e));
+                let q = crate::mapents::sound_origin(w, e);
+                let g = q2g(&q);
                 fm.set_pos(v, [g.x, g.y, g.z]);
+                if let Some(x) = voices.iter_mut().find(|x| x.0 == v) {
+                    x.1 = q;
+                }
                 true
             });
         } else {
             self.fmod_attached.clear();
+        }
+        // wall thickness (enhanced): the solid between each sound and the
+        // listener, through the map's brushes, ~10 times a second
+        self.fmod_frames = self.fmod_frames.wrapping_add(1);
+        voices.retain(|&(v, _)| fm.playing(v));
+        if thick_on && self.fmod_frames % 6 == 0 {
+            if let (Some(w), Some(cam)) = (self.world.as_ref(), self.camera.as_ref().filter(|c| c.is_inside_tree())) {
+                let o = cam.get_global_transform().origin;
+                let lis = [o.x / crate::geom::SCALE, -o.z / crate::geom::SCALE, o.y / crate::geom::SCALE];
+                for &(v, q) in voices.iter() {
+                    let t = solid_thickness(&w.cm, &lis, &q);
+                    fm.set_thickness(v, t * crate::geom::SCALE);
+                }
+            }
         }
         fm.update();
     }
@@ -3053,6 +3089,10 @@ impl TremGame {
                         _ => (Some([g.x, g.y, g.z]), false),
                     };
                     let v = fm.play(id, pos, own_placed, big, false, 1.0);
+                    if v >= 0 && pos.is_some() && !own_placed {
+                        self.fmod_voices.retain(|x| x.0 != v);
+                        self.fmod_voices.push((v, *origin));
+                    }
                     if v >= 0 {
                         if let (Some(e), false, false) = (ent, local, own_placed) {
                             self.fmod_attached.push((v, e));
@@ -4899,5 +4939,145 @@ impl TremGame {
     #[func]
     fn video_recording(&self) -> bool {
         self.wtb.video.is_some()
+    }
+}
+
+/// Tests: 3 s of white noise at a quarter of full scale, 48 kHz mono 16-bit.
+fn test_noise_wav() -> Vec<u8> {
+    let n = 48000 * 3;
+    let mut w = Vec::with_capacity(44 + n * 2);
+    let le32 = |w: &mut Vec<u8>, v: u32| w.extend_from_slice(&v.to_le_bytes());
+    w.extend_from_slice(b"RIFF");
+    le32(&mut w, 36 + n as u32 * 2);
+    w.extend_from_slice(b"WAVEfmt ");
+    le32(&mut w, 16);
+    w.extend_from_slice(&[1, 0, 1, 0]);
+    le32(&mut w, 48000);
+    le32(&mut w, 96000);
+    w.extend_from_slice(&[2, 0, 16, 0]);
+    w.extend_from_slice(b"data");
+    le32(&mut w, n as u32 * 2);
+    let mut x: u32 = 0x1234_5678;
+    for _ in 0..n {
+        x = x.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        let v = ((x >> 16) as i16 as i32 / 4) as i16;
+        w.extend_from_slice(&v.to_le_bytes());
+    }
+    w
+}
+
+/// Quake units of solid (CONTENTS_SOLID brushes) on the segment a -> b:
+/// a trace finds each wall, point tests walk through it (4-unit steps).
+fn solid_thickness(cm: &trem_sim::kernel::cm::ClipMap, a: &[f32; 3], b: &[f32; 3]) -> f32 {
+    use trem_sim::gen::enums::contents;
+    let solid = contents::SOLID as i32;
+    let d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    if len < 1.0 {
+        return 0.0;
+    }
+    let u = [d[0] / len, d[1] / len, d[2] / len];
+    let at = |t: f32| [a[0] + u[0] * t, a[1] + u[1] * t, a[2] + u[2] * t];
+    let mut t = 0.0f32;
+    let mut total = 0.0f32;
+    for _ in 0..8 {
+        let tr = cm.box_trace(&at(t), b, None, None, solid);
+        if tr.fraction >= 1.0 || tr.allsolid {
+            break;
+        }
+        // into the wall, then through it
+        let enter = t + (len - t) * tr.fraction;
+        let mut x = enter + 1.0;
+        while x < len && cm.point_contents(&at(x)) & solid != 0 {
+            x += 4.0;
+        }
+        total += x.min(len) - enter;
+        t = x;
+        if t >= len {
+            break;
+        }
+    }
+    total
+}
+
+#[godot_api(secondary)]
+impl TremGame {
+    /// Tests: play `path` (a pk3 sound) at a Godot point through FMOD;
+    /// returns the voice (-1 none).
+    #[func]
+    fn fmod_test_play(&mut self, path: GString, at: Vector3, looped: bool, big: bool) -> i32 {
+        let key = path.to_string().to_lowercase();
+        let (Some(fm), Some(lib)) = (self.fmod.as_mut(), self.lib.as_mut()) else { return -1 };
+        // "test:noise": 3 s of steady white noise (no gusts, every band)
+        let Some(id) = fm.sound(&key, || if key == "test:noise" { Some(test_noise_wav()) } else { lib.pk3.read(&key).map(|d| d.as_slice().to_vec()) }) else { return -1 };
+        let v = fm.play(id, Some([at.x, at.y, at.z]), false, big, looped, 1.0);
+        if v >= 0 {
+            let q = [at.x / crate::geom::SCALE, -at.z / crate::geom::SCALE, at.y / crate::geom::SCALE];
+            self.fmod_voices.retain(|x| x.0 != v);
+            self.fmod_voices.push((v, q));
+        }
+        v
+    }
+    /// Tests: move a voice (Godot point).
+    #[func]
+    fn fmod_test_move(&mut self, voice: i32, at: Vector3) {
+        if let Some(fm) = self.fmod.as_mut() {
+            fm.set_pos(voice, [at.x, at.y, at.z]);
+            let q = [at.x / crate::geom::SCALE, -at.z / crate::geom::SCALE, at.y / crate::geom::SCALE];
+            if let Some(x) = self.fmod_voices.iter_mut().find(|x| x.0 == voice) {
+                x.1 = q;
+            }
+        }
+    }
+    #[func]
+    fn fmod_test_stop(&mut self, voice: i32) {
+        if let Some(fm) = self.fmod.as_mut() {
+            fm.stop(voice);
+        }
+    }
+    /// Tests: average a voice's output level; `fmod_meter_read` returns it.
+    #[func]
+    fn fmod_meter(&mut self, voice: i32) {
+        if let Some(fm) = self.fmod.as_mut() {
+            fm.meter(voice);
+        }
+    }
+    #[func]
+    fn fmod_meter_read(&mut self) -> f32 {
+        self.fmod.as_mut().map(|f| f.meter_read()).unwrap_or(-1.0)
+    }
+    /// Tests: [doppler, occlusion, pathing mix, thickness m, transmission
+    /// mid, extra source, direct ms, direct max, reflections ms, max,
+    /// quality, rays].
+    #[func]
+    fn fmod_voice_info(&self, voice: i32) -> PackedFloat32Array {
+        let a = self.fmod.as_ref().map(|f| f.voice_info(voice)).unwrap_or([0.0; 24]);
+        PackedFloat32Array::from(&a[..])
+    }
+    /// Tests: the pathing scan around the listener (radius in Godot units);
+    /// its best blocked point is `fmod_path_best`.
+    #[func]
+    fn fmod_path_scan(&mut self, radius: f32) -> GString {
+        let Some(fm) = self.fmod.as_mut() else { return GString::from("no FMOD") };
+        let (txt, best) = fm.path_scan(radius);
+        self.fmod_best_path = best;
+        GString::from(txt.as_str())
+    }
+    #[func]
+    fn fmod_path_best(&self) -> Vector3 {
+        Vector3::new(self.fmod_best_path[0], self.fmod_best_path[1], self.fmod_best_path[2])
+    }
+    #[func]
+    fn fmod_path_far(&self) -> Vector3 {
+        Vector3::new(self.fmod_best_path[3], self.fmod_best_path[4], self.fmod_best_path[5])
+    }
+    /// Tests: freeze the listener where it is (true) or follow the camera.
+    #[func]
+    fn fmod_lock_listener(&mut self, on: bool) {
+        self.fmod_listener_locked = on;
+    }
+    #[func]
+    fn fmod_stats(&self) -> GString {
+        GString::from(self.fmod.as_ref().map(|f| f.stats()).unwrap_or_default().as_str())
     }
 }

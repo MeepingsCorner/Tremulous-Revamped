@@ -459,7 +459,8 @@ impl BspRender {
             let (nrm, mean) = self.derived.get(&shader_num).cloned().unwrap_or((None, [0.3; 3]));
             // the ray tracer sees the world's opaque surfaces
             if m == 0 && opaque {
-                let mat = crate::fmodaudio::material_of(&bsp.shaders[shader_num as usize].name);
+                let sh = &bsp.shaders[shader_num as usize];
+                let mat = crate::fmodaudio::material_of(&sh.name, sh.surface_flags);
                 let base = self.acoustic.verts.len() as i32;
                 for v in vs {
                     let g = q2g(&v.xyz);

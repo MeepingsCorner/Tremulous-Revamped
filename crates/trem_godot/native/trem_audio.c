@@ -102,10 +102,61 @@ typedef struct {
     float prev[3], vel[3]; /* for doppler: last position, velocity (Godot units / s) */
     double prev_t;
     float base_freq, doppler;
+    float thick;     /* metres of solid between it and the listener (ta_voice_thickness) */
+    float trans_mid; /* the last transmission given (mid band), for ta_voice_info */
+    float path_mix;  /* the last pathing mix level */
 } Voice;
 
 static void voice_direct(Voice* v, float occlusion, const float* transmission);
+static double now_s(void);
+
+/* The game's distance curve (snd_dma.c S_SpatializeOrigin, as the
+ * spatializer's direct path uses it): full volume to 80 units, linear to
+ * zero at 1330 (Godot units are 32 of them). The paths around walls use it
+ * over their length, so a sound one corner away is as loud as an open one
+ * as far away along the path (Steam Audio's default 1/r made them ~20x
+ * quieter than the direct sound). */
+static float IPLCALL game_falloff(IPLfloat32 d, void* unused) {
+    (void)unused;
+    const float lo = 80.0f / 32.0f, hi = 1330.0f / 32.0f;
+    if (d <= lo) return 1.0f;
+    if (d >= hi) return 0.0f;
+    return (hi - d) / (hi - lo);
+}
 static void stop_pathing(void);
+
+/* tests: TREM_CRASH_LOG=<file> records access violations (first chance,
+ * any thread, any module): the code, the faulting module + offset, and
+ * the return addresses as module + offset (llvm-symbolizer with the PDB). */
+static FILE* crash_log;
+static DWORD S_thread_id(int which);
+static volatile LONG crash_count;
+static void crash_addr(FILE* f, const char* what, void* a) {
+    HMODULE m = NULL;
+    char name[MAX_PATH] = "?";
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, (LPCSTR)a, &m) && m) {
+        GetModuleFileNameA(m, name, sizeof(name));
+        const char* b = strrchr(name, '\\');
+        fprintf(f, "%s %s+0x%llx\n", what, b ? b + 1 : name, (unsigned long long)((char*)a - (char*)m));
+    } else {
+        fprintf(f, "%s %p\n", what, a);
+    }
+}
+static LONG CALLBACK crash_veh(EXCEPTION_POINTERS* e) {
+    DWORD code = e->ExceptionRecord->ExceptionCode;
+    if (!crash_log || (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_STACK_OVERFLOW && code != EXCEPTION_ILLEGAL_INSTRUCTION && code != 0xC0000409))
+        return EXCEPTION_CONTINUE_SEARCH;
+    if (InterlockedIncrement(&crash_count) > 8) return EXCEPTION_CONTINUE_SEARCH;
+    fprintf(crash_log, "exception %08lx thread %lu (reflection thread %lu, bake thread %lu) access %llu at %p\n", code, GetCurrentThreadId(),
+            S_thread_id(0), S_thread_id(1), (unsigned long long)(e->ExceptionRecord->NumberParameters > 0 ? e->ExceptionRecord->ExceptionInformation[0] : 0),
+            (void*)(e->ExceptionRecord->NumberParameters > 1 ? e->ExceptionRecord->ExceptionInformation[1] : 0));
+    crash_addr(crash_log, "  at", e->ExceptionRecord->ExceptionAddress);
+    void* fr[48];
+    USHORT n = CaptureStackBackTrace(0, 48, fr, NULL);
+    for (USHORT i = 0; i < n; i++) crash_addr(crash_log, "  frame", fr[i]);
+    fflush(crash_log);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
 
 static FILE* phonon_log;
 static void IPLCALL phonon_logcb(IPLLogLevel level, const char* message) {
@@ -131,6 +182,24 @@ static struct {
     volatile LONG bake_stage;      /* the step the bake reached: 1 generate, 2 batch, 3 bake, 4 save, 5 done */
     volatile LONG bake_fault;      /* the step an access violation stopped (0 none) */
     volatile LONG bake_code;       /* its exception code (0xC0000005 access violation, 0xC00000FD stack overflow) */
+    int pathing_on;    /* ta_features: apply the baked paths (s_pathing) */
+    int hrtf_on;       /* ta_features: binaural (headphones) or panning (speakers) */
+    int air_on;        /* ta_features: air absorption */
+    int doppler_on;    /* ta_features: doppler (s_doppler) */
+    int thick_on;      /* ta_features: wall thickness muffles transmission */
+    int features;      /* the last ta_features bits (-1 before the first call) */
+    /* CPU (ms): the direct simulation per update, the reflection / pathing
+     * pass; averaged over ~1 s, and the quality level they set (0 full) */
+    double direct_ms, direct_max, refl_ms, refl_max;
+    double direct_acc; int direct_cnt;
+    int quality;
+    int refl_quality;  /* the worker's level: 0 full, 1, 2, 3 (fewer own-reflection sounds, shorter tails) */
+    int refl_rays;
+    int meter_voice;   /* ta_voice_meter: the voice whose output RMS is averaged (-1 none) */
+    double meter_sum;
+    int meter_n;
+    float best_path[3]; /* ta_path_scan: the blocked probe with the strongest path */
+    float far_visible[3]; /* ta_path_scan: the farthest probe in sight */
     int nospat; /* tests: TREM_FMOD_NOSPAT=1 plays every sound unspatialized */
     int nopath; /* tests: TREM_FMOD_NOPATH=1 bakes no pathing */
     int noreverb; /* tests: TREM_FMOD_NOREVERB=1 leaves the reverb send out */
@@ -179,6 +248,11 @@ static struct {
     PFN_iplFMODRemoveSource fRemove;
 } S;
 
+static DWORD S_thread_id(int which) {
+    HANDLE h = which ? S.bake_thread : S.thread;
+    return h ? GetThreadId(h) : 0;
+}
+
 static char g_err[512];
 
 static int fail(const char* what, const char* detail) {
@@ -213,13 +287,32 @@ static IPLVector3 iv(const float* g) {
 static DWORD WINAPI reflection_thread(LPVOID unused) {
     (void)unused;
     while (!S.quit) {
-        Sleep(90);
+        /* the budget: the worker rests at least three times as long as a
+         * pass took (a pass of 30 ms runs every ~120 ms: a quarter of its
+         * two threads), and never less than 90 ms */
+        {
+            DWORD rest = (DWORD)(S.refl_ms * 3.0);
+            Sleep(rest > 90 ? (rest < 400 ? rest : 400) : 90);
+        }
         if (S.quit) break;
-        if (!S.have_scene || !S.reflections) continue;
+        int path = S.enhanced && S.pathing_on && S.occlusion && S.path_state == 2;
+        if (!S.have_scene || (!S.reflections && !path)) continue;
         EnterCriticalSection(&S.lock);
-        iplSimulatorRunReflections(S.sim);
-        if (S.enhanced && S.path_state == 2) iplSimulatorRunPathing(S.sim);
+        double t0 = now_s();
+        if (S.reflections) iplSimulatorRunReflections(S.sim);
+        if (path) iplSimulatorRunPathing(S.sim);
+        double ms = (now_s() - t0) * 1000.0;
         LeaveCriticalSection(&S.lock);
+        S.refl_ms = S.refl_ms * 0.9 + ms * 0.1;
+        if (ms > S.refl_max) S.refl_max = ms;
+        /* the budget: a pass should leave the worker idle most of the time
+         * (it runs every 90 ms on its own thread) */
+        /* past the ray floor, cut the work that remains: the sounds with
+         * their own reflections, then the length of every reverb tail */
+        if (S.refl_ms > 30.0 && S.refl_rays <= 128 && S.refl_quality < 3) S.refl_quality++;
+        else if (S.refl_ms < 10.0 && S.refl_quality > 0) S.refl_quality--;
+        if (S.refl_ms > 25.0 && S.refl_rays > 128) S.refl_rays /= 2;
+        else if (S.refl_ms < 8.0 && S.refl_rays < 1024) S.refl_rays *= 2;
     }
     return 0;
 }
@@ -274,6 +367,9 @@ __declspec(dllexport) int ta_init(const wchar_t* dir, int sample_rate) {
         S.tone_frames = (GetEnvironmentVariableA("TREM_FMOD_TONE", e, sizeof(e)) > 0 && e[0] == '1') ? 90 : 0;
         char tp[MAX_PATH];
         if (GetEnvironmentVariableA("TREM_FMOD_TRACE", tp, sizeof(tp)) > 0) S.trace = fopen(tp, "w");
+        char cp[MAX_PATH];
+        if (!crash_log && GetEnvironmentVariableA("TREM_CRASH_LOG", cp, sizeof(cp)) > 0 && (crash_log = fopen(cp, "w")) != NULL)
+            AddVectoredExceptionHandler(1, crash_veh);
     }
     /* tests: TREM_FMOD_WAV=<file> writes the mix to a .wav instead of the device */
     static char wav_path[MAX_PATH];
@@ -400,7 +496,7 @@ __declspec(dllexport) int ta_init(const wchar_t* dir, int sample_rate) {
         FMOD_DSP_SetParameterInt(v->dsp, SPAT_DISTANCEATTENUATION_ROLLOFFTYPE, 1);
         FMOD_DSP_SetParameterFloat(v->dsp, SPAT_DISTANCEATTENUATION_MINDISTANCE, 80.0f / 32.0f);
         FMOD_DSP_SetParameterFloat(v->dsp, SPAT_DISTANCEATTENUATION_MAXDISTANCE, 1330.0f / 32.0f);
-        FMOD_DSP_SetParameterInt(v->dsp, SPAT_APPLY_AIRABSORPTION, 1);
+        FMOD_DSP_SetParameterInt(v->dsp, SPAT_APPLY_AIRABSORPTION, 0); /* ta_features */
         FMOD_DSP_SetParameterInt(v->dsp, SPAT_APPLY_OCCLUSION, 2);
         FMOD_DSP_SetParameterInt(v->dsp, SPAT_APPLY_TRANSMISSION, 2);
         voice_direct(v, 1.0f, NULL);
@@ -430,6 +526,13 @@ __declspec(dllexport) int ta_init(const wchar_t* dir, int sample_rate) {
 
     S.occlusion = 1;
     S.reflections = 1;
+    S.pathing_on = 1;
+    S.hrtf_on = 1;
+    S.air_on = 0;
+    S.doppler_on = 1;
+    S.features = -1;
+    S.refl_rays = 1024;
+    S.meter_voice = -1;
     S.master = 1.0f;
     S.listener[5] = -1.0f; /* forward -z */
     S.listener[7] = 1.0f;  /* up +y */
@@ -510,6 +613,12 @@ static int load_probes(IPLProbeBatch* out) {
         IPLSerializedObject obj = NULL;
         if (iplSerializedObjectCreate(S.ctx, &so, &obj) == IPL_STATUS_SUCCESS) {
             ok = iplProbeBatchLoad(S.ctx, obj, out) == IPL_STATUS_SUCCESS;
+            /* a loaded batch must be committed like a built one: without it
+             * the simulator has no path simulator for it and
+             * iplSimulatorRunPathing reads through a null pointer (found
+             * with the cloud harness; it only shows once paths are looked up
+             * for a real listener) */
+            if (ok) iplProbeBatchCommit(*out);
             iplSerializedObjectRelease(&obj);
         }
     }
@@ -666,15 +775,41 @@ static void stop_pathing(void) {
     LeaveCriticalSection(&S.lock);
 }
 
+/* Acoustic materials. A triangle's index is vanilla * 8 + enhanced: the
+ * vanilla class keeps the original three-material table (generic, metal,
+ * rock / organic), the enhanced class one of eight (Steam Audio's preset
+ * values; organic is soft and dead, like heavy fabric). ta_enhanced swaps
+ * the table the scene uses. */
+#define TA_MATS 24
+static const IPLMaterial vanilla_mats[3] = {
+    {{0.10f, 0.20f, 0.30f}, 0.05f, {0.100f, 0.050f, 0.030f}}, /* generic */
+    {{0.20f, 0.07f, 0.06f}, 0.05f, {0.200f, 0.025f, 0.010f}}, /* metal */
+    {{0.13f, 0.20f, 0.24f}, 0.10f, {0.015f, 0.002f, 0.001f}}, /* rock / organic */
+};
+static const IPLMaterial enhanced_mats[8] = {
+    {{0.10f, 0.20f, 0.30f}, 0.05f, {0.100f, 0.050f, 0.030f}}, /* 0 generic */
+    {{0.20f, 0.07f, 0.06f}, 0.05f, {0.200f, 0.025f, 0.010f}}, /* 1 metal: rings */
+    {{0.13f, 0.20f, 0.24f}, 0.05f, {0.015f, 0.002f, 0.001f}}, /* 2 rock */
+    {{0.05f, 0.07f, 0.08f}, 0.05f, {0.015f, 0.002f, 0.001f}}, /* 3 concrete: hard, reflective */
+    {{0.30f, 0.60f, 0.75f}, 0.30f, {0.050f, 0.010f, 0.005f}}, /* 4 organic (creep, flesh, hive): dead */
+    {{0.06f, 0.03f, 0.02f}, 0.05f, {0.060f, 0.044f, 0.011f}}, /* 5 glass */
+    {{0.60f, 0.70f, 0.80f}, 0.05f, {0.031f, 0.012f, 0.008f}}, /* 6 gravel / dirt */
+    {{0.11f, 0.07f, 0.06f}, 0.05f, {0.070f, 0.014f, 0.005f}}, /* 7 wood */
+};
+static int scene_mats_enhanced = -1;
+static void scene_materials(int enhanced) {
+    if (!S.mesh || scene_mats_enhanced == enhanced) return;
+    scene_mats_enhanced = enhanced;
+    for (int i = 0; i < TA_MATS; i++) {
+        IPLMaterial m = enhanced ? enhanced_mats[i % 8] : vanilla_mats[i / 8];
+        iplStaticMeshSetMaterial(S.mesh, S.scene, &m, i);
+    }
+    iplSceneCommit(S.scene);
+}
+
 __declspec(dllexport) int ta_set_scene(const float* verts, int nverts, const int* tris, int ntris, const int* mat) {
-    static IPLMaterial materials[3] = {
-        /* generic / concrete-ish */
-        {{0.10f, 0.20f, 0.30f}, 0.05f, {0.100f, 0.050f, 0.030f}},
-        /* metal (human base) */
-        {{0.20f, 0.07f, 0.06f}, 0.05f, {0.200f, 0.025f, 0.010f}},
-        /* rock / organic */
-        {{0.13f, 0.20f, 0.24f}, 0.10f, {0.015f, 0.002f, 0.001f}},
-    };
+    IPLMaterial materials[TA_MATS];
+    for (int i = 0; i < TA_MATS; i++) materials[i] = S.enhanced ? enhanced_mats[i % 8] : vanilla_mats[i / 8];
     if (!S.up) return 0;
     stop_pathing(); /* the old scene's probes and any bake in progress */
     EnterCriticalSection(&S.lock);
@@ -702,7 +837,7 @@ __declspec(dllexport) int ta_set_scene(const float* verts, int nverts, const int
         IPLStaticMeshSettings ms;
         ms.numVertices = nverts;
         ms.numTriangles = ntris;
-        ms.numMaterials = 3;
+        ms.numMaterials = TA_MATS;
         ms.vertices = (IPLVector3*)verts;
         ms.triangles = (IPLTriangle*)tris;
         ms.materialIndices = (IPLint32*)mat;
@@ -711,6 +846,7 @@ __declspec(dllexport) int ta_set_scene(const float* verts, int nverts, const int
         if (ok) {
             iplStaticMeshAdd(S.mesh, S.scene);
             iplSceneCommit(S.scene);
+            scene_mats_enhanced = S.enhanced;
         }
     }
     if (ok) {
@@ -822,6 +958,17 @@ static void track(float* prev, float* vel, double* prev_t, const float* pos) {
 static void voice_direct(Voice* v, float occlusion, const float* transmission) {
     float t1[3] = {1.0f, 1.0f, 1.0f};
     const float* t = transmission ? transmission : t1;
+    float tt[3];
+    if (S.thick_on && v->thick > 0.0f && transmission) {
+        /* through solid: low frequencies pass a thin wall, little passes a
+         * thick one (per metre of solid along the line) */
+        /* per metre: a 0.25 m door keeps 84 / 70 / 50 %, a 0.66 m wall
+         * 63 / 40 / 16 %, 2 m of rock 25 / 6 / 0.4 % (low / mid / high) */
+        static const float k[3] = {0.7f, 1.4f, 2.8f};
+        for (int b = 0; b < 3; b++) tt[b] = t[b] * expf(-v->thick * k[b]);
+        t = tt;
+    }
+    v->trans_mid = t[1];
     v->occlusion = occlusion;
     FMOD_DSP_SetParameterFloat(v->dsp, SPAT_OCCLUSION, occlusion);
     FMOD_DSP_SetParameterFloat(v->dsp, SPAT_TRANSMISSION_LOW, t[0]);
@@ -880,6 +1027,8 @@ __declspec(dllexport) int ta_play(int id, const float* pos, int local, int loop,
     FMOD_DSP_SetParameterBool(v->dsp, SPAT_APPLY_REFLECTIONS, 0);
     v->base_freq = 0.0f;
     v->doppler = 1.0f;
+    v->thick = 0.0f;
+    v->path_mix = 0.0f;
     FMOD_Channel_GetFrequency(ch, &v->base_freq);
     v->vel[0] = v->vel[1] = v->vel[2] = 0.0f;
     v->prev_t = 0;
@@ -948,6 +1097,8 @@ __declspec(dllexport) void ta_enhanced(int on) {
     if (!S.up) return;
     S.enhanced = on;
     if (S.limiter) FMOD_DSP_SetBypass(S.limiter, !on);
+    /* the scene's material table follows in ta_update (under the lock,
+     * which a bake may hold for seconds) */
 }
 
 /* Doppler (enhanced): pitch from the source and listener velocities along
@@ -957,7 +1108,10 @@ static void doppler(void) {
         Voice* v = &S.v[i];
         if (!v->active || !v->ch || v->base_freq <= 0.0f) continue;
         float f = 1.0f;
-        if (S.enhanced && !v->local && !v->own) {
+        /* a sound no longer moved has stopped (its last speed must not
+         * keep its pitch shifted) */
+        if (v->prev_t > 0 && now_s() - v->prev_t > 0.15) v->vel[0] = v->vel[1] = v->vel[2] = 0.0f;
+        if (S.enhanced && S.doppler_on && !v->local && !v->own) {
             float u[3] = {S.listener[0] - v->pos[0], S.listener[1] - v->pos[1], S.listener[2] - v->pos[2]};
             float d = sqrtf(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
             if (d > 0.05f) {
@@ -1037,10 +1191,10 @@ __declspec(dllexport) void ta_stats(char* buf, int len) {
     }
     char name[128] = "?";
     if (S.up && drivers > 0) FMOD_System_GetDriverInfo(S.sys, 0, name, sizeof(name), NULL, NULL, NULL, NULL);
-    _snprintf(buf, len - 1, "sounds %u loaded / %u failed, plays %u / %u failed, %d voices playing, master volume %.2f, output %s (%d devices), scene %s, pathing %s (%d probes, bake %ld/1000, stage %ld, fault %ld code %08lx), limiter %s peak %.3f, enhanced %d, nan blocks %ld, direct runs %u, mean occlusion %.2f over %d, master peak %.3f, listener (%.1f %.1f %.1f) a source (%.1f %.1f %.1f) mesh (%.0f %.0f %.0f)-(%.0f %.0f %.0f), last error: %s",
+    _snprintf(buf, len - 1, "sounds %u loaded / %u failed, plays %u / %u failed, %d voices playing, master volume %.2f, output %s (%d devices), scene %s, pathing %s (%d probes, bake %ld/1000, stage %ld, fault %ld code %08lx), limiter %s peak %.3f, enhanced %d, features %d, cpu direct %.2f ms (max %.2f) reflections %.1f ms (max %.1f) quality %d/%d rays %d, nan blocks %ld, direct runs %u, mean occlusion %.2f over %d, master peak %.3f, listener (%.1f %.1f %.1f) a source (%.1f %.1f %.1f) mesh (%.0f %.0f %.0f)-(%.0f %.0f %.0f), last error: %s",
               S.loads, S.load_fails, S.plays, S.play_fails, playing, vol, name, drivers, S.have_scene ? "yes" : "no",
               S.path_state == 2 ? "ready" : S.path_state == 1 ? "baking" : S.path_state == 3 ? "failed" : "off", S.num_probes, bake_permille, S.bake_stage, S.bake_fault, (unsigned long)S.bake_code,
-              lim_state, lim_peak, S.enhanced, S.nan_blocks,
+              lim_state, lim_peak, S.enhanced, S.features, S.direct_ms, S.direct_max, S.refl_ms, S.refl_max, S.quality, S.refl_quality, S.refl_rays, S.nan_blocks,
               S.direct_runs, nocc ? occ / nocc : 1.0f, nocc, peak, S.listener[0], S.listener[1], S.listener[2], sp[0], sp[1], sp[2],
               S.mesh_lo[0], S.mesh_lo[1], S.mesh_lo[2], S.mesh_hi[0], S.mesh_hi[1], S.mesh_hi[2], g_err[0] ? g_err : "none");
     buf[len - 1] = 0;
@@ -1156,18 +1310,21 @@ __declspec(dllexport) void ta_update(void) {
         if (v->active && !v->local && voice_playing(v)) set_source_position(v);
     }
     if (S.have_scene && TryEnterCriticalSection(&S.lock)) {
+        scene_materials(S.enhanced);
         IPLSimulationSharedInputs sh;
         memset(&sh, 0, sizeof(sh));
         sh.listener.origin = iv(&S.listener[0]);
         sh.listener.ahead = iv(&S.listener[3]);
         sh.listener.up = iv(&S.listener[6]);
         sh.listener.right = iv(&S.listener[9]);
-        sh.numRays = 1024;
+        sh.numRays = S.refl_rays;
         sh.numBounces = 8;
-        sh.duration = 1.5f;
+        sh.duration = S.refl_quality < 2 ? 1.5f : S.refl_quality == 2 ? 1.0f : 0.7f;
         sh.order = 1;
         sh.irradianceMinDistance = 1.0f;
-        iplSimulatorSetSharedInputs(S.sim, (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_REFLECTIONS), &sh);
+        /* every simulation the listener takes part in: pathing included
+         * (without it the paths were found to the map's origin) */
+        iplSimulatorSetSharedInputs(S.sim, (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_REFLECTIONS | IPL_SIMULATIONFLAGS_PATHING), &sh);
         for (int i = 0; i < TA_VOICES; i++) {
             Voice* v = &S.v[i];
             if (!v->active || v->local || v->own) continue;
@@ -1183,24 +1340,43 @@ __declspec(dllexport) void ta_update(void) {
             in.airAbsorptionModel.type = IPL_AIRABSORPTIONTYPE_DEFAULT;
             in.occlusionType = IPL_OCCLUSIONTYPE_VOLUMETRIC;
             in.occlusionRadius = 0.6f;
-            in.numOcclusionSamples = 12;
-            in.numTransmissionRays = 2;
+            in.numOcclusionSamples = S.quality == 0 ? 12 : S.quality == 1 ? 8 : 4;
+            in.numTransmissionRays = S.quality == 0 ? 2 : 1;
             iplSourceSetInputs(v->src, IPL_SIMULATIONFLAGS_DIRECT, &in);
         }
         /* enhanced: the extra sources (reflections for loud sounds, paths
          * around corners once the map is baked) join while needed */
         int changed = 0;
-        int path_ok = S.path_state == 2 && S.probes;
+        /* pathing needs the occlusion: its level is the blocked share of
+         * the direct sound (below), else a visible source would play twice */
+        int path_ok = S.path_state == 2 && S.probes && S.pathing_on && S.occlusion;
+        /* the budget: own reflections for at most 8 loud sounds, paths for
+         * at most 24 sounds (by voice order), fewer at a lower quality */
+        static const int refl_cap[4] = {8, 4, 2, 1};
+        int refl_left = refl_cap[S.refl_quality];
+        if (S.quality > 0 && refl_left > 2) refl_left = 2;
+        int path_left = S.quality == 0 ? 24 : S.quality == 1 ? 16 : 8;
         for (int i = 0; i < TA_VOICES; i++) {
             Voice* v = &S.v[i];
-            int refl = S.enhanced && S.reflections && v->big;
-            int path = S.enhanced && path_ok;
+            int live = v->active && !v->local && !v->own && voice_playing(v);
+            int refl = live && S.enhanced && S.reflections && v->big && refl_left > 0;
+            int path = live && S.enhanced && path_ok && path_left > 0;
+            refl_left -= refl;
+            path_left -= path;
             int want = v->active && !v->local && !v->own && voice_playing(v) && (refl || path);
             if (want != v->x_added) {
                 if (want) iplSourceAdd(v->xsrc, S.sim);
                 else iplSourceRemove(v->xsrc, S.sim);
                 v->x_added = want;
                 changed = 1;
+                if (!want) {
+                    /* out of the simulator, its outputs freeze: the
+                     * spatializer must stop applying them (else the last
+                     * path / reflections keep playing) */
+                    FMOD_DSP_SetParameterBool(v->dsp, SPAT_APPLY_REFLECTIONS, 0);
+                    FMOD_DSP_SetParameterBool(v->dsp, SPAT_APPLY_PATHING, 0);
+                    v->path_mix = 0.0f;
+                }
             }
             if (!want) continue;
             IPLSimulationInputs in;
@@ -1215,13 +1391,18 @@ __declspec(dllexport) void ta_update(void) {
             in.reverbScale[0] = in.reverbScale[1] = in.reverbScale[2] = 1.0f;
             in.hybridReverbTransitionTime = 1.0f; in.hybridReverbOverlapPercent = 0.25f; /* validation: must be > 0 even unused */
             if (path) {
+                in.distanceAttenuationModel.type = IPL_DISTANCEATTENUATIONTYPE_CALLBACK;
+                in.distanceAttenuationModel.callback = game_falloff;
                 in.pathingProbes = S.probes;
                 in.visRadius = 0.5f;
                 in.visThreshold = 0.1f;
                 in.visRange = 50.0f;
                 in.pathingOrder = 1;
-                in.enableValidation = IPL_TRUE;
-                in.findAlternatePaths = IPL_TRUE;
+                /* the map never changes shape (movers aside): the baked
+                 * paths stay valid, so no per-pass ray validation or
+                 * real-time re-search (they were most of the worker's time) */
+                in.enableValidation = IPL_FALSE;
+                in.findAlternatePaths = IPL_FALSE;
             }
             iplSourceSetInputs(v->xsrc, in.flags, &in);
             FMOD_DSP_SetParameterBool(v->dsp, SPAT_APPLY_REFLECTIONS, refl);
@@ -1240,8 +1421,20 @@ __declspec(dllexport) void ta_update(void) {
             iplSourceSetInputs(S.reverb_src, IPL_SIMULATIONFLAGS_REFLECTIONS, &in);
         }
         if (S.occlusion) {
+            double t0 = now_s();
             iplSimulatorRunDirect(S.sim);
+            double ms = (now_s() - t0) * 1000.0;
             S.direct_runs++;
+            S.direct_acc += ms;
+            if (ms > S.direct_max) S.direct_max = ms;
+            if (++S.direct_cnt >= 60) {
+                S.direct_ms = S.direct_acc / S.direct_cnt;
+                S.direct_acc = 0.0;
+                S.direct_cnt = 0;
+                /* the budget: ~1.5 ms of the game thread per frame */
+                if (S.direct_ms > 1.5 && S.quality < 2) S.quality++;
+                else if (S.direct_ms < 0.5 && S.quality > 0) S.quality--;
+            }
             for (int i = 0; i < TA_VOICES; i++) {
                 Voice* v = &S.v[i];
                 if (!v->active || v->local || v->own) continue;
@@ -1249,6 +1442,13 @@ __declspec(dllexport) void ta_update(void) {
                 memset(&out, 0, sizeof(out));
                 iplSourceGetOutputs(v->src, IPL_SIMULATIONFLAGS_DIRECT, &out);
                 voice_direct(v, out.direct.occlusion, out.direct.transmission);
+                /* the path around the walls fills in what the walls block:
+                 * none for a visible source (the direct sound is that path),
+                 * all of it for a hidden one */
+                if (v->x_added) {
+                    v->path_mix = 1.0f - out.direct.occlusion;
+                    FMOD_DSP_SetParameterFloat(v->dsp, SPAT_PATHING_MIXLEVEL, v->path_mix);
+                }
             }
         }
         LeaveCriticalSection(&S.lock);
@@ -1257,5 +1457,263 @@ __declspec(dllexport) void ta_update(void) {
         if (S.v[i].active && !voice_playing(&S.v[i])) S.v[i].active = 0;
     }
     doppler();
+    if (S.meter_voice >= 0 && S.meter_voice < TA_VOICES && S.v[S.meter_voice].active) {
+        FMOD_DSP_METERING_INFO mo;
+        memset(&mo, 0, sizeof(mo));
+        if (FMOD_DSP_GetMeteringInfo(S.v[S.meter_voice].dsp, NULL, &mo) == FMOD_OK && mo.numchannels > 0) {
+            float r = 0.0f;
+            for (int c = 0; c < mo.numchannels && c < 32; c++) r += mo.rmslevel[c] * mo.rmslevel[c];
+            S.meter_sum += sqrt(r / mo.numchannels);
+            S.meter_n++;
+        }
+    }
     FMOD_System_Update(S.sys);
+}
+
+/* The enhanced sound features, already resolved against the mode by the
+ * caller (vanilla passes hrtf 1, everything else 0): bit 0 binaural
+ * (headphones; else panning for speakers), 1 air absorption, 2 doppler,
+ * 3 wall thickness, 4 pathing (the baked data stays loaded), 5 the
+ * enhanced mode itself (frequency-dependent transmission). */
+__declspec(dllexport) void ta_features(int bits) {
+    if (!S.up || bits == S.features) return;
+    S.features = bits;
+    S.hrtf_on = (bits & 1) != 0;
+    S.air_on = (bits & 2) != 0;
+    S.doppler_on = (bits & 4) != 0;
+    S.thick_on = (bits & 8) != 0;
+    S.pathing_on = (bits & 16) != 0;
+    for (int i = 0; i < TA_VOICES; i++) {
+        FMOD_DSP* d = S.v[i].dsp;
+        if (!d) continue;
+        FMOD_DSP_SetParameterBool(d, SPAT_DIRECT_BINAURAL, S.hrtf_on);
+        FMOD_DSP_SetParameterBool(d, SPAT_PATHING_BINAURAL, S.hrtf_on);
+        FMOD_DSP_SetParameterBool(d, SPAT_REFLECTIONS_BINAURAL, S.hrtf_on);
+        FMOD_DSP_SetParameterInt(d, SPAT_APPLY_AIRABSORPTION, S.air_on ? 1 : 0);
+        /* frequency-dependent transmission (enhanced: walls pass the lows,
+         * not the highs; vanilla keeps the band average) */
+        FMOD_DSP_SetParameterInt(d, SPAT_TRANSMISSION_TYPE, (bits & 32) ? 1 : 0);
+    }
+    if (S.reverb_dsp) FMOD_DSP_SetParameterBool(S.reverb_dsp, REVERB_BINAURAL, S.hrtf_on);
+}
+
+/* Metres of solid between a voice and the listener (the caller traces the
+ * map's brushes); used when wall thickness is on. */
+__declspec(dllexport) void ta_voice_thickness(int h, float metres) {
+    Voice* v = voice_of(h);
+    if (S.up && v) v->thick = metres > 0.0f ? metres : 0.0f;
+}
+
+/* Tests: a voice's state: doppler factor, occlusion, pathing mix,
+ * thickness, transmission (mid), extra source in, then the CPU figures
+ * (direct ms, its max, reflection pass ms, its max, quality, rays). */
+__declspec(dllexport) int ta_voice_info(int h, float* out, int n) {
+    Voice* v = voice_of(h);
+    float a[24] = {0};
+    if (v) {
+        a[0] = v->doppler;
+        a[1] = v->occlusion;
+        a[2] = v->path_mix;
+        a[3] = v->thick;
+        a[4] = v->trans_mid;
+        a[5] = (float)v->x_added;
+        /* what the spatializer holds: occlusion, transmission low / mid /
+         * high, transmission type, air absorption apply, pathing apply,
+         * and its input / output RMS (first channel) */
+        if (v->dsp) {
+            FMOD_DSP_GetParameterFloat(v->dsp, SPAT_OCCLUSION, &a[12], NULL, 0);
+            FMOD_DSP_GetParameterFloat(v->dsp, SPAT_TRANSMISSION_LOW, &a[13], NULL, 0);
+            FMOD_DSP_GetParameterFloat(v->dsp, SPAT_TRANSMISSION_MID, &a[14], NULL, 0);
+            FMOD_DSP_GetParameterFloat(v->dsp, SPAT_TRANSMISSION_HIGH, &a[15], NULL, 0);
+            int tt = 0, aa = 0;
+            FMOD_BOOL ap = 0;
+            FMOD_DSP_GetParameterInt(v->dsp, SPAT_TRANSMISSION_TYPE, &tt, NULL, 0);
+            FMOD_DSP_GetParameterInt(v->dsp, SPAT_APPLY_AIRABSORPTION, &aa, NULL, 0);
+            FMOD_DSP_GetParameterBool(v->dsp, SPAT_APPLY_PATHING, &ap, NULL, 0);
+            a[16] = (float)(tt * 100 + aa * 10 + ap);
+            FMOD_DSP_METERING_INFO mi, mo;
+            memset(&mi, 0, sizeof(mi));
+            memset(&mo, 0, sizeof(mo));
+            if (FMOD_DSP_GetMeteringInfo(v->dsp, &mi, &mo) == FMOD_OK) {
+                a[17] = mi.numchannels ? mi.rmslevel[0] : -1.0f;
+                a[18] = mo.numchannels ? mo.rmslevel[0] : -1.0f;
+            }
+            FMOD_BOOL act = 0, byp = 0;
+            FMOD_DSP_GetActive(v->dsp, &act);
+            FMOD_DSP_GetBypass(v->dsp, &byp);
+            a[19] = (float)(act * 10 + byp);
+        }
+        /* the extra source's outputs: pathing EQ (mean), its first SH
+         * coefficient, and whether a reflection IR is there */
+        if (v->x_added) {
+            IPLSimulationOutputs o;
+            memset(&o, 0, sizeof(o));
+            iplSourceGetOutputs(v->xsrc, (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_REFLECTIONS | IPL_SIMULATIONFLAGS_PATHING), &o);
+            a[20] = (o.pathing.eqCoeffs[0] + o.pathing.eqCoeffs[1] + o.pathing.eqCoeffs[2]) / 3.0f;
+            a[21] = o.pathing.shCoeffs ? o.pathing.shCoeffs[0] : -1.0f;
+            a[22] = o.reflections.ir ? 1.0f : 0.0f;
+            FMOD_BOOL ar = 0;
+            if (v->dsp) FMOD_DSP_GetParameterBool(v->dsp, SPAT_APPLY_REFLECTIONS, &ar, NULL, 0);
+            a[23] = (float)ar;
+        }
+    }
+    a[6] = (float)S.direct_ms;
+    a[7] = (float)S.direct_max;
+    a[8] = (float)S.refl_ms;
+    a[9] = (float)S.refl_max;
+    a[10] = (float)(S.quality + 10 * S.refl_quality); /* direct level + 10 x reflection level */
+    a[11] = (float)S.refl_rays;
+    for (int i = 0; i < n && i < 24; i++) out[i] = a[i];
+    return v != NULL;
+}
+
+/* Tests: average a voice's spatialized output RMS from now on. */
+__declspec(dllexport) void ta_voice_meter(int h) {
+    S.meter_voice = (h >= 0 && voice_of(h)) ? (h & 0xff) : -1;
+    S.meter_sum = 0.0;
+    S.meter_n = 0;
+}
+/* The mean RMS since the last call (and restart the average); -1 none. */
+__declspec(dllexport) float ta_voice_meter_read(void) {
+    float r = S.meter_n ? (float)(S.meter_sum / S.meter_n) : -1.0f;
+    S.meter_sum = 0.0;
+    S.meter_n = 0;
+    return r;
+}
+
+/* Tests (s_pathscan): how pathing treats the floor probes within `radius`
+ * of the listener. For each, the direct occlusion and the pathing result
+ * (EQ, and the direction its first-order SH points to, against the straight
+ * line). A blocked probe should get a path from another direction, a visible
+ * one the straight line. `best` gets the blocked probe with the strongest
+ * path (for an audible A/B). */
+__declspec(dllexport) int ta_path_scan(float radius, char* buf, int len, float* best) {
+    buf[0] = 0;
+    if (!S.up || !S.have_scene || S.path_state != 2) {
+        _snprintf(buf, len - 1, "pathing not ready (state %ld)", S.path_state);
+        return 0;
+    }
+    EnterCriticalSection(&S.lock);
+    IPLProbeArray arr = NULL;
+    iplProbeArrayCreate(S.ctx, &arr);
+    IPLProbeGenerationParams gp;
+    memset(&gp, 0, sizeof(gp));
+    gp.type = IPL_PROBEGENERATIONTYPE_UNIFORMFLOOR;
+    gp.spacing = 3.0f;
+    gp.height = 1.5f;
+    for (int k = 0; k < 3; k++) {
+        gp.transform.elements[k][k] = S.mesh_hi[k] - S.mesh_lo[k];
+        gp.transform.elements[k][3] = 0.5f * (S.mesh_lo[k] + S.mesh_hi[k]);
+    }
+    gp.transform.elements[3][3] = 1.0f;
+    iplProbeArrayGenerateProbes(arr, S.scene, &gp);
+    int np = iplProbeArrayGetNumProbes(arr);
+    IPLSource src = NULL;
+    IPLSourceSettings ss;
+    ss.flags = (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_PATHING);
+    iplSourceCreate(S.sim, &ss, &src);
+    iplSourceAdd(src, S.sim);
+    iplSimulatorCommit(S.sim);
+    IPLSimulationSharedInputs sh;
+    memset(&sh, 0, sizeof(sh));
+    sh.listener.origin = iv(&S.listener[0]);
+    sh.listener.ahead = iv(&S.listener[3]);
+    sh.listener.up = iv(&S.listener[6]);
+    sh.listener.right = iv(&S.listener[9]);
+    sh.numRays = 1024;
+    sh.numBounces = 8;
+    sh.duration = 1.5f;
+    sh.order = 1;
+    sh.irradianceMinDistance = 1.0f;
+    iplSimulatorSetSharedInputs(S.sim, (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_PATHING), &sh);
+    int n = 0, vis = 0, vis_path = 0, blocked = 0, blocked_path = 0;
+    double vis_ang = 0, blk_ang = 0, blk_eq = 0, best_eq = 0;
+    for (int i = 0; i < np && n < 200; i++) {
+        IPLSphere p = iplProbeArrayGetProbe(arr, i);
+        float pc[3] = {p.center.x, p.center.y, p.center.z};
+        float d[3] = {pc[0] - S.listener[0], pc[1] - S.listener[1], pc[2] - S.listener[2]};
+        float dist = sqrtf(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+        if (dist > radius || dist < 2.0f) continue;
+        n++;
+        IPLSimulationInputs in;
+        memset(&in, 0, sizeof(in));
+        in.flags = (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_PATHING);
+        in.directFlags = IPL_DIRECTSIMULATIONFLAGS_OCCLUSION;
+        in.source.origin = p.center;
+        in.source.ahead.z = -1.0f;
+        in.source.up.y = 1.0f;
+        in.source.right.x = 1.0f;
+        in.distanceAttenuationModel.type = IPL_DISTANCEATTENUATIONTYPE_DEFAULT;
+        in.airAbsorptionModel.type = IPL_AIRABSORPTIONTYPE_DEFAULT;
+        in.occlusionType = IPL_OCCLUSIONTYPE_VOLUMETRIC;
+        in.occlusionRadius = 0.6f;
+        in.numOcclusionSamples = 12;
+        in.reverbScale[0] = in.reverbScale[1] = in.reverbScale[2] = 1.0f;
+        in.hybridReverbTransitionTime = 1.0f;
+        in.hybridReverbOverlapPercent = 0.25f;
+        in.pathingProbes = S.probes;
+        in.distanceAttenuationModel.type = IPL_DISTANCEATTENUATIONTYPE_CALLBACK;
+        in.distanceAttenuationModel.callback = game_falloff;
+        in.visRadius = 0.5f;
+        in.visThreshold = 0.1f;
+        in.visRange = 50.0f;
+        in.pathingOrder = 1;
+        in.enableValidation = IPL_FALSE; /* as the voices (ta_update) */
+        in.findAlternatePaths = IPL_FALSE;
+        iplSourceSetInputs(src, in.flags, &in);
+        iplSimulatorRunDirect(S.sim);
+        iplSimulatorRunPathing(S.sim);
+        IPLSimulationOutputs out;
+        memset(&out, 0, sizeof(out));
+        iplSourceGetOutputs(src, (IPLSimulationFlags)(IPL_SIMULATIONFLAGS_DIRECT | IPL_SIMULATIONFLAGS_PATHING), &out);
+        float eq = (out.pathing.eqCoeffs[0] + out.pathing.eqCoeffs[1] + out.pathing.eqCoeffs[2]) / 3.0f;
+        /* SH order 1 (Google SH, +x forward +y left +z up, from Steam
+         * Audio's +x right +y up +z back): idx1 ~ -x, idx2 ~ y, idx3 ~ -z */
+        float a = 0.0f;
+        int has = 0;
+        if (out.pathing.shCoeffs) {
+            float* c = out.pathing.shCoeffs;
+            float pd[3] = {-c[1], c[2], -c[3]};
+            float pl = sqrtf(pd[0] * pd[0] + pd[1] * pd[1] + pd[2] * pd[2]);
+            has = pl > 1e-6f && eq > 1e-4f;
+            if (has) a = acosf(fmaxf(-1.0f, fminf(1.0f, (pd[0] * d[0] + pd[1] * d[1] + pd[2] * d[2]) / (pl * dist)))) * 57.29578f;
+        }
+        if (out.direct.occlusion > 0.99f) {
+            static float far_d;
+            if (vis == 0) far_d = 0.0f;
+            if (dist > far_d) {
+                far_d = dist;
+                memcpy(S.far_visible, pc, sizeof(pc));
+            }
+        }
+        if (out.direct.occlusion > 0.9f) {
+            vis++;
+            if (has) { vis_path++; vis_ang += a; }
+        } else if (out.direct.occlusion < 0.1f) {
+            blocked++;
+            if (has) {
+                blocked_path++;
+                blk_ang += a;
+                blk_eq += eq;
+                if (eq > best_eq) {
+                    best_eq = eq;
+                    memcpy(S.best_path, pc, sizeof(pc));
+                }
+            }
+        }
+    }
+    iplSourceRemove(src, S.sim);
+    iplSimulatorCommit(S.sim);
+    iplSourceRelease(&src);
+    iplProbeArrayRelease(&arr);
+    LeaveCriticalSection(&S.lock);
+    if (best) {
+        memcpy(best, S.best_path, sizeof(S.best_path));
+        memcpy(best + 3, S.far_visible, sizeof(S.far_visible));
+    }
+    _snprintf(buf, len - 1, "path scan: %d probes within %.0f of the listener (%.1f %.1f %.1f); visible %d (path %d, mean angle %.1f deg); blocked %d (path %d, mean angle %.1f deg, mean eq %.3f); best (%.1f %.1f %.1f) eq %.3f",
+              n, radius, S.listener[0], S.listener[1], S.listener[2], vis, vis_path, vis_path ? vis_ang / vis_path : 0.0, blocked, blocked_path,
+              blocked_path ? blk_ang / blocked_path : 0.0, blocked_path ? blk_eq / blocked_path : 0.0, S.best_path[0], S.best_path[1], S.best_path[2], best_eq);
+    buf[len - 1] = 0;
+    return blocked_path;
 }

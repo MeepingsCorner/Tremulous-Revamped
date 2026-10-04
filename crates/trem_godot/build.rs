@@ -35,12 +35,16 @@ fn main() {
         .arg("/LD")
         .arg("/O2")
         .arg("/W3")
+        // a PDB beside the DLL: crash offsets resolve to source lines
+        .arg("/Zi")
+        .arg(format!("/Fd{}", profile_dir.join("trem_audio_c.pdb").display()))
         .arg(format!("/I{}", fmod_inc.display()))
         .arg(format!("/I{}", sa_inc.display()))
         .arg(manifest.join("native/trem_audio.c"))
         .arg(format!("/Fo{}\\", out.display()))
         .arg(format!("/Fe{}", dll.display()))
         .arg("/link")
+        .arg("/DEBUG")
         .arg(fmod_lib.join("fmod_vc.lib"))
         .arg(sa_lib.join("phonon.lib"));
     let st = cmd.status().expect("cl.exe");

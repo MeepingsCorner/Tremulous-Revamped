@@ -18,7 +18,31 @@ use crate::cmd::{Cvars, CVAR_ARCHIVE};
 /// user://sfx_hd) where it has a sound; vanilla always plays the originals.
 /// s_pathing: sound paths around corners (Steam Audio pathing, enhanced
 /// mode); each map's probes are baked once in the background and cached.
-pub const FMOD_CVARS: &[(&str, &str)] = &[("s_fmod", "1"), ("s_occlusion", "-1"), ("s_reverb", "1"), ("s_hdSounds", "1"), ("s_pathing", "1")];
+/// s_hrtf: 1 headphones (binaural 3D), 0 speakers (stereo panning).
+/// s_airAbsorption: distant sounds lose their highs. s_wallThickness:
+/// sound through a thick wall is quieter and duller than through a thin one.
+/// All of them act in the enhanced mode only (vanilla: binaural, none of
+/// the rest), as does s_doppler (vidsnd.rs).
+pub const FMOD_CVARS: &[(&str, &str)] = &[
+    ("s_fmod", "1"),
+    ("s_occlusion", "-1"),
+    ("s_reverb", "1"),
+    ("s_hdSounds", "1"),
+    ("s_pathing", "1"),
+    ("s_hrtf", "1"),
+    ("s_airAbsorption", "1"),
+    ("s_wallThickness", "1"),
+];
+
+/// ta_features bits: 1 binaural, 2 air absorption, 4 doppler, 8 wall
+/// thickness, 16 pathing, 32 the enhanced mode (walls filter by band).
+/// Vanilla keeps its sound: binaural, nothing else.
+pub fn feature_bits(enhanced: bool, hrtf: bool, air: bool, doppler: bool, thickness: bool, pathing: bool) -> i32 {
+    if !enhanced {
+        return 1;
+    }
+    hrtf as i32 | (air as i32) << 1 | (doppler as i32) << 2 | (thickness as i32) << 3 | (pathing as i32) << 4 | 32
+}
 
 /// `s_occlusion`: -1 follows the graphics mode (on in enhanced, off in
 /// vanilla, which has no occlusion), 0 always off, 1 always on.
@@ -73,7 +97,7 @@ pub fn register_cvars(c: &mut Cvars) {
 }
 
 /// The map's triangles for the acoustic simulation (Godot space) and a
-/// material per triangle (0 generic, 1 metal, 2 rock / organic).
+/// material per triangle (`material_of`: vanilla class * 8 + enhanced class).
 #[derive(Default, Clone)]
 pub struct AcousticMesh {
     pub verts: Vec<[f32; 3]>,
@@ -105,8 +129,10 @@ impl AcousticMesh {
     }
 }
 
-/// The material of a texture name (trem_audio.c's table).
-pub fn material_of(shader: &str) -> i32 {
+/// The vanilla mode's material of a texture name (trem_audio.c's three:
+/// 0 generic, 1 metal, 2 rock / organic), unchanged from before the
+/// enhanced materials.
+pub fn vanilla_material(shader: &str) -> i32 {
     let n = shader.to_ascii_lowercase();
     let has = |k: &[&str]| k.iter().any(|s| n.contains(s));
     if has(&["metal", "floor", "grate", "plate", "panel", "pipe", "steel", "door", "tech", "human"]) {
@@ -116,6 +142,45 @@ pub fn material_of(shader: &str) -> i32 {
     } else {
         0
     }
+}
+
+/// The enhanced mode's material (trem_audio.c's eight): 0 generic, 1 metal,
+/// 2 rock, 3 concrete, 4 organic, 5 glass, 6 gravel / dirt, 7 wood. The
+/// shader's surfaceparms decide first (flesh, metalsteps: what the
+/// footsteps use), then the name.
+pub fn enhanced_material(shader: &str, surface_flags: i32) -> i32 {
+    use trem_sim::gen::enums::surface;
+    if surface_flags & surface::FLESH as i32 != 0 {
+        return 4;
+    }
+    if surface_flags & surface::METALSTEPS as i32 != 0 {
+        return 1;
+    }
+    let n = shader.to_ascii_lowercase();
+    let has = |k: &[&str]| k.iter().any(|s| n.contains(s));
+    if has(&["glass", "window", "screen", "monitor"]) {
+        5
+    } else if has(&["organic", "alien", "creep", "flesh", "slime", "hive", "goo", "membrane", "egg", "acid"]) {
+        4
+    } else if has(&["wood", "crate", "plank"]) {
+        7
+    } else if has(&["metal", "grate", "plate", "panel", "pipe", "steel", "door", "tech", "human", "vent", "rail", "light"]) {
+        1
+    } else if has(&["dirt", "sand", "gravel", "ground", "terrain", "mud", "grass"]) {
+        6
+    } else if has(&["rock", "stone", "cliff", "cave", "boulder"]) {
+        2
+    } else if has(&["concrete", "cement", "brick", "wall", "floor", "tile", "ceil", "base"]) {
+        3
+    } else {
+        0
+    }
+}
+
+/// A triangle's material index (trem_audio.c TA_MATS): both classes, so the
+/// vanilla mode keeps its table and F10 swaps in the enhanced one.
+pub fn material_of(shader: &str, surface_flags: i32) -> i32 {
+    vanilla_material(shader) * 8 + enhanced_material(shader, surface_flags)
 }
 
 #[cfg(windows)]
@@ -145,6 +210,12 @@ mod sys {
         pub pathing_cache: unsafe extern "C" fn(*const c_char),
         pub update: unsafe extern "C" fn(),
         pub stats: unsafe extern "C" fn(*mut c_char, i32),
+        pub features: unsafe extern "C" fn(i32),
+        pub voice_thickness: unsafe extern "C" fn(i32, f32),
+        pub voice_info: unsafe extern "C" fn(i32, *mut f32, i32) -> i32,
+        pub path_scan: unsafe extern "C" fn(f32, *mut c_char, i32, *mut f32) -> i32,
+        pub voice_meter: unsafe extern "C" fn(i32),
+        pub voice_meter_read: unsafe extern "C" fn() -> f32,
     }
 
     fn wide(s: &str) -> Vec<u16> {
@@ -185,6 +256,12 @@ mod sys {
             pathing_cache: f!("ta_pathing_cache"),
             update: f!("ta_update"),
             stats: f!("ta_stats"),
+            features: f!("ta_features"),
+            voice_thickness: f!("ta_voice_thickness"),
+            voice_info: f!("ta_voice_info"),
+            path_scan: f!("ta_path_scan"),
+            voice_meter: f!("ta_voice_meter"),
+            voice_meter_read: f!("ta_voice_meter_read"),
         })
     }
 
@@ -353,6 +430,76 @@ impl FmodAudio {
             (self.api.update)()
         }
     }
+    /// The enhanced features (`feature_bits`).
+    pub fn set_features(&mut self, bits: i32) {
+        #[cfg(windows)]
+        unsafe {
+            (self.api.features)(bits)
+        }
+        #[cfg(not(windows))]
+        let _ = bits;
+    }
+    /// Metres of solid between a voice and the listener (wall thickness).
+    pub fn set_thickness(&mut self, voice: i32, metres: f32) {
+        #[cfg(windows)]
+        unsafe {
+            (self.api.voice_thickness)(voice, metres)
+        }
+        #[cfg(not(windows))]
+        let _ = (voice, metres);
+    }
+    /// Tests: [doppler, occlusion, pathing mix, thickness, transmission mid,
+    /// extra source, direct ms, direct max, reflections ms, reflections
+    /// max, quality, rays].
+    pub fn voice_info(&self, voice: i32) -> [f32; 24] {
+        #[allow(unused_mut)]
+        let mut a = [0.0f32; 24];
+        #[cfg(windows)]
+        unsafe {
+            (self.api.voice_info)(voice, a.as_mut_ptr(), 24);
+        }
+        #[cfg(not(windows))]
+        let _ = voice;
+        a
+    }
+    /// Tests: the pathing scan around the listener (summary, the best
+    /// blocked point, the farthest visible point).
+    pub fn path_scan(&mut self, radius: f32) -> (String, [f32; 6]) {
+        #[cfg(windows)]
+        {
+            let mut buf = vec![0 as std::ffi::c_char; 1024];
+            let mut best = [0.0f32; 6];
+            // SAFETY: ta_path_scan writes a NUL-terminated string and 3 floats
+            unsafe {
+                (self.api.path_scan)(radius, buf.as_mut_ptr(), buf.len() as i32, best.as_mut_ptr());
+                (std::ffi::CStr::from_ptr(buf.as_ptr()).to_string_lossy().into_owned(), best)
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = radius;
+            (String::new(), [0.0; 6])
+        }
+    }
+    /// Tests: average this voice's output level from now on.
+    pub fn meter(&mut self, voice: i32) {
+        #[cfg(windows)]
+        unsafe {
+            (self.api.voice_meter)(voice)
+        }
+        #[cfg(not(windows))]
+        let _ = voice;
+    }
+    /// Tests: the mean output RMS since the last call (-1 none).
+    pub fn meter_read(&mut self) -> f32 {
+        #[cfg(windows)]
+        unsafe {
+            (self.api.voice_meter_read)()
+        }
+        #[cfg(not(windows))]
+        -1.0
+    }
+
     /// Counters, output device and last error (`s_fmodinfo`).
     pub fn stats(&self) -> String {
         #[cfg(windows)]
@@ -431,8 +578,30 @@ mod tests {
     use super::*;
     #[test]
     fn materials_by_name() {
-        assert_eq!(material_of("textures/atcs/floor_metal"), 1);
-        assert_eq!(material_of("textures/arachnid2/rock_wall"), 2);
-        assert_eq!(material_of("textures/common/caulk"), 0);
+        // the vanilla classes are those of before
+        assert_eq!(vanilla_material("textures/atcs/floor_metal"), 1);
+        assert_eq!(vanilla_material("textures/arachnid2/rock_wall"), 2);
+        assert_eq!(vanilla_material("textures/common/caulk"), 0);
+        assert_eq!(enhanced_material("textures/atcs/floor_metal", 0), 1);
+        assert_eq!(enhanced_material("textures/arachnid2/rock_wall", 0), 2);
+        assert_eq!(enhanced_material("textures/atcs/wall_concrete", 0), 3);
+        assert_eq!(enhanced_material("textures/x/anything", trem_sim::gen::enums::surface::FLESH as i32), 4);
+        assert_eq!(enhanced_material("textures/x/anything", trem_sim::gen::enums::surface::METALSTEPS as i32), 1);
+        assert_eq!(enhanced_material("textures/x/window1", 0), 5);
+        assert_eq!(material_of("textures/arachnid2/rock_wall", 0), 2 * 8 + 2);
+        assert_eq!(material_of("textures/common/caulk", 0), 0);
+        // every index fits trem_audio.c's 24 materials
+        for v in 0..3 {
+            for e in 0..8 {
+                assert!(v * 8 + e < 24);
+            }
+        }
+    }
+
+    #[test]
+    fn features_vanilla_keeps_binaural_only() {
+        assert_eq!(feature_bits(false, false, true, true, true, true), 1);
+        assert_eq!(feature_bits(true, true, true, true, true, true), 63);
+        assert_eq!(feature_bits(true, false, true, false, true, false), 2 | 8 | 32);
     }
 }
