@@ -2,7 +2,7 @@
 
 Updated 5 October 2026. Ordered by the owner's priority as far as known; items marked *offered* were proposed and not yet requested.
 
-1. **LAN / online play with the owner's friend.** It fails for him; it works on one PC. Diagnose on both machines (handover §3): network, firewall prompt for `Tremulous.exe`, direct `connect <IP>`; for internet play, UPnP or manual forwarding of UDP 30720.
+1. **LAN / online play with the owner's friend.** It fails for him; it works on one PC. Found (j169/j170): the exported `Tremulous.exe` has no inbound firewall rule, so other PCs are blocked while the one-PC test passes; the host now says so and `firewall_allow` adds the rule (dec047). Still to confirm with the friend's PC. Diagnose on both machines (handover §3): network, firewall prompt for `Tremulous.exe`, direct `connect <IP>`; for internet play, UPnP or manual forwarding of UDP 30720.
 2. **Hardware ray tracing in the exported game.** The Godot release template rejects the BLAS; the game uses the software tracer. Try a self-built release template or the debug template.
 3. **Release size.** The 4K pack makes the release folder 10.2 GB; offer a 2K variant or per-map packs.
 4. **Installer / Steam.** An installer that adds the firewall rule; the copyright audit for Steam was answered in chat on 5 October (CC BY-SA 2.5 media, GPL code, proprietary FMOD / Steam Audio need licences); *offered:* a per-map texture provenance list.

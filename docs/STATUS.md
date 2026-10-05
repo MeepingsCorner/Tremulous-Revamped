@@ -7,6 +7,7 @@ Updated 5 October 2026. Features in detail: `README.md`; decisions: `sheets/deci
 | Game simulation (`trem_sim`): movement, weapons, structures, classes, stages, votes, admin, bots-as-players, map rotation | done; parity tests against the original | 2026-10-01 |
 | Network: server, client, protocol 69 (1.1.0) and 71, downloads, master list, VoIP, ipv6 | done | 2026-10-03 |
 | LAN scan on every adapter (dec045); host prints its join address and a firewall hint | done; verified on one PC | 2026-10-05 |
+| Windows Firewall check when hosting; `firewall_allow` adds the rule via Windows' admin prompt (dec047) | done; both verdicts verified on the owner's PC (j170): release exe "no rule", editor Godot "allowed" | 2026-10-05 |
 | UPnP port forwarding for hosted games (dec046, `net_upnp`) | done; the owner's router does not answer UPnP | 2026-10-05 |
 | Godot client: original menus and HUD, models, animations, effects, sounds, map shaders stage by stage (dec043) | done | 2026-10-05 |
 | Enhanced mode (F10, `r_enhanced`): PBR lighting, 4K textures, HD UI, HD sounds, FMOD + Steam Audio, ray-traced AO / GI / reflections, ragdolls, flashlight, world-fixed dynamic shadows (dec044) | done | 2026-10-05 |
