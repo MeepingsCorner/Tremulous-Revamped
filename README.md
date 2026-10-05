@@ -167,7 +167,10 @@ from snapshots with prediction. The single-process game stays the default.
   itself set to Private in Windows): Play → LAN finds servers on the same
   network by broadcast, on every network adapter's own broadcast address too
   (dec045); the host's console prints the address friends can also join
-  directly (`connect 192.168.x.y:30720`). Check from a terminal:
+  directly (`connect 192.168.x.y:30720`). On Windows the host also checks
+  the firewall and says when other PCs cannot reach the game; the console
+  command `firewall_allow` then asks Windows (its administrator prompt) to
+  add the rule (dec047). Check from a terminal:
   `cargo run --release -p trem_sim --example server_list -- lan` or
   `-- master` (both print each server's ping, players, map and name).
 * **VoIP** (dec037): ioquake3's Opus voice chat, interoperable with original

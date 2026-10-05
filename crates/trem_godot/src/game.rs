@@ -245,6 +245,9 @@ pub struct TremGame {
     /// the request on its thread, then the mapping to take back
     upnp_pending: Option<std::sync::mpsc::Receiver<Result<crate::upnp::Mapping, String>>>,
     upnp_map: Option<crate::upnp::Mapping>,
+    /// dec047: the Windows Firewall check of a hosted game, and the network categories it found unallowed
+    firewall_pending: Option<std::sync::mpsc::Receiver<crate::firewall::Verdict>>,
+    firewall_missing: Vec<String>,
     missiles: HashMap<usize, MissileVis>,
     flashes: Vec<(Gd<godot::classes::OmniLight3D>, f64)>,
     mapents: crate::mapents::MapEnts,
@@ -366,6 +369,8 @@ impl INode3D for TremGame {
             shadow_dirs: None,
             upnp_pending: None,
             upnp_map: None,
+            firewall_pending: None,
+            firewall_missing: Vec::new(),
             missiles: HashMap::new(),
             flashes: Vec::new(),
             mapents: Default::default(),
@@ -4130,6 +4135,33 @@ impl TremGame {
         }
     }
 
+    /// dec047: asks Windows (on a thread) whether other PCs can reach the hosted game.
+    fn firewall_start(&mut self) {
+        if !cfg!(windows) || self.firewall_pending.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::firewall::check());
+        });
+        self.firewall_pending = Some(rx);
+    }
+
+    fn firewall_poll(&mut self) {
+        let Some(rx) = self.firewall_pending.as_ref() else { return };
+        let Ok(v) = rx.try_recv() else { return };
+        self.firewall_pending = None;
+        let port = self.nethost.as_ref().and_then(|n| n.net.port(trem_sim::kernel::netchan::NetSrc::Server)).unwrap_or(trem_sim::kernel::netchan::PORT_SERVER);
+        self.firewall_missing = match &v {
+            crate::firewall::Verdict::NoRule(n) | crate::firewall::Verdict::Blocked(n) => n.clone(),
+            _ => Vec::new(),
+        };
+        let m = crate::firewall::message(&v, port);
+        if !m.is_empty() {
+            self.host_say(m);
+        }
+    }
+
     /// A line for the host: the engine log and the game console.
     fn host_say(&mut self, l: String) {
         godot_print!("{l}");
@@ -4282,6 +4314,20 @@ impl TremGame {
                     return Some("usage: connect [-4|-6] server [-1|-69|-71]\n".into());
                 }
                 Some(self.netext_connect(&argv[1..]))
+            }
+            "firewall_allow" => {
+                // dec047: Windows' administrator prompt adds the inbound rule
+                let mut prof = self.firewall_missing.clone();
+                if prof.is_empty() {
+                    prof = vec!["Private".into()];
+                }
+                Some(match crate::firewall::request_allow(&prof) {
+                    Ok(()) => {
+                        self.firewall_start();
+                        format!("Asked Windows to allow this game in on the {} network: approve the administrator prompt\n", prof.join(", "))
+                    }
+                    Err(e) => format!("firewall_allow: {e}\n"),
+                })
             }
             "reconnect" => {
                 // CL_Reconnect_f: connect cl_reconnectArgs
@@ -4577,6 +4623,7 @@ impl TremGame {
                 }
                 if !loopback_only {
                     self.upnp_start();
+                    self.firewall_start();
                 }
                 for l in &ld.then {
                     self.server_command(l);
@@ -4592,6 +4639,7 @@ impl TremGame {
     /// same presentation as the single-process game.
     fn net_process(&mut self, delta: f64) {
         self.upnp_poll();
+        self.firewall_poll();
         self.clock += delta;
         self.client_frame();
         self.sync_net_cvars(false);
