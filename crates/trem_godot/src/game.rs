@@ -4771,7 +4771,13 @@ pub fn find_pk3s() -> Vec<String> {
     // is the executable's base folder)
     let mut seen: Vec<String> = Vec::new();
     for d in dirs {
-        let d = d.replace('\\', "/").trim_end_matches('/').to_string();
+        let mut d = d.replace('\\', "/").trim_end_matches('/').to_string();
+        // relative (an exported game's res://base is "base"): from the working folder
+        if !d.is_empty() && std::path::Path::new(&d).is_relative() {
+            if let Ok(cwd) = std::env::current_dir() {
+                d = format!("{}/{d}", cwd.to_string_lossy().replace('\\', "/").trim_end_matches('/'));
+            }
+        }
         let key = d.to_lowercase();
         if seen.contains(&key) {
             continue;
