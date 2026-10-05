@@ -408,7 +408,16 @@ impl INode3D for TremGame {
         self.pk3_paths = find_pk3s();
         self.lib = Library::open(&self.pk3_paths);
         match &self.lib {
-            Some(_) => godot_print!("trem: Tremulous game data found in {} pk3 file(s): using original models and sounds", self.pk3_paths.len()),
+            Some(_) => {
+                let mut dirs: Vec<String> = Vec::new();
+                for p in &self.pk3_paths {
+                    let d = p.rsplit_once('/').map(|x| x.0.to_string()).unwrap_or_default();
+                    if !dirs.contains(&d) {
+                        dirs.push(d);
+                    }
+                }
+                godot_print!("trem: Tremulous game data found in {} pk3 file(s) ({}): using original models and sounds", self.pk3_paths.len(), dirs.join(", "))
+            }
             None => godot_print!("trem: no Tremulous data pk3 found (user://base, <exe>/base, res://base, --base=DIR): using placeholder shapes"),
         }
         self.init_map_rotations();
