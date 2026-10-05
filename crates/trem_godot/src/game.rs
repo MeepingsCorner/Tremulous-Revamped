@@ -2229,7 +2229,15 @@ impl TremGame {
         }
         if self.fmod.is_none() && !self.fmod_tried {
             self.fmod_tried = true;
-            let dir = godot::classes::ProjectSettings::singleton().globalize_path("res://bin").to_string();
+            // the project's bin folder, or (an exported game: res:// is its
+            // pack) the folder of the executable, where the export puts them
+            let mut dir = godot::classes::ProjectSettings::singleton().globalize_path("res://bin").to_string();
+            if !std::path::Path::new(&format!("{dir}/trem_audio.dll")).exists() {
+                let exe = godot::classes::Os::singleton().get_executable_path().to_string();
+                if let Some((d, _)) = exe.rsplit_once(['/', '\\']) {
+                    dir = d.to_string();
+                }
+            }
             let rate = godot::classes::AudioServer::singleton().get_mix_rate() as i32;
             match crate::fmodaudio::FmodAudio::open(&dir, rate) {
                 Ok(f) => {
