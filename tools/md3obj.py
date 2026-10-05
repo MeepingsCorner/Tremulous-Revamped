@@ -1,7 +1,10 @@
 """Tremulous MD3 models (weapons, players, buildables) -> OBJ + MTL + PNG textures.
 
 A standing pose of every model (frame 0 when it has no animation); Y-up (Quake's Z-up turned), one OBJ per .md3, plus
-the human player assembled (lower + upper + head on their tags)."""
+the human player assembled (lower + upper + head on their tags).
+
+Usage: python tools/md3obj.py <folder with models/ and scripts/ unpacked from
+the pk3s> <output folder>   (needs Pillow; made the owner's Desktop\Tremulous Models)."""
 import math
 import os
 import re

@@ -19,3 +19,4 @@
 .agent/
 /tools/esrgan/
 /handover/
+/handover-old-*/
