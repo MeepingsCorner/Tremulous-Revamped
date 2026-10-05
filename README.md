@@ -160,7 +160,9 @@ from snapshots with prediction. The single-process game stays the default.
   server announces itself to the master every 5 minutes. Forward UDP 30720
   on your router to the hosting PC and allow the game through the Windows
   firewall (the first host or join asks; tick Private for LAN and Public for
-  the internet). LAN games need no router forwarding, but the host's
+  the internet; a hosted game asks the router to forward the port itself,
+  UPnP, dec046, `net_upnp 0` off, and prints the address internet players
+  join at). LAN games need no router forwarding, but the host's
   firewall must still let the game in on Private networks (with the network
   itself set to Private in Windows): Play → LAN finds servers on the same
   network by broadcast, on every network adapter's own broadcast address too

@@ -181,9 +181,23 @@ thread_local! {
     static STORE: RefCell<Option<HdStore>> = const { RefCell::new(None) };
 }
 
-/// (Re)open the pack: `root` "" = user://hd; `enabled` false drops it.
+/// A pack folder: `<executable folder>/<name>` when a packaged game ships
+/// it there (the release folder), else `user://<name>` (where it is built).
+pub fn pack_dir(name: &str) -> String {
+    let exe = godot::classes::Os::singleton().get_executable_path().to_string();
+    if let Some((d, _)) = exe.rsplit_once(['/', '\\']) {
+        let p = format!("{d}/{name}");
+        if std::path::Path::new(&p).is_dir() {
+            return p;
+        }
+    }
+    godot::classes::ProjectSettings::singleton().globalize_path(&format!("user://{name}")).to_string()
+}
+
+/// (Re)open the pack: `root` "" = the packaged game's hd folder, else
+/// user://hd (pack_dir); `enabled` false drops it.
 pub fn configure(enabled: bool, root: &str, max_size: usize) {
-    let root = if root.is_empty() { godot::classes::ProjectSettings::singleton().globalize_path("user://hd").to_string() } else { root.to_string() };
+    let root = if root.is_empty() { pack_dir("hd") } else { root.to_string() };
     let root = PathBuf::from(root);
     STORE.with(|s| {
         let mut s = s.borrow_mut();

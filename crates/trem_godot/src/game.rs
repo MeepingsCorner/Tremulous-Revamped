@@ -241,6 +241,10 @@ pub struct TremGame {
     lightgrid: Option<crate::bspview::LightGrid>,
     /// the map's world-fixed shadow directions (lamps.rs)
     shadow_dirs: Option<crate::lamps::ShadowDirs>,
+    /// the router's forwarding of the hosted server's port (upnp.rs, dec046):
+    /// the request on its thread, then the mapping to take back
+    upnp_pending: Option<std::sync::mpsc::Receiver<Result<crate::upnp::Mapping, String>>>,
+    upnp_map: Option<crate::upnp::Mapping>,
     missiles: HashMap<usize, MissileVis>,
     flashes: Vec<(Gd<godot::classes::OmniLight3D>, f64)>,
     mapents: crate::mapents::MapEnts,
@@ -360,6 +364,8 @@ impl INode3D for TremGame {
             audio: None,
             lightgrid: None,
             shadow_dirs: None,
+            upnp_pending: None,
+            upnp_map: None,
             missiles: HashMap::new(),
             flashes: Vec::new(),
             mapents: Default::default(),
@@ -395,6 +401,7 @@ impl INode3D for TremGame {
     /// materials) must go before the engine does: dropping a Gd after the
     /// engine shut down panics.
     fn exit_tree(&mut self) {
+        self.upnp_release(true);
         crate::gfx::release_statics();
         crate::hdtex::release();
     }
@@ -809,6 +816,7 @@ impl TremGame {
     pub(crate) fn shutdown_map(&mut self) {
         // (G_WriteSessionData is for map changes; a shutdown drops the sessions)
         // CL_Disconnect + SV_Shutdown of the network host (dec033)
+        self.upnp_release(false);
         if let Some(nh) = self.nethost.as_mut() {
             nh.disconnect();
             for l in std::mem::take(&mut nh.out).lines() {
@@ -3580,7 +3588,7 @@ impl TremGame {
         let enhanced = self.client.cvars.integer("r_enhanced") != 0;
         let view = self.camera.as_ref().filter(|c| c.is_inside_tree()).map(|c| c.get_global_transform());
         // enhanced: the high-band sound pack (outside the pk3 search path)
-        let hd_root = (enhanced && self.client.cvars.integer("s_hdSounds") != 0).then(|| godot::classes::ProjectSettings::singleton().globalize_path("user://sfx_hd").to_string());
+        let hd_root = (enhanced && self.client.cvars.integer("s_hdSounds") != 0).then(|| crate::hdtex::pack_dir("sfx_hd"));
         // the FMOD + Steam Audio path (fmodaudio.rs) when it is up
         if let (Some(fm), Some(lib)) = (self.fmod.as_mut(), self.lib.as_mut()) {
             for p in paths.split('|') {
@@ -4087,6 +4095,59 @@ impl TremGame {
     }
 
     /// A cvar from the server side (rotation / console sets), else the client's.
+    /// dec046: a network server asks the router to forward its port
+    /// (`net_upnp`, on unless 0), on a thread; once per server.
+    fn upnp_start(&mut self) {
+        if self.upnp_pending.is_some() || self.upnp_map.is_some() {
+            return;
+        }
+        if self.net_cvar("net_upnp").is_some_and(|v| trem_sim::kernel::spawn::c_atoi(&v) == 0) {
+            return;
+        }
+        let Some(port) = self.nethost.as_ref().and_then(|n| n.net.port(trem_sim::kernel::netchan::NetSrc::Server)) else { return };
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::upnp::map_udp(port, "Tremulous"));
+        });
+        self.upnp_pending = Some(rx);
+        self.host_say(format!("UPnP: asking the router to forward UDP {port} for internet players..."));
+    }
+
+    fn upnp_poll(&mut self) {
+        let Some(rx) = self.upnp_pending.as_ref() else { return };
+        let Ok(r) = rx.try_recv() else { return };
+        self.upnp_pending = None;
+        match r {
+            Ok(m) => {
+                match m.external_ip.as_deref() {
+                    Some(ip) if crate::upnp::is_private(ip) => self.host_say(format!("UPnP: the router forwards UDP {} to {}, but its own internet address {ip} is private: it sits behind another router or the provider's CGNAT, so internet players cannot reach it (forward the port on the other router too, or ask the provider for a public IP)", m.port, m.local_ip)),
+                    Some(ip) => self.host_say(format!("UPnP: the router forwards UDP {} to this PC: internet players can join at {ip}:{} (connect {ip}:{})", m.port, m.port, m.port)),
+                    None => self.host_say(format!("UPnP: the router forwards UDP {} to this PC ({}); internet players join at your public IP, port {}", m.port, m.local_ip, m.port)),
+                }
+                self.upnp_map = Some(m);
+            }
+            Err(e) => self.host_say(format!("UPnP: {e}. For internet players forward UDP {} in the router to this PC by hand.", self.nethost.as_ref().and_then(|n| n.net.port(trem_sim::kernel::netchan::NetSrc::Server)).unwrap_or(trem_sim::kernel::netchan::PORT_SERVER))),
+        }
+    }
+
+    /// A line for the host: the engine log and the game console.
+    fn host_say(&mut self, l: String) {
+        godot_print!("{l}");
+        self.misc.con.print(&format!("{l}\n"));
+    }
+
+    /// The server stops: the router's forwarding is taken back (on a
+    /// thread; `wait` at exit, so it is sent before the process ends).
+    fn upnp_release(&mut self, wait: bool) {
+        self.upnp_pending = None;
+        if let Some(m) = self.upnp_map.take() {
+            let h = std::thread::spawn(move || crate::upnp::unmap(&m));
+            if wait {
+                let _ = h.join();
+            }
+        }
+    }
+
     fn net_cvar(&self, name: &str) -> Option<String> {
         self.cvars.iter().rev().find(|(k_, _)| k_.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone()).or_else(|| self.client.cvars.find(name).map(|v| v.string.clone()))
     }
@@ -4506,8 +4567,16 @@ impl TremGame {
                 let nh = self.nethost.as_mut().unwrap();
                 nh.loopback_only = loopback_only;
                 nh.spawn_server(w, &ld.name, sc, &ip, port, true);
-                for l in std::mem::take(&mut nh.out).lines() {
+                let out = std::mem::take(&mut nh.out);
+                for l in out.lines() {
                     godot_print!("{l}");
+                }
+                // the join addresses and the firewall hint on the host's console too
+                for l in out.lines().filter(|l| l.contains("join at") || l.contains("Windows Firewall")) {
+                    self.misc.con.print(&format!("{l}\n"));
+                }
+                if !loopback_only {
+                    self.upnp_start();
                 }
                 for l in &ld.then {
                     self.server_command(l);
@@ -4522,6 +4591,7 @@ impl TremGame {
     /// client and its cgame into the view World at the 16 ms tick, then the
     /// same presentation as the single-process game.
     fn net_process(&mut self, delta: f64) {
+        self.upnp_poll();
         self.clock += delta;
         self.client_frame();
         self.sync_net_cvars(false);
@@ -4678,8 +4748,25 @@ impl TremGame {
 /// `Com_StartupVariable` / `Com_AddStartupCommands`: the command line's
 /// "+" commands after `--` except +map / +devmap (`startup_map`), as
 /// console lines ("+set net_enabled 1", "+connect host:port").
+/// The Quake-style command line: `+set ...` / `+map ...` after Godot's
+/// `--` (`get_cmdline_user_args`), or straight on the game's command line
+/// (a packaged game's shortcut: `Tremulous.exe +connect host`), where Godot
+/// leaves the arguments it does not know in `get_cmdline_args`.
+fn quake_args() -> Vec<String> {
+    let os = godot::classes::Os::singleton();
+    let user: Vec<String> = os.get_cmdline_user_args().as_slice().iter().map(|a| a.to_string()).collect();
+    if user.iter().any(|a| a.starts_with('+')) {
+        return user;
+    }
+    let all: Vec<String> = os.get_cmdline_args().as_slice().iter().map(|a| a.to_string()).collect();
+    match all.iter().position(|a| a.starts_with('+')) {
+        Some(i) => all[i..].to_vec(),
+        None => user,
+    }
+}
+
 fn startup_commands() -> Vec<String> {
-    let args: Vec<String> = godot::classes::Os::singleton().get_cmdline_user_args().as_slice().iter().map(|a| a.to_string()).collect();
+    let args = quake_args();
     let mut cmds: Vec<Vec<String>> = Vec::new();
     for a in args {
         if let Some(c) = a.strip_prefix('+') {
@@ -4738,7 +4825,7 @@ void fragment() {
 /// `Com_AddStartupCommands`' map: `+map <name>` / `+devmap <name>` on the
 /// command line (after `--`).
 fn startup_map() -> Option<(String, String)> {
-    let args: Vec<String> = godot::classes::Os::singleton().get_cmdline_user_args().as_slice().iter().map(|a| a.to_string()).collect();
+    let args = quake_args();
     args.windows(2).find_map(|w| {
         let c = w[0].to_ascii_lowercase();
         (c == "+map" || c == "+devmap").then(|| (c[1..].to_string(), w[1].clone()))
