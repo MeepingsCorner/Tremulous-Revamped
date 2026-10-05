@@ -4758,7 +4758,16 @@ pub fn find_pk3s() -> Vec<String> {
         }
     }
     let mut out: Vec<String> = Vec::new();
+    // one folder once however it is spelt (an exported game's res://base
+    // is the executable's base folder)
+    let mut seen: Vec<String> = Vec::new();
     for d in dirs {
+        let d = d.replace('\\', "/").trim_end_matches('/').to_string();
+        let key = d.to_lowercase();
+        if seen.contains(&key) {
+            continue;
+        }
+        seen.push(key);
         let Some(da) = DirAccess::open(&d) else { continue };
         for f in da.get_files().as_slice() {
             let f = f.to_string();
