@@ -533,6 +533,10 @@ pub struct TremRtEffect {
     params: Option<Rid>,
     samplers: Option<(Rid, Rid)>,
     failed: bool,
+    /// the hardware acceleration structure could not be built (Godot's
+    /// release export templates refuse every BLAS: their index buffers keep
+    /// no maximum index): the software backend is used instead
+    hw_broken: bool,
     frame: u32,
     prev_view: Transform3D,
     prev_proj: Projection,
@@ -557,6 +561,7 @@ impl ICompositorEffect for TremRtEffect {
             params: None,
             samplers: None,
             failed: false,
+            hw_broken: false,
             frame: 0,
             prev_view: Transform3D::IDENTITY,
             prev_proj: Projection::IDENTITY,
@@ -620,6 +625,7 @@ impl TremRtEffect {
     /// The backend (from `GpuCaps`, or r_rtBackend): a change rebuilds
     /// the pipelines and the geometry.
     pub fn set_backend(&mut self, b: RtBackend) {
+        let b = if b == RtBackend::Hardware && self.hw_broken { RtBackend::Software } else { b };
         if b == self.backend {
             return;
         }
@@ -858,7 +864,16 @@ impl TremRtEffect {
             geos.push(&geo);
             blas = rd.blas_create(&geos, AccelerationStructureFlagBits::PREFER_FAST_TRACE_BIT);
             if !blas.is_valid() || rd.blas_build(blas) != godot::global::Error::OK {
-                self.fail("blas_build failed".into());
+                // fall back to the compute-shader tracer over our own BVH
+                // (the same effects, at half resolution) on the next frame
+                godot_warn!("trem: hardware ray tracing could not build its acceleration structure: using the software ray tracer");
+                for r in [blas, vbuf, ibuf, idx, pos, radb, albb] {
+                    if r.is_valid() {
+                        rd.free_rid(r);
+                    }
+                }
+                self.hw_broken = true;
+                self.set_backend(RtBackend::Software);
                 return;
             }
             tlas = rd.tlas_create(1, AccelerationStructureFlagBits::PREFER_FAST_TRACE_BIT);
