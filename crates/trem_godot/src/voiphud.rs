@@ -16,8 +16,21 @@ pub const NOTE_MS: u64 = 3000;
 /// and normal speech on a default-gain microphone stays under it.
 pub const SPEECH_FLOOR: f32 = 0.01;
 
+/// cl_voipVADThreshold as the port's voice activation applies it: to the
+/// level after cl_voipCaptureMult (the Mic Volume setting), so a louder
+/// setting also opens voice activation sooner. CL_CaptureVoip measures
+/// the power before the multiplier, so the threshold goes down by its
+/// square instead (power is amplitude squared).
+pub fn effective_vad_threshold(vad_threshold: f32, capture_mult: f32) -> f32 {
+    if capture_mult > 0.0 {
+        vad_threshold / (capture_mult * capture_mult)
+    } else {
+        vad_threshold
+    }
+}
+
 /// The power over which the local player counts as talking: what voice
-/// activation sends (cl_voipVADThreshold) with it on, else SPEECH_FLOOR.
+/// activation sends (the effective threshold) with it on, else SPEECH_FLOOR.
 pub fn talk_threshold(use_vad: bool, vad_threshold: f32) -> f32 {
     if use_vad {
         vad_threshold.max(SPEECH_FLOOR)
@@ -47,10 +60,11 @@ impl VoipHud {
     }
 }
 
-/// `cl_voipCaptureMult`-scaled power (CL_CaptureVoip's clc.voipPower,
-/// 0..100 scale) as a 0..1 bar, like SCR_DrawVoipMeter's `power * 10`.
-pub fn level_of(power: f32) -> f32 {
-    (power * 10.0).clamp(0.0, 1.0)
+/// CL_CaptureVoip's clc.voipPower (0..100 scale) as a 0..1 bar, with the
+/// talking threshold at the middle: how close the voice is to it (power
+/// * 10, SCR_DrawVoipMeter's, was full before voice activation opened).
+pub fn level_of(power: f32, threshold: f32) -> f32 {
+    (power / (2.0 * threshold.max(0.0001))).clamp(0.0, 1.0)
 }
 
 /// A name without its ^N colour codes, at most `max` characters.
@@ -169,8 +183,9 @@ mod tests {
     fn names_and_levels() {
         assert_eq!(plain_name("^1Gr^7anger", 32), "Granger");
         assert_eq!(plain_name("abcdef", 3), "abc");
-        assert_eq!(level_of(0.05), 0.5);
-        assert_eq!(level_of(3.0), 1.0);
+        assert_eq!(level_of(0.05, 0.05), 0.5);
+        assert_eq!(level_of(3.0, 0.05), 1.0);
+        assert_eq!(level_of(0.0, 0.0), 0.0);
     }
 
     #[test]
@@ -180,5 +195,8 @@ mod tests {
         // on: what voice activation sends
         assert_eq!(talk_threshold(true, 0.25), 0.25);
         assert_eq!(talk_threshold(true, 0.0), SPEECH_FLOOR);
+        // Mic Volume Loud (3): 0.25 becomes 0.25 / 9
+        assert!((effective_vad_threshold(0.25, 3.0) - 0.25 / 9.0).abs() < 1e-6);
+        assert_eq!(effective_vad_threshold(0.25, 0.0), 0.25);
     }
 }

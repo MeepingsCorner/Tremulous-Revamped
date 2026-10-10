@@ -5457,6 +5457,9 @@ pub(crate) struct WtB {
     /// threshold (ms): the server never sends a player's own voice back,
     /// so last_heard cannot list them
     voip_self_talk: u64,
+    /// voip_refreshdevices ran: done on the next frame, since a console
+    /// command runs while the client (and its cvars) is lent out
+    voip_refresh: bool,
 }
 
 impl TremGame {
@@ -5495,6 +5498,10 @@ impl TremGame {
     /// microphone toggle goes off where there is nothing to send to (no
     /// online game); its changes become HUD notes.
     fn wtb_voip_frame(&mut self) {
+        if std::mem::take(&mut self.wtb.voip_refresh) {
+            let out = self.wtb_voip_refresh_devices();
+            self.wtb_print(&out);
+        }
         if self.client.cvars.take_modified("s_voipInputDevice") {
             let dev = self.client.cvars.string("s_voipInputDevice");
             self.wtb.voip.set_input_device(&dev);
@@ -5519,9 +5526,15 @@ impl TremGame {
         let capturing = self.nethost.as_ref().is_some_and(|n| n.cl.voip.capturing) && self.client.cvars.integer("cl_voipSend") != 0;
         let power = self.nethost.as_ref().map(|n| n.cl.voip.power).unwrap_or(0.0);
         let use_vad = self.client.cvars.integer("cl_voipUseVAD") != 0;
-        if capturing && power >= crate::voiphud::talk_threshold(use_vad, self.client.cvars.value("cl_voipVADThreshold")) {
+        if capturing && power >= self.wtb_voip_talk_threshold(use_vad) {
             self.wtb.voip_self_talk = godot::classes::Time::singleton().get_ticks_msec();
         }
+    }
+
+    /// The local player's talking threshold (voiphud.rs).
+    fn wtb_voip_talk_threshold(&self, use_vad: bool) -> f32 {
+        let c = &self.client.cvars;
+        crate::voiphud::talk_threshold(use_vad, crate::voiphud::effective_vad_threshold(c.value("cl_voipVADThreshold"), c.value("cl_voipCaptureMult")))
     }
 
     /// `voip_refreshdevices` (the voice page's Refresh button): AudioServer
@@ -5532,7 +5545,9 @@ impl TremGame {
         let mut dev = self.client.cvars.string("s_voipInputDevice");
         let mut out = String::new();
         if !devices.iter().any(|d| *d == dev) {
-            out += &format!("VoIP: microphone \"{dev}\" is gone, using Default\n");
+            if !dev.is_empty() {
+                out += &format!("VoIP: microphone \"{dev}\" is gone, using Default\n");
+            }
             dev = "Default".into();
             self.client.cvars.set("s_voipInputDevice", &dev);
         }
@@ -5570,7 +5585,8 @@ impl TremGame {
             None => Vec::new(),
         };
         let note = self.wtb.voip_note.as_ref().filter(|n| n.2 > now).map(|n| (n.0.clone(), n.1));
-        let h = crate::voiphud::VoipHud { mic_on, talking, level: crate::voiphud::level_of(power), note, talkers };
+        let threshold = self.wtb_voip_talk_threshold(self.client.cvars.integer("cl_voipUseVAD") != 0);
+        let h = crate::voiphud::VoipHud { mic_on, talking, level: crate::voiphud::level_of(power, threshold), note, talkers };
         (!h.is_empty()).then_some(h)
     }
 
@@ -5713,7 +5729,10 @@ impl TremGame {
                 Some(self.wtb_open_video(argv.get(1).map(|s| s.as_str())))
             }
             "stopvideo" => Some(self.wtb_stop_video()),
-            "voip_refreshdevices" => Some(self.wtb_voip_refresh_devices()),
+            "voip_refreshdevices" => {
+                self.wtb.voip_refresh = true;
+                Some(String::new())
+            }
             _ => None,
         }
     }
@@ -5804,13 +5823,17 @@ impl TremGame {
     fn voip_hud_state(&self) -> GString {
         let nh = self.nethost.as_ref();
         let s = format!(
-            "toggle={} cl_voipSend={} net={} enabled={} capturing={} power={:.3} hud={:?}",
+            "toggle={} cl_voipSend={} net={} enabled={} capturing={} power={:.6} mic_fx={} pumped={} pump_peak={:.6} buffered={} hud={:?}",
             self.client.voip_toggle,
             self.client.cvars.integer("cl_voipSend"),
             nh.is_some(),
             nh.is_some_and(|n| n.cl.voip.enabled),
             nh.is_some_and(|n| n.cl.voip.capturing),
             nh.map(|n| n.cl.voip.power).unwrap_or(0.0),
+            self.wtb.voip.has_capture_fx(),
+            self.wtb.voip.pumped,
+            self.wtb.voip.pump_peak,
+            self.wtb.voip.buffered(),
             self.wtb_voip_hud()
         );
         GString::from(s.as_str())
@@ -6037,9 +6060,10 @@ impl TremGame {
     /// ("ent health max" each).
     #[func]
     fn structure_health(&self, classname: GString) -> PackedStringArray {
-        let Some(w) = self.world.as_ref() else { return PackedStringArray::new() };
+        // the game's world (a listen server's, whose entities keep their classnames)
+        let Some(w) = self.game_world() else { return PackedStringArray::new() };
         let c = classname.to_string();
-        (0..w.num_entities).filter(|&i| w.ents[i].inuse && w.ents[i].classname == c && w.ents[i].buildable.is_some()).map(|i| GString::from(format!("{} {} {}", i, w.ents[i].health, w.ents[i].buildable.unwrap().def().health).as_str())).collect()
+        (0..w.num_entities).filter(|&i| w.ents[i].inuse && w.ents[i].buildable.is_some_and(|b| w.ents[i].classname == c || b.cold().entity_name == c)).map(|i| GString::from(format!("{} {} {}", i, w.ents[i].health, w.ents[i].buildable.unwrap().def().health).as_str())).collect()
     }
     /// Tests: set a structure's health (a local game's world).
     #[func]

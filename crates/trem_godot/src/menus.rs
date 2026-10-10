@@ -7995,6 +7995,8 @@ impl TremMenus {
                             "in_restart" | "screenshot" | "screenshotjpeg" | "wait" => {}
                             // the client's own commands (resetDefaults: exec default.cfg)
                             "exec" | "execq" | "bind" | "unbind" | "unbindall" | "set" | "seta" | "setu" | "sets" | "toggle" | "vstr" => self.exec_client(line),
+                            // the voice page's Refresh (the game's own command)
+                            "voip_refreshdevices" => self.exec_client(line),
                             // anything else is forwarded to the server
                             _ => self.command(line),
                         }

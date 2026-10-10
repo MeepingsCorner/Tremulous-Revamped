@@ -52,6 +52,9 @@ pub struct VoipSound {
     pub peak: Vec<i16>,
     /// when each sender's voice last arrived (ms, Time::get_ticks_msec; the voice HUD)
     pub last_heard: Vec<u64>,
+    /// the microphone frames pumped and their peak level (tests, logs)
+    pub pumped: u64,
+    pub pump_peak: f32,
 }
 
 /// Linear gain -> dB (silence below -80 dB).
@@ -107,6 +110,16 @@ impl VoipSound {
         }
     }
 
+    /// The microphone's capture effect was found (tests, logs).
+    pub fn has_capture_fx(&self) -> bool {
+        self.capture_fx.is_some()
+    }
+
+    /// 48 kHz samples waiting for the kernel.
+    pub fn buffered(&self) -> usize {
+        self.buf.len()
+    }
+
     /// The capture restarted (the voice page's Refresh): the microphone
     /// player stops and plays again and what was buffered is dropped.
     pub fn restart_capture(&mut self) {
@@ -160,8 +173,10 @@ impl VoipSound {
                 let frames = fx.get_buffer(n);
                 let step = AudioServer::singleton().get_mix_rate() as f64 / RATE;
                 // linear resampling of the mono mix to 48 kHz
+                self.pumped += frames.len() as u64;
                 for f in frames.as_slice() {
                     let x = (f.x + f.y) * 0.5;
+                    self.pump_peak = self.pump_peak.max(x.abs());
                     while self.resample_pos < 1.0 {
                         let s = self.last_in + (x - self.last_in) * self.resample_pos as f32;
                         self.buf.push_back((s.clamp(-1.0, 1.0) * 32767.0) as i16);
@@ -286,6 +301,11 @@ impl VoipHost for Host<'_> {
     fn cvar_string(&self, name: &str) -> String {
         if !self.mic_open && name.eq_ignore_ascii_case("cl_voipUseVAD") {
             return "0".into();
+        }
+        // voice activation on the level after Mic Volume (voiphud.rs)
+        if name.eq_ignore_ascii_case("cl_voipVADThreshold") {
+            let t = crate::voiphud::effective_vad_threshold(self.cvars.value("cl_voipVADThreshold"), self.cvars.value("cl_voipCaptureMult"));
+            return t.to_string();
         }
         self.cvars.string(name)
     }
