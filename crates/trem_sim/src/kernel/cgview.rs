@@ -1142,7 +1142,11 @@ pub fn apply_entity(w: &mut World, n: usize, s: &EntityState, lerp_origin: &Vec3
     e.model_index = s.modelindex;
     e.model_index2 = s.modelindex2;
     e.ground_entity = s.ground_entity_num;
-    e.owner = s.other_entity_num;
+    // only a missile's otherEntityNum is its owner (trails, impacts); the
+    // others carry 0 or a target, and World::trace skips an entity owned by
+    // the mover: CG_ClipMoveToEntities skips nothing but skipNumber, so
+    // structures and players stay solid to the predicted player
+    e.owner = if et == EType::Missile { s.other_entity_num } else { ENTITYNUM_NONE };
     e.credits = keep_credits;
     if e.credits.len() != MAX_CLIENTS {
         e.credits = vec![0; MAX_CLIENTS];

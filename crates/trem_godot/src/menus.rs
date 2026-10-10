@@ -6436,6 +6436,8 @@ const G_BINDINGS: &[(&str, i32)] = {
         ("screenshotJPEG", -1),
         ("messagemode", -1),
         ("messagemode2", -1),
+        // the port's microphone toggle (clientcmd.rs PORT_DEFAULT_CFG, dec052)
+        ("voip_toggle", b'k' as i32),
     ]
 };
 
@@ -6795,6 +6797,41 @@ fn patch_sound_options(text: &str) -> String {
     format!("{}{}{}", &text[..start], button, &text[end..])
 }
 
+/// The options' Controls / Misc panel: a "Voice Chat Mic:" bind row for
+/// the port's `voip_toggle` (dec052) on the row after Screenshot, a copy
+/// of that item. A menu without the Screenshot row is left as it is.
+fn patch_voip_bind(text: &str) -> String {
+    let Some(k) = text.find("\"screenshotJPEG\"") else { return text.to_string() };
+    let Some(start) = text[..k].rfind("itemDef") else { return text.to_string() };
+    let Some(open) = text[start..].find('{').map(|o| start + o) else { return text.to_string() };
+    let mut depth = 0;
+    let mut end = None;
+    for (i, ch) in text[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(open + i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(end) = end else { return text.to_string() };
+    let item = &text[start..end];
+    // the row: rect SCONTENT_X (SCONTENT_Y+(<n>*ELEM_H)) ...
+    let Some(r) = item.find("(SCONTENT_Y+(") else { return text.to_string() };
+    let num_at = r + "(SCONTENT_Y+(".len();
+    let num_len = item[num_at..].find(|c: char| !c.is_ascii_digit()).unwrap_or(0);
+    let Ok(row) = item[num_at..num_at + num_len].parse::<i32>() else { return text.to_string() };
+    let copy = format!("{}{}{}", &item[..num_at], row + 1, &item[num_at + num_len..])
+        .replacen("\"screenshotJPEG\"", "\"voip_toggle\"", 1)
+        .replacen("\"Screenshot:\"", "\"Voice Chat Mic:\"", 1);
+    format!("{}\n\n    {}{}", &text[..end], copy, &text[end..])
+}
+
 /// `UI_Init`'s loading: menus (ui + cgame scoreboard), fonts, help,
 /// arenas, weapon icons.
 fn load_ui(lib: &mut Library) -> Result<Ui, String> {
@@ -6805,7 +6842,7 @@ fn load_ui(lib: &mut Library) -> Result<Ui, String> {
     with_port.push(PORT_AUDIO_MENU_FILE.to_string());
     let port = load_menu_files(&with_port, &mut |p: &str| match p {
         PORT_AUDIO_MENU_FILE => Some(port_audio_menu()),
-        "ui/ingame_options.menu" => lib.text(p).map(|t| patch_sound_options(&t)),
+        "ui/ingame_options.menu" => lib.text(p).map(|t| patch_voip_bind(&patch_sound_options(&t))),
         _ => lib.text(p),
     });
     let (ui, defines) = match port {
@@ -8189,6 +8226,24 @@ mod tests {
             assert!(txt.contains(cvar), "{cvar} missing from the page");
         }
         assert!(menus.iter().any(|m| m.name() == "ingame_options"));
+    }
+
+    #[test]
+    fn controls_have_the_voip_toggle_row() {
+        // the legacy menus as re/source/assets has them (data-legacy-assets.pk3)
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../re/source/assets");
+        let read = |p: &str| std::fs::read_to_string(repo.join(p)).ok();
+        let opts = read("ui/ingame_options.menu").expect("legacy ingame_options.menu");
+        let patched = patch_voip_bind(&patch_sound_options(&opts));
+        assert_eq!(patched.matches("\"voip_toggle\"").count(), 1);
+        assert!(patched.contains("text \"Voice Chat Mic:\"\n      cvar \"voip_toggle\"\n      rect SCONTENT_X (SCONTENT_Y+(13*ELEM_H))"), "the row after Screenshot");
+        // a menu without the Screenshot row is unchanged
+        assert_eq!(patch_voip_bind("menuDef { }"), "menuDef { }");
+        let mut r = |p: &str| if p == "ui/ingame_options.menu" { Some(patched.clone()) } else { read(p) };
+        let (menus, _) = load_menu_files(&["ui/ingame_options.menu".to_string()], &mut r).unwrap();
+        let m = menus.iter().find(|m| m.name() == "ingame_options").expect("ingame_options parsed");
+        assert!(format!("{m:?}").contains("voip_toggle"));
+        assert!(G_BINDINGS.iter().any(|&(c, k)| c == "voip_toggle" && k == b'k' as i32));
     }
 
     fn fonts() -> Fonts {

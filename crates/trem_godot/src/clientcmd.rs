@@ -30,7 +30,8 @@ pub const CONFIG_CFG: &str = "autogen.cfg";
 ///   (`Controls_SetDefaults`) put sprint (+button8) on x and dodge
 ///   (+button6) on z, so those two keys get them;
 /// * keys default.cfg leaves unbound: port debug helpers (bots, restart,
-///   map menu, help) and the third-person view (cg_thirdPerson).
+///   map menu, help), the third-person view (cg_thirdPerson) and the
+///   VoIP microphone toggle (k, `voip_toggle`).
 pub const PORT_DEFAULT_CFG: &str = "\
 // port additions (not in the original default.cfg)
 bind  x             +button8
@@ -45,7 +46,14 @@ bind  F8            port_maps
 bind  F9            port_help
 bind  F10           port_gfx
 bind  g             port_vision
+bind  k             voip_toggle
 ";
+
+/// Binds added to PORT_DEFAULT_CFG after its first release, with the
+/// `port_bindsVersion` that brought each: a config written before then
+/// (autogen.cfg starts with "unbindall") gets them once, on keys it left
+/// unbound.
+const PORT_LATER_BINDS: &[(i32, &str, &str)] = &[(1, "k", "voip_toggle")];
 
 /// The 1.1.0 data's default.cfg (data-1.1.0.pk3), verbatim: used when no
 /// game data is on the search path, so the sheet arena gets the same keys.
@@ -259,11 +267,32 @@ impl Client {
     /// `Com_ExecuteCfg` (with the port's additions after default.cfg),
     /// then `cvar_modifiedFlags &= ~CVAR_ARCHIVE` like Com_Init.
     pub fn startup(&mut self, host: &mut dyn ClientHost) {
+        self.cvars.get("port_bindsVersion", "0", CVAR_ARCHIVE);
         for f in ["default.cfg", "port_default.cfg", CONFIG_CFG, "autoexec.cfg"] {
+            if f == CONFIG_CFG {
+                // port_default.cfg had every port bind; a config written
+                // before port_bindsVersion existed sets it back to 0
+                let latest = PORT_LATER_BINDS.iter().map(|b| b.0).max().unwrap_or(0);
+                self.cvars.set("port_bindsVersion", &latest.to_string());
+                if host.read_file(CONFIG_CFG).is_some_and(|t| !t.contains("port_bindsVersion")) {
+                    self.cvars.set("port_bindsVersion", "0");
+                }
+            }
             self.cbuf.add_text(&format!("exec {f}\n"));
             self.execute(host);
         }
-        self.keys.modified = false;
+        // the later port binds an older config lacks, on keys it left free
+        let have = self.cvars.integer("port_bindsVersion");
+        let mut migrated = false;
+        for &(version, key, cmd) in PORT_LATER_BINDS.iter().filter(|b| b.0 > have) {
+            let k = crate::keys::key_string_to_keynum(key);
+            if k >= 0 && self.keys.get_binding(k).is_empty() {
+                self.keys.set_binding(k, cmd);
+            }
+            self.cvars.set("port_bindsVersion", &version.to_string());
+            migrated = true;
+        }
+        self.keys.modified = migrated;
         self.cvars.modified_flags &= !CVAR_ARCHIVE;
     }
 
@@ -376,7 +405,7 @@ impl Client {
             out.push(format!("-button{i}"));
         }
         // wt-b: cl_input.c +/-voiprecord, cl_main.c video / stopvideo
-        out.extend(["+voiprecord", "-voiprecord", "video", "stopvideo"].map(String::from));
+        out.extend(["+voiprecord", "-voiprecord", "voip_toggle", "video", "stopvideo"].map(String::from));
         out.extend(HOST_COMMANDS.iter().chain(UI_HOST_COMMANDS).chain(cgcmds::CG_COMMANDS).chain(cgcmds::CG_FORWARDED_COMMANDS).map(|s| s.to_string()));
         out
     }
@@ -480,6 +509,12 @@ impl Client {
         if c == "+voiprecord" || c == "-voiprecord" {
             self.cvars.set("cl_voipSend", trem_sim::kernel::voip::voip_record(c.starts_with('+')));
             return;
+        }
+        // the port's microphone toggle (k): +voiprecord that stays down
+        if c == "voip_toggle" {
+            let on = self.cvars.integer("cl_voipSend") == 0;
+            self.cvars.set("cl_voipSend", trem_sim::kernel::voip::voip_record(on));
+            return self.print(if on { "VoIP: microphone on\n" } else { "VoIP: microphone off\n" });
         }
         // cl_input.c commands
         let delta_pitch = host.snap_ps().map(|p| p.delta_angles[0]).unwrap_or(0);
@@ -791,5 +826,45 @@ mod tests {
         c.add_text("weapon 10\n");
         c.execute(&mut h);
         assert_eq!(c.wsel.select, WeaponId::Rifle as i32);
+    }
+
+    #[test]
+    fn voip_toggle_on_k() {
+        let k = crate::keys::key_string_to_keynum("k");
+        // a first start binds it from port_default.cfg
+        let (mut c, mut h) = started();
+        assert_eq!(c.keys.get_binding(k), "voip_toggle");
+        assert!(!c.config_modified());
+        // each press flips the microphone
+        c.add_text("voip_toggle\n");
+        c.execute(&mut h);
+        assert_eq!(c.cvars.integer("cl_voipSend"), 1);
+        assert_eq!(c.take_output(), "VoIP: microphone on\n");
+        c.add_text("voip_toggle\n");
+        c.execute(&mut h);
+        assert_eq!(c.cvars.integer("cl_voipSend"), 0);
+        assert_eq!(c.take_output(), "VoIP: microphone off\n");
+        // what it writes keeps the bind and the version
+        let cfg = c.write_config();
+        assert!(cfg.contains("bind k \"voip_toggle\"") && cfg.contains("port_bindsVersion"), "{cfg}");
+
+        let start = |autogen: &str| {
+            let mut c = Client::new();
+            let mut h = Host { files: vec![(CONFIG_CFG.into(), autogen.into())], ..Default::default() };
+            c.startup(&mut h);
+            c
+        };
+        // a config from before the bind: k gets it once, and is saved
+        let c = start("unbindall\nbind w \"+forward\"\n");
+        assert_eq!(c.keys.get_binding(k), "voip_toggle");
+        assert!(c.config_modified());
+        assert_eq!(c.cvars.integer("port_bindsVersion"), 1);
+        // ... but a k the player bound stays theirs
+        let c = start("unbindall\nbind k \"say hi\"\n");
+        assert_eq!(c.keys.get_binding(k), "say hi");
+        // and a k unbound after the bind came stays unbound
+        let c = start("unbindall\nbind w \"+forward\"\nseta port_bindsVersion \"1\"\n");
+        assert_eq!(c.keys.get_binding(k), "");
+        assert!(!c.config_modified());
     }
 }

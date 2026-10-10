@@ -56,7 +56,7 @@ like the original's SDL joystick after `seta in_joystick 1; in_restart`
 (buttons and the d-pad are JOY1…32 keys to `bind`; `in_joystickUseAnalog 1`
 drives the `j_*` analog movement cvars); default.cfg binds none.
 The Controls tab of the Esc → Options menu rebinds keys. Port additions on
-keys default.cfg leaves free: V third person · F3/F4 add alien/human bot ·
+keys default.cfg leaves free: V third person · K voice chat microphone on/off (dec052) · F3/F4 add alien/human bot ·
 F5/F6 remove · F7 restart · F8 maps · F9 help.
 
 **Original Tremulous content is included.** `godot/base/` holds the unmodified
@@ -175,7 +175,7 @@ from snapshots with prediction. The single-process game stays the default.
   `-- master` (both print each server's ping, players, map and name).
 * **VoIP** (dec037): ioquake3's Opus voice chat, interoperable with original
   clients and servers (the bundled libopus 1.1 of `re/source`, built by
-  `crates/trem_opus`). Bind push-to-talk with `bind v +voiprecord` (or
+  `crates/trem_opus`). K toggles the microphone (`voip_toggle`, dec052); bind push-to-talk with `bind <key> +voiprecord` (or
   `cl_voipUseVAD 1`); `cl_voipSendTarget` is `spatial` (heard at your
   position), `all`, `attacker`, `crosshair` or client numbers; `voip
   ignore|unignore <n>`, `voip gain <n> [value]`, `voip muteall|unmuteall`;
