@@ -26,179 +26,222 @@ re/               original source, C reference harness, golden traces, evidence
 
 ## Play
 
+**Just play (Windows x64):** download `Tremulous-Revamped-win64.zip` from
+[Tremulous-Revamped-Release](https://github.com/MeepingsCorner/Tremulous-Revamped-Release/releases/latest),
+unzip it anywhere and run `Tremulous.exe`. For the 4K textures, also unzip
+both `tremulous-revamped-hd-textures-part*.zip` files into the same folder,
+so an `hd` folder sits next to `Tremulous.exe`.
+
+**From source:**
+
 1. Install Godot **4.7** (standard build).
 2. Open `godot/project.godot` and press Play (F5). Prebuilt libraries are in
    `godot/bin/` for Linux x86_64 (`libtrem_godot.so`) and Windows x86_64
-   (`trem_godot.dll`). On macOS, build it yourself (below).
-3. The original start sequence runs: the `splash.RoQ` intro (any key skips it),
-   then the main menu of `ui/main.menu` with its splash model and heartbeat loop.
-   Play opens the server browser (LAN scan, master servers, favorites; dec035)
-   whose Create Server starts a joinable listen server on a map; Options edits the engine cvars
-   (video mode, brightness, volumes, ... kept in `autogen.cfg`); Leave in the
-   in-game menu comes back here. `-- +map atcs` starts on a map directly.
-4. Choose a team, then a spawn item or class. Three bots per side join by default.
+   (`trem_godot.dll`, plus the FMOD / Steam Audio runtime DLLs). On macOS,
+   build the library yourself (see Build).
+3. The original start sequence runs: the `splash.RoQ` intro (any key skips
+   it), then the main menu of `ui/main.menu` with its splash model and
+   heartbeat loop. Play opens the server browser (LAN, Internet, Favorites;
+   dec035, dec042). Its Create Server starts a listen server on a map that
+   other players can join, with the chosen number of bots per team (3 by
+   default). Options edits the engine cvars (video mode, brightness,
+   volumes, server protocol, voice chat, ... kept in `autogen.cfg`); Leave
+   in the in-game menu comes back here. `-- +map atcs` on the command line
+   starts a single-process game on a map directly (3 bots per side).
+4. Choose a team, then a spawn item or class.
 
-Controls are the original's: the bind table of the game data's `default.cfg`
-(a built-in copy without data), then `user://autogen.cfg` (written whenever a
-bind or archived cvar changes) and `user://autoexec.cfg`. WASD/arrows move ·
-Space jump · C crouch · Shift walk · X sprint · Z dodge · Mouse1/Ctrl fire ·
-Mouse2 alt-fire · Q use structure / evolve · `[` `]` / wheel select item, Enter /
-Mouse3 use it · R reload · B buy ammo · M medkit · E deconstruct · F gesture ·
-T/Y chat · Tab scores · F1/F2 vote yes/no · Esc menu · `~` console: the
-original drop-down console with its scrollback (PgUp/PgDn), edit line,
-history (Up/Down, kept in `user://q3history`) and Tab completion of commands,
-cvars, keys and cfg files; `/bind`, `/bindlist`, `/exec`, cvars,
-`/callvote map nexus6`, `/give all` with cheats… (text without a slash is
-chat in a game, as in the original). `name` (or Options → player name) is
-your name; the cgame's `testmodel`, `testgun`, `testPS`, `testTS`,
-`cg_drawBBOX` and `cg_drawSurfNormal` debugging tools work. A gamepad works
-like the original's SDL joystick after `seta in_joystick 1; in_restart`
-(buttons and the d-pad are JOY1…32 keys to `bind`; `in_joystickUseAnalog 1`
-drives the `j_*` analog movement cvars); default.cfg binds none.
-The Controls tab of the Esc → Options menu rebinds keys. Port additions on
-keys default.cfg leaves free: V third person · K voice chat microphone on/off (dec052) · F3/F4 add alien/human bot ·
-F5/F6 remove · F7 restart · F8 maps · F9 help.
+**Controls** are the original's: the bind table of the game data's
+`default.cfg` (a built-in copy when there is no game data), then the port's
+own additions (`port_default.cfg`, on keys `default.cfg` leaves free), then
+`user://autogen.cfg` (written whenever a bind or archived cvar changes) and
+`user://autoexec.cfg`. The Controls tab of Esc → Options rebinds keys.
 
-**Original Tremulous content is included.** `godot/base/` holds the unmodified
-Tremulous 1.1.0 pk3s (game data + the 8 official maps), CC BY-SA 2.5 — see
-`godot/base/COPYING`, `CC` and `README.txt` (dec016). Create Server (or `+map`) starts e.g. **ATCS**
-with the original:
+* Original keys: WASD/arrows move · Space jump · C crouch · Shift walk ·
+  Mouse1/Ctrl fire · Mouse2 alt-fire · Q use structure / evolve · `[` `]` /
+  wheel select item, Enter / Mouse3 use it · R reload · B buy ammo ·
+  M medkit · E deconstruct · F gesture · T/Y chat · Tab scores · F1/F2 vote
+  yes/no · Esc menu · `~` console.
+* Port additions: X sprint · Z dodge (legacy's defaults for the 1.1 keys) ·
+  V third person · K voice chat microphone on/off (dec052) · G flashlight
+  (humans) / night vision (aliens), enhanced graphics only · F3/F4 add an
+  alien/human bot · F5/F6 remove one · F7 restart · F8 map menu · F9 help ·
+  F10 graphics mode (classic ↔ enhanced).
+* The console is the original drop-down one: scrollback (PgUp/PgDn), edit
+  line, history (Up/Down, kept in `user://q3history`) and Tab completion of
+  commands, cvars, keys and cfg files; `/bind`, `/bindlist`, `/exec`, cvars,
+  `/callvote map nexus6`, `/give all` with cheats… Text without a slash is
+  chat in a game, as in the original. `name` (or Options → player name) is
+  your name. The cgame's `testmodel`, `testgun`, `testPS`, `testTS`,
+  `cg_drawBBOX` and `cg_drawSurfNormal` debugging tools work.
+* A gamepad works like the original's SDL joystick after
+  `seta in_joystick 1; in_restart`: buttons and the d-pad are JOY1…32 keys
+  to `bind` (default.cfg binds none), `in_joystickUseAnalog 1` drives the
+  `j_*` analog movement cvars, and the pad also drives the menus and the
+  console (dec037).
+
+**Original Tremulous content is included.** `godot/base/` holds the
+unmodified Tremulous 1.1.0 pk3s (game data + the 8 official maps), CC BY-SA
+2.5 — see `godot/base/COPYING`, `CC` and `README.txt` (dec016). A game on
+e.g. **ATCS** uses the original:
 
 * MD3 models with their skins — human base/light armour/helmet/battlesuit,
   all alien classes, every buildable, weapons and the first-person hands;
 * animations driven by each model's `animation.cfg` (legs/torso/gestures for
-  humans, non-segmented alien animations, buildable construct/idle/attack/pain/
-  destroy), interpolated per frame on the GPU (vertex-animation textures);
-* sounds — weapon fire/impacts, footsteps, jumps, falls, pain/death,
-  buildable loops and events, stage announcements;
+  humans, non-segmented alien animations, buildable construct/idle/attack/
+  pain/destroy), interpolated per frame on the GPU (vertex-animation
+  textures);
+* sounds — weapon fire/impacts and looping weapon sounds, footsteps, jumps,
+  falls, pain/death, buildable loops and events, stage announcements;
 * maps drawn stage by stage from their shader scripts (every stage's blend,
   rgbGen / alphaGen waves, tcGen / tcMods, animMap, deformVertexes and
-  polygonOffset decals; dec043), skies with their cloud layers, fog volumes,
-  lightmaps and light-grid lighting for models, curved-patch collision, doors/lifts/trains/buttons and every
-  trigger, target and misc entity of the 8 maps;
+  polygonOffset decals; dec043), skies with their cloud layers, fog
+  volumes, lightmaps and light-grid lighting for models, curved-patch
+  collision, doors/lifts/trains/buttons and every trigger, target and misc
+  entity of the 8 maps;
 * the cgame effects: every particle system and trail of `scripts/*.particle`
   and `*.trail` (impacts, muzzles, missiles, blood, explosions and gibs,
-  jetpack, acid tubes, tesla and lev2 zap beams, map particle systems), impact
-  marks, alien creep and blob shadows (mark polys clipped to the map's
-  surfaces like the original's R_MarkFragments, dec030), and the original HUD from
-  `ui/tremulous_*_hud.menu` with its ring/arm art, number font, scanner and
-  alien sense.
+  jetpack, acid tubes, tesla and lev2 zap beams, map particle systems),
+  impact marks, alien creep and blob shadows (mark polys clipped to the
+  map's surfaces like the original's R_MarkFragments, dec030), and the
+  original HUD from `ui/tremulous_*_hud.menu` with its ring/arm art, number
+  font, scanner and alien sense.
 
-F6 switches maps. More pk3s can go in `user://base`, `base/` next to the
+**Graphics modes** (F10, `r_enhanced`, console `port_gfx
+vanilla|enhanced|rt|pt|auto|off|info`): classic draws the game as the
+original does. Enhanced adds PBR lighting, the 4K texture pack and HD
+interface art (when the `hd` folder is present), HD sounds, FMOD + Steam
+Audio sound (Windows), ray-traced ambient occlusion / indirect light /
+reflections, ragdolls, the flashlight / night vision and world-fixed dynamic
+shadows (dec044).
+
+F8 opens the map menu. More pk3s can go in `user://base`, `base/` next to the
 executable, or `--base=DIR`. Without any data pk3 the game falls back to the
 sheet-authored arena with primitive models.
 
-## Multiplayer (dec033 .. dec035, dec037)
+## Multiplayer (dec033 .. dec047, dec052 .. dec054, dec056)
 
-The original protocol 71 is ported (Huffman, msg deltas, netchan bit-exact
-against the C), with a server over the World and a client/cgame that renders
-from snapshots with prediction. The single-process game stays the default.
+The client and server speak the original protocol 71 (Huffman, msg deltas,
+netchan bit-exact against the C) and vanilla 1.1.0's protocol 69, with a
+server over the World and a client/cgame that renders from snapshots with
+prediction. `+map` without networking still runs the whole game in one
+process; Create Server and `net_enabled 1` start a network server.
 
-* **Host a listen server**: the main menu's Play → Create Server, or
+* **Host a listen server**: Play → Create Server, or
   `-- +set net_enabled 1 +map atcs` (console: `set net_enabled 1`, then
-  `map atcs`). It listens on UDP `net_port` (30720, the next free of ten);
-  `sv_hostname`, `sv_maxclients`, `rconPassword`, `g_password`, `dedicated 2`
-  (announce to `sv_master1..5`) apply. The host's own player joins over the
-  loopback and is the top admin; remote players identify by `cl_guid`.
+  `map atcs`). It listens on UDP `net_port` (30720, or the next free of
+  ten). `sv_hostname`, `sv_maxclients`, `rconPassword`, `g_password` apply.
+  The host's own player joins over the loopback and is the top admin;
+  remote players identify by `cl_guid`.
+* **Host for the internet**: Create Server → Dedicated: Internet
+  (`dedicated 2`): you keep playing on it as a listen server, and it
+  announces itself to the masters (`sv_master1..5`) every 5 minutes. The
+  server asks the router to forward its port by UPnP (dec046; `net_upnp 0`
+  turns it off) and prints the address internet players join at. If the
+  router does not do UPnP, forward UDP 30720 to the hosting PC yourself.
 * **Join**: the server browser (LAN / Internet / Favorites, pinged), or the
   console `connect 192.168.1.10[:30720]`, `reconnect`, `disconnect`;
   `localservers`, `globalservers 0 full empty`, `ping`, `serverstatus`,
-  `rcon <cmd>` (with `rconPassword`), `heartbeat`, `serverinfo`, `systeminfo`,
-  `killserver`. The player name is the `name` cvar; `cl_guid` is the MD5 of
-  `user://qkey` (generated once).
+  `rcon <cmd>` (with `rconPassword`), `heartbeat`, `serverinfo`,
+  `systeminfo`, `killserver`. `cl_guid` is the MD5 of `user://qkey`
+  (generated once).
+* **Internet server list** (dec039, dec040): the Internet tab lists
+  master.tremulous.net's servers. That master reads the first word after
+  `getservers` as the protocol (the C's game-name request got an empty
+  list), so the client asks it for 71 and for 69 and merges the answers.
+  GPP / 1.2 servers (protocol 70) are not listed. Mod servers on protocol
+  71 are listed but run game code the port does not have.
+* **LAN** (dec045): Play → LAN finds servers on the same network by
+  broadcast, on every network adapter's own broadcast address too. LAN
+  games need no router forwarding, and the host's console prints the
+  address friends can also join directly (`connect 192.168.x.y:30720`).
+* **Windows Firewall** (dec047, dec054): other PCs only reach the game if
+  Windows lets it in (Private networks for LAN, with the network itself
+  set to Private; Public for the internet). At startup and when hosting,
+  the game checks; when other PCs cannot reach it, it asks in a Windows
+  dialog: Allow (then approve the administrator prompt; a block rule
+  Windows made for the game is replaced), Not now, or Don't ask again
+  (`net_firewallPrompt 0`). The console command `firewall_allow` asks again
+  at any time.
+* **Check from a terminal**:
+  `cargo run --release -p trem_sim --example server_list -- lan` or
+  `-- master` (both print each server's ping, players, map and name).
+* **Vanilla 1.1.0 servers** (dec040, dec041): Options → Server Protocol:
+  Auto (default: asks the server and uses its protocol), 1.3 (71) or
+  1.1 (69); the console takes `connect host -69` / `-71` (`-1` as in
+  GrangerHub's client). The browser's Game Type column says "base 1.1" or
+  "base 1.3", Version filters All / 1.3 / 1.1, and each server is joined
+  with its own protocol. On a 1.1 server the 1.1 game is used: its weapons,
+  classes, buildables (the hovel, the advanced construction kit), prices,
+  HUD values and its own movement for prediction (byte-exact against
+  1.1.0's bg_pmove.c). A pure 1.1 server (`sv_pure 1`) also wants its
+  vms-1.1.0.pk3: with `sv_allowDownload 1` the client fetches it, else put
+  it in the base folder.
 * **Dedicated server**: headless Godot,
-  `godot --headless --path godot -- +set dedicated 1 +map atcs` (`dedicated 2`
-  sends heartbeats to the masters; no rendering, menus or audio; stdin is the
-  server console; `--base=DIR` adds a pk3 folder), or without Godot:
+  `godot --headless --path godot -- +set dedicated 1 +map atcs`
+  (`dedicated 2` also announces to the masters; no rendering, menus or
+  audio; stdin is the server console; `--base=DIR` adds a pk3 folder), or
+  without Godot:
   `cargo run --release -p trem_sim --example dedicated -- +set sv_hostname "My server" +set rconPassword secret +map atcs`
-  (stdin is the server console; maps come from `godot/base` or `--base=DIR`;
-  admin.dat, layouts and games.log go to `fs_homepath`, default `./dedicated-home`).
+  (stdin is the server console; maps come from `godot/base` or
+  `--base=DIR`; admin.dat, layouts and games.log go to `fs_homepath`,
+  default `./dedicated-home`).
+* **Server administration** (dec026, dec031, dec034): the shrubbot admin
+  system (admin.dat in `user://`; admin commands as client commands —
+  `/kick Xeno1`, `/adminhelp` — or `!kick` in chat; bans match GUIDs,
+  pseudo-GUIDs for the host and bots, and IP/CIDR addresses), the
+  kick/mute/denybuild/allowbuild votes, server console commands (`status`,
+  `forceteam`, `layoutsave`, `eject`, ...), buildable layouts
+  (`layouts/<map>/<name>.dat` from the pk3s and `user://layouts`,
+  g_layouts, rotation `layouts`), the build log with `revert`, name
+  cleaning, flood and censor limits, g_inactivity, session data across map
+  changes, unlagged hit detection, the lag check, and the server log
+  (`user://games.log`, g_logFile / g_logFileSync, every G_LogPrintf line of
+  the C).
 * **Pure servers and downloads** (dec037): servers run `sv_pure 1` like the
   original (clients must use the server's pk3s; the pk3 checksums are the
-  original's, checked against its files.c / md4.c), and `sv_allowDownload 1`
-  lets clients fetch the referenced pk3s they lack. The client asks first
-  (the original download popup) unless `cl_allowDownload 1`; downloads land
-  in `user://base` and are used at once. `fs_openedList` / `fs_referencedList`.
+  original's, checked against its files.c / md4.c), and
+  `sv_allowDownload 1` lets clients fetch the referenced pk3s they lack
+  (over UDP). The client asks first (the original download popup) unless
+  `cl_allowDownload 1`; downloads land in `user://base` and are used at
+  once. `fs_openedList` / `fs_referencedList`.
 * **Demos** (dec037): `record [name]`, `stoprecord`, `demo <name>` (also the
   Demos menu), `timedemo 1`, `cl_autoRecordDemo 1`; files are
   `user://demos/<name>.dm_71` in the original format. Recording a
-  single-player game restarts its map on a local loopback server, as the
+  single-process game restarts its map on a local loopback server, as the
   original always plays.
 * **IPv6** (dec037): `net_enabled` bits as in the original (1 ipv4, 2 ipv6,
-  4 prefer ipv6, 8 no multicast; the port's 0 means single process and opens
-  both families for a client), `connect -6 [::1]:30720`, `net_ip6`,
-  `net_port6`, and the LAN scan through the `net_mcast6addr` multicast group.
+  4 prefer ipv6, 8 no multicast; the port's 0 means single process and
+  opens both families for a client), `connect -6 [::1]:30720`, `net_ip6`,
+  `net_port6`, and the LAN scan through the `net_mcast6addr` multicast
+  group.
+* **Voice chat (VoIP)** (dec038, dec052, dec053, dec056): ioquake3's Opus
+  voice chat, interoperable with original clients and servers (the bundled
+  libopus 1.1 of `re/source`, built by `crates/trem_opus`). K toggles the
+  microphone (`voip_toggle`); it turns itself off and says why when the
+  server has no voice chat. A voice HUD at the left shows MIC ON / TALKING
+  with the level, MIC OFF, and who is talking (`cl_voipHud`). Options →
+  Sound → Voice Chat... picks the microphone (`s_voipInputDevice`) and sets
+  voice chat on/off, mic volume, game sound while talking, voice activation
+  and the HUD. Push-to-talk: `bind <key> +voiprecord` (or `cl_voipUseVAD 1`
+  for voice activation). `cl_voipSendTarget` is `spatial` (heard at your
+  position), `all`, `attacker`, `crosshair` or client numbers;
+  `voip ignore|unignore <n>`, `voip gain <n> [value]`,
+  `voip muteall|unmuteall`; `cl_voip 0` turns it off, `cl_voipShowMeter`
+  the `VoIP: [****]` meter, `cl_voipGainDuringCapture` /
+  `cl_voipCaptureMult` as in the C. Servers relay with `sv_voip 1`
+  (default). Needs `rate` >= 25000 and a microphone (Godot's audio input,
+  enabled in project.godot).
+* **Video capture** (dec037): `video [name]` / `stopvideo` write
+  `videos/<name>.avi` in the user folder (motion JPEG with
+  `cl_aviMotionJpeg 1`, else raw BGR; the game's mixed sound as PCM) at a
+  fixed `cl_aviFrameRate` (default 25) — like the original, `video` runs
+  while a demo plays.
 * **Headless client / interop probe**:
   `cargo run --release -p trem_sim --example net_probe -- 127.0.0.1:30720 20`
-  joins any protocol 71 server (an original 1.2/legacy `tremded` too), walks,
-  fires and prints what it sees.
-* Interop: the port's client joins an original tremulous-legacy `tremded`
-  (built from `re/source`) and plays (team, spawn, move, fire, clean
-  disconnect). An original client against the port's server is untested here
-  (no SDL in the build container); the server's packets come from the same
-  verified msg/netchan code. Not supported: cURL downloads (UDP only).
-* **Vanilla 1.1.0 servers** (dec040, dec041): the client also speaks
-  Tremulous 1.1.0's protocol 69, so it joins vanilla servers as well as
-  1.3 / legacy (71) ones. Options → Server Protocol: Auto (default: asks
-  the server and uses its protocol), 1.3 (71) or 1.1 (69); the console
-  takes `connect host -69` / `-71` (`-1` as in GrangerHub's client). The
-  browser lists both (the Game Type column says "base 1.1" or "base 1.3";
-  Version: All / 1.3 / 1.1 filters) and joins each with its own protocol.
-  On a 1.1 server the 1.1 game is used: its weapons, classes, buildables
-  (the hovel, the advanced construction kit), prices, HUD values and its
-  own movement for prediction (byte-exact against 1.1.0's bg_pmove.c).
-  A pure 1.1 server (`sv_pure 1`) also wants its vms-1.1.0.pk3: with
-  `sv_allowDownload 1` the client fetches it, else put it in the base
-  folder. Not supported: GPP / 1.2 servers (protocol 70), demos of 1.1
-  games.
-* **Online play** (dec039): the Internet tab lists master.tremulous.net's
-  servers (the request carries protocol 71, which that master needs; the
-  C's game-name request got an empty list). The master is also asked for
-  1.1's protocol 69 and both answers are merged, so vanilla 1.1 servers
-  are listed too (dec040); GPP's 70 is not listed; mod servers on protocol 71 are
-  listed but run game code the port does not have. To host for players
-  outside your network set Create Server → Dedicated: Internet (`dedicated 2`; the port keeps you playing on it, a listen server): the
-  server announces itself to the master every 5 minutes. Forward UDP 30720
-  on your router to the hosting PC and allow the game through the Windows
-  firewall (the first host or join asks; tick Private for LAN and Public for
-  the internet; a hosted game asks the router to forward the port itself,
-  UPnP, dec046, `net_upnp 0` off, and prints the address internet players
-  join at). LAN games need no router forwarding, but the host's
-  firewall must still let the game in on Private networks (with the network
-  itself set to Private in Windows): Play → LAN finds servers on the same
-  network by broadcast, on every network adapter's own broadcast address too
-  (dec045); the host's console prints the address friends can also join
-  directly (`connect 192.168.x.y:30720`). On Windows the host also checks
-  the firewall and says when other PCs cannot reach the game; the console
-  command `firewall_allow` then asks Windows (its administrator prompt) to
-  add the rule (dec047). The game also checks at startup and, when other
-  PCs cannot reach it, asks in a Windows dialog: Allow (then approve the
-  administrator prompt; a block rule Windows made for the game is replaced),
-  Not now, or Don't ask again (`net_firewallPrompt 0`; dec054). Check from a terminal:
-  `cargo run --release -p trem_sim --example server_list -- lan` or
-  `-- master` (both print each server's ping, players, map and name).
-* **VoIP** (dec037): ioquake3's Opus voice chat, interoperable with original
-  clients and servers (the bundled libopus 1.1 of `re/source`, built by
-  `crates/trem_opus`). K toggles the microphone (`voip_toggle`, dec052; it
-  goes off with the reason when the server has no voice chat, dec053); a
-  voice HUD at the left shows MIC ON / TALKING with the level, MIC OFF, and
-  who is talking (`cl_voipHud`); Options → Sound → Voice Chat... picks the
-  microphone (`s_voipInputDevice`) and sets voice chat on/off, mic volume,
-  game sound while talking, voice activation and the HUD. Bind push-to-talk with `bind <key> +voiprecord` (or
-  `cl_voipUseVAD 1`); `cl_voipSendTarget` is `spatial` (heard at your
-  position), `all`, `attacker`, `crosshair` or client numbers; `voip
-  ignore|unignore <n>`, `voip gain <n> [value]`, `voip muteall|unmuteall`;
-  `cl_voip 0` turns it off, `cl_voipShowMeter` the `VoIP: [****]` meter,
-  `cl_voipGainDuringCapture` / `cl_voipCaptureMult` as in the C; servers
-  relay with `sv_voip 1` (default). Needs `rate` >= 25000 and a microphone
-  (Godot's audio input, enabled in project.godot).
-* **Video capture** (dec037): `video [name]` / `stopvideo` write
-  `videos/<name>.avi` in the user folder (motion JPEG with `cl_aviMotionJpeg 1`,
-  else raw BGR; the game's mixed sound as PCM) at a fixed `cl_aviFrameRate`
-  (default 25) — like the original, `video` runs while a demo plays.
-* **Gamepad in menus and console** (dec037): with `in_joystick 1` the pad's
-  keys reach the open menu (the stick moves the cursor, bind items take
-  JOY keys) and the console (stick up/down: history).
+  joins any protocol 71 server (an original legacy `tremded` too), walks,
+  fires and prints what it sees. The port's client joins an original
+  tremulous-legacy `tremded` (built from `re/source`) and plays (team,
+  spawn, move, fire, clean disconnect).
 
 ## Build
 
@@ -210,33 +253,35 @@ CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
   cargo build --release -p trem_godot --target x86_64-pc-windows-gnu
 ```
 
-On Windows, build the DLL that gets committed to `godot/bin/` with
-`powershell -ExecutionPolicy Bypass -File tools\build_release.ps1`: it passes
-`--remap-path-prefix` for the Cargo home and the repo (stable Cargo has no
-`trim-paths` yet), so panic locations name `/cargo/...` and `/src/...`
-instead of folders under your user profile, builds into `target/dist`, and
-copies the DLL to `godot/bin/`.
-
-`godot-mcp.config.json` is an MCP server entry for `@coding-solo/godot-mcp`.
-Its `GODOT_PATH` uses `${USERPROFILE}`, which Claude Code expands in MCP
-configs; a client that does not expand variables needs the full path to the
-Godot executable there instead.
+On Windows, build the DLLs that get committed to `godot/bin/` with
+`powershell -ExecutionPolicy Bypass -File tools\build_release.ps1`. It
+passes `--remap-path-prefix` for the Cargo home and the repo (stable Cargo
+has no `trim-paths` yet), so panic locations name `/cargo/...` and
+`/src/...` instead of folders under your user profile, builds into
+`target/dist`, and copies `trem_godot.dll` and `trem_audio.dll` to
+`godot/bin/`. `trem_audio.dll` (the FMOD + Steam Audio sound path,
+`crates/trem_godot/native/trem_audio.c`) is built by `build.rs` on Windows
+with MSVC from the SDK files in `third_party/fmod` and
+`third_party/steamaudio`; other builds keep Godot's audio.
 
 The 4K texture pack is too big for the repo: download both zips from the
 [4K texture pack release](https://github.com/MeepingsCorner/Tremulous-Revamped/releases/tag/hd-textures-v1)
-and unzip them into one `hd` folder, next to the packaged game's executable
-or in the game's user folder
-(`%APPDATA%\Godot\app_userdata\Tremulous (Godot + Rust port)\hd`).
-
-The 4K texture pack (`hd/`) is stored losslessly compressed (dec055,
-`crates/trem_hdpack`): each mip level is zstd-compressed and identical
-textures are links, so the GPU gets exactly the same data. Shrink a pack
-built before that (or check one) with:
+and unzip them into one `hd` folder, next to the game's executable or in the
+game's user folder
+(`%APPDATA%\Godot\app_userdata\Tremulous (Godot + Rust port)\hd`). The pack
+is stored losslessly compressed (dec055, `crates/trem_hdpack`): each mip
+level is zstd-compressed and identical textures are links, so the GPU gets
+exactly the same data. Shrink a pack built before that (or check one) with:
 
 ```sh
 cargo run --release -p trem_hdpack --bin hdpack -- stat <hd folder>
 cargo run --release -p trem_hdpack --bin hdpack -- pack <hd folder>
 ```
+
+`godot-mcp.config.json` is an MCP server entry for `@coding-solo/godot-mcp`.
+Its `GODOT_PATH` uses `${USERPROFILE}`, which Claude Code expands in MCP
+configs; a client that does not expand variables needs the full path to the
+Godot executable there instead.
 
 ## Verify
 
@@ -244,11 +289,11 @@ cargo run --release -p trem_hdpack --bin hdpack -- pack <hd folder>
 cargo run -p sheetty-cli -- preflight        # PASSED 0 error(s), 0 warning(s) (L0..L8)
 cargo run -p sheetty-cli -- matrix           # checkmark matrix: every row x column checked (L8)
 cargo run -p sheetty-cli -- json [group]     # the sheet book as grouped JSON (00-groups.tsv)
-TREM_DATA=<unpacked data-1.1.0> cargo test --workspace   # 61 tests: parity, BSP, patches, movers, game rules, fx, hud
+TREM_DATA=<unpacked data-1.1.0> cargo test --workspace   # parity, BSP, patches, movers, game rules, net, fx, hud
 make -C re/harness pmove_ref && re/harness/pmove_ref sheets arena | sha256sum   # = re/traces/arena.sha256
 make -C re/harness curve_ref && re/harness/curve_ref atcs.bsp | sha256sum        # = re/traces/curve/atcs.sha256
-godot --headless --path godot --import   # first headless import of any godot-rust class aborts
-godot --headless --path godot --import   #   at exit in Godot 4.7.1 (upstream; the editor GUI is fine): run twice
+godot --headless --path godot --import   # the first headless import of any godot-rust class can abort
+godot --headless --path godot --import   #   at exit (upstream; the editor GUI is fine): run it twice
 godot --headless --path godot res://tests/smoke.tscn                        # joins, spawns, plays, PASS
 xvfb-run godot --rendering-driver opengl3 --path godot res://tests/bsp_shot.tscn  # pk3 → BSP → render, PASS
 cargo run -p trem_sim --example match_sim -- 120 3                           # headless bot match
@@ -270,7 +315,8 @@ What the evidence covers:
 | Layer | Evidence | Strength |
 |---|---|---|
 | Pmove, slidemove, cm_trace (AABB) | 20 scenarios × every tick, 93,699 cells, float bits compared against the original C compiled natively | bit-exact (Verified) |
-| Constants/tables | L5: 2,824 sheet cells compared with values extracted from the original program | exact |
+| 1.1.0 movement (protocol 69 prediction) | the port's 1.1 pmove against 1.1.0's bg_pmove.c compiled natively (dec041) | byte-exact (Verified) |
+| Constants/tables | L5: sheet cells compared with values extracted from the original program | exact |
 | IBSP loader | arena → IBSP → parse round-trip; 3,000 random traces identical to the sheet clip map; golden trace replayed on the BSP-loaded map | exact |
 | Patches, inline models, PVS/areas | 30,000 random box/point traces per map on the 8 official maps, hashed against the original cm_*.c compiled as `re/harness/cm_ref` | bit-exact (Verified) |
 | Patch grids (tr_curve.c) | `R_SubdividePatchToGrid` for every patch of the 8 maps (sizes, positions, normals) hashed against the original tr_curve.c compiled as `re/harness/curve_ref` | bit-exact (Verified) |
@@ -284,65 +330,75 @@ What the evidence covers:
 
 ## How the Method maps onto this repo
 
-* **D1/D2 one source of truth** — every number the rules read is a sheet cell
-  (`sheets/domain/*.tsv`), seeded by `re/harness/extract.c` and `gen_consts.py`
-  from the original program, never retyped.
-* **D3 one module per sheet**, **D6 generated code only in OUT_DIR** — `trem_sim/build.rs`
-  runs `sheetty::run`; `sheetty check-generated` proves nothing generated is committed.
-* **D4 kernel allowlist** — every file in `trem_sim/src/kernel/` has a row in
-  `sheets/kernel.tsv`; an unlisted file fails L0.
-* **D5 preflight gates the build** — L0 structure, L1 types, L2 refs, L3 plan/impl
-  coverage + symbol map, L4 assets, L5 divergence vs the original, L6 budget, L7 determinism.
-* **Dispatch as data** — `weapon_behaviors`, `buildable_behaviors` and `systems`
-  are fn tables; `systems` is emitted in topological order of its `after` column.
-* **Mode A** — `re/source` (original), `re/harness` (oracle), `sheets/re/symbols.tsv`
-  (2,103 functions with status), `re/harness/statuses.py` recomputes it.
-* **Decisions** — `sheets/decisions.tsv` dec001–dec037 (Godot instead of Bevy,
-  bundled CC BY-SA media, deterministic RNG, behavioural verification of g_*.c, bots,
-  dropped server-only subsystems, client commands as a sheet…).
+* **D1/D2 one source of truth** — every number the rules read is a sheet
+  cell (`sheets/domain/*.tsv`), seeded by `re/harness/extract.c` and
+  `gen_consts.py` from the original program, never retyped.
+* **D3 one module per sheet**, **D6 generated code only in OUT_DIR** —
+  `trem_sim/build.rs` runs `sheetty::run`; `sheetty check-generated` proves
+  nothing generated is committed.
+* **D4 kernel allowlist** — every file in `trem_sim/src/kernel/` has a row
+  in `sheets/kernel.tsv`; an unlisted file fails L0.
+* **D5 preflight gates the build** — L0 structure, L1 types, L2 refs, L3
+  plan/impl coverage + symbol map, L4 assets, L5 divergence vs the
+  original, L6 budget, L7 determinism, L8 completeness (every row × column
+  checked).
+* **Dispatch as data** — `weapon_behaviors`, `buildable_behaviors` and
+  `systems` are fn tables; `systems` is emitted in topological order of its
+  `after` column.
+* **Mode A** — `re/source` (original), `re/harness` (oracle),
+  `sheets/re/symbols.tsv` (every original function with its status),
+  `re/harness/statuses.py` recomputes it.
+* **Decisions** — `sheets/decisions.tsv` dec001–dec056 (Godot instead of
+  Bevy, bundled CC BY-SA media, deterministic RNG, behavioural verification
+  of g_*.c, bots, networking, protocol 69, the enhanced mode, voice chat,
+  firewall and UPnP, …).
 
 ## Known gaps (honest list)
 
-* Server subsystems are ported for a single process (dec026): the shrubbot
-  admin system (admin.dat in `user://`, the host's player is the top admin by
-  default, bans match GUIDs (pseudo-GUIDs for the host and bots) and, for
-  networked players, IP/CIDR addresses; admin
-  commands as client commands — `/kick Xeno1`, `/adminhelp` — or `!kick` in
-  chat), the kick/mute/denybuild/allowbuild votes, server console commands
-  (`status`, `forceteam`, `layoutsave`, `eject`, ...), buildable layouts
-  (`layouts/<map>/<name>.dat` from the pk3s and `user://layouts`, g_layouts,
-  rotation `layouts`), the build log with `revert`, name cleaning, flood and
-  censor limits, g_inactivity and session data across map changes, and the
-  server log (`user://games.log`, g_logFile / g_logFileSync, every G_LogPrintf
-  line of the C, dec031). Unlagged, IP/CIDR bans and the lag check are
-  ported for networked play (dec034); still dropped (dec027): voice chat
-  (vsay: the data has no voices).
-* The legacy repo's own assets (legacy menus and HUDs, buildable health bars,
-  particle/shader overrides) are packed into `godot/base/data-legacy-assets.pk3`
-  by `python3 re/harness/pack_assets.py` and override data-1.1.0 (dec025).
-* Map rotation: `maprotation.cfg` is read from the data folders (a copy of the
-  stock `rotation1` ships in `godot/base`); `initial_map_rotation` on the
-  TremGame node picks the rotation, and the console takes `maprotation NAME`,
-  `advanceMapRotation` and `stopMapRotation` (dec022).
+* **Networking**
+  * GPP / 1.2 servers (protocol 70) are not supported or listed, and demos
+    of 1.1 games do not play.
+  * Mod servers on protocol 71 are listed but run game code the port does
+    not have.
+  * Downloads are UDP only (no cURL).
+  * An original client joining the port's server is untested; the
+    server's packets come from the same verified msg/netchan code.
+  * UPnP is untested on a router that answers it (the test router did
+    not), and LAN play between two PCs is verified on one PC only (dec045).
+  * Server-side deviations (events as temp entities, the `servermenu`
+    notice command, ClientBegin at connect time, sv_fps 60) are listed in
+    dec033.
+  * Pure checks treat the built-in cgame / ui as coming from the pak with
+    their qvm, else the one with ui/hud.txt / ui/menus.txt. The port's own
+    server does not need 1.1.0's vms pk3; only joining a pure 1.1 server
+    does (dec037, dec041).
+  * The ipv6 socket and multicast tests skip on machines without ipv6.
+* **Voice commands**: `vsay` is still dropped (dec027): the game data has no
+  voice lines. (VoIP voice chat works; see Multiplayer.)
+* **Bots** are new (dec015) and simple; on uncreation a bot can still fall
+  to its death now and then. Their balance is part of their definition of
+  done (dec036): over six seeds per official map no team wins more than two
+  thirds of a map's matches; most matches run the full ten minutes and end
+  in a draw, and tremor favours the aliens most.
+* **Rendering**: marks are meshes, so they draw in the Compatibility
+  (OpenGL) renderer too (`tests/marks_shot.tscn`). Curved patches are
+  `R_SubdividePatchToGrid` grids for both drawing and mark clipping (no
+  patch stitching or distance LOD), and multi-stage mark shaders animate
+  their tcMods / `rgbGen wave` (the wake). Particle `realLight`, bounce
+  marks/sounds and model-particle animation are not used by the stock
+  scripts and are skipped.
+* **Platforms**: no prebuilt macOS library; FMOD + Steam Audio sound is
+  Windows only (other platforms use Godot's audio).
+
+Other notes:
+
+* The legacy repo's own assets (legacy menus and HUDs, buildable health
+  bars, particle/shader overrides) are packed into
+  `godot/base/data-legacy-assets.pk3` by `python3 re/harness/pack_assets.py`
+  and override data-1.1.0 (dec025).
+* Map rotation: `maprotation.cfg` is read from the data folders (a copy of
+  the stock `rotation1` ships in `godot/base`); `initial_map_rotation` on
+  the TremGame node picks the rotation, and the console takes
+  `maprotation NAME`, `advanceMapRotation` and `stopMapRotation` (dec022).
 * Light flares default to `cg_lightFlare 3` (bisphere "real" fade, dec024);
   `cg_lightFlare 0..2` in the console switches mode.
-* Marks are meshes, so they draw in the Compatibility (OpenGL) renderer too
-  (`tests/marks_shot.tscn`); curved patches are `R_SubdividePatchToGrid` grids
-  for both drawing and mark clipping (no patch stitching or distance LOD),
-  and multi-stage mark shaders animate their tcMods / `rgbGen wave` (the
-  wake). Particle `realLight`, bounce marks/sounds and model-particle animation are not
-  used by the stock scripts and are skipped.
-* Bots are new (dec015) and simple; on uncreation a bot can still fall to its
-  death now and then.
-* Networking (dec033 .. dec035, dec037): no VoIP or cURL; an original client
-  joining the port's server is untested. Server-side deviations (events as
-  temp entities, the `servermenu` notice command, ClientBegin at connect
-  time, sv_fps 60) are listed in dec033. Pure checks treat the built-in
-  cgame / ui as coming from the pak with their qvm, else the one with
-  ui/hud.txt / ui/menus.txt (Tremulous 1.1.0 keeps its qvms in a vms pk3 the
-  port does not need; dec037). The container this was built in has no ipv6,
-  so the ipv6 socket and multicast tests skip there.
-  death now and then. Their balance is part of their definition of done
-  (dec036: over six seeds per official map no team wins more than two
-  thirds of a map's matches; most matches run the full ten minutes and end
-  in a draw, tremor favours the aliens most).
