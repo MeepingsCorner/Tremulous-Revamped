@@ -758,10 +758,12 @@ impl GfxRuntime {
             env.set_tonemapper(ToneMapper::LINEAR);
             env.set_tonemap_exposure(1.0);
         }
-        let hide = enhanced && self.is_bsp;
+        // build_level's sun lights the sheet arena; a BSP map's light is its
+        // light maps and light grid (the original renderer has no sun), in
+        // the classic (vanilla) mode too
         if let Some(s) = self.sun.as_mut() {
             if s.is_instance_valid() {
-                s.set_visible(!hide);
+                s.set_visible(!self.is_bsp);
             }
         }
         // the reactor's blue and the overmind's green lights are the sheet
