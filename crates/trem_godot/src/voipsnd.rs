@@ -50,6 +50,8 @@ pub struct VoipSound {
     pub received: Vec<usize>,
     /// peak level of the received voice per sender
     pub peak: Vec<i16>,
+    /// when each sender's voice last arrived (ms, Time::get_ticks_msec; the voice HUD)
+    pub last_heard: Vec<u64>,
 }
 
 /// Linear gain -> dB (silence below -80 dB).
@@ -87,6 +89,30 @@ impl VoipSound {
         p.set_bus(CAPTURE_BUS);
         parent.add_child(&p);
         self.mic = Some(p);
+    }
+
+    /// `s_voipInputDevice`: the capture device by name ("Default": the
+    /// system's), as AudioServer lists them (`input_devices`).
+    pub fn set_input_device(&mut self, name: &str) {
+        let mut a = AudioServer::singleton();
+        let known = a.get_input_device_list().as_slice().iter().any(|d| d.to_string() == name);
+        let dev = if known { name } else { "Default" };
+        a.set_input_device(dev);
+        // a capture in progress continues from the new device
+        if self.capturing {
+            if let Some(m) = self.mic.as_mut() {
+                m.stop();
+                m.play();
+            }
+        }
+    }
+
+    /// The capture devices AudioServer knows ("Default" first).
+    pub fn input_devices() -> Vec<String> {
+        let mut v: Vec<String> = AudioServer::singleton().get_input_device_list().as_slice().iter().map(|d| d.to_string()).collect();
+        v.retain(|d| d != "Default");
+        v.insert(0, "Default".into());
+        v
     }
 
     /// A tone in place of the microphone (None: the microphone again).
@@ -157,8 +183,10 @@ impl VoipSound {
             self.spatial.resize(MAX_CLIENTS, None);
             self.received.resize(MAX_CLIENTS, 0);
             self.peak.resize(MAX_CLIENTS, 0);
+            self.last_heard.resize(MAX_CLIENTS, 0);
         }
         let s = p.sender.min(MAX_CLIENTS - 1);
+        self.last_heard[s] = godot::classes::Time::singleton().get_ticks_msec();
         self.received[s] += p.samples.len();
         self.peak[s] = self.peak[s].max(p.samples.iter().map(|x| x.saturating_abs()).max().unwrap_or(0));
         let gen = || {

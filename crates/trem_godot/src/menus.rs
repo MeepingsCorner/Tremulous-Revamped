@@ -6756,18 +6756,99 @@ const PORT_AUDIO_ROWS: &[(&str, &str, Option<&str>)] = &[
 
 /// PORT_AUDIO_MENU with its rows.
 fn port_audio_menu() -> String {
+    port_page_rows(PORT_AUDIO_MENU, PORT_AUDIO_ROWS.iter().map(|&(l, c, v)| (l, c, v.map(|v| format!("cvarFloatList {{ {v} }}")))))
+}
+
+/// The port's voice-chat page (dec053), opened from the options' Sound
+/// panel: built like the enhanced-audio page, with the capture devices
+/// AudioServer lists in `devices` ("Default" first).
+pub const PORT_VOICE_MENU_FILE: &str = "ui/port_voice.menu";
+
+/// The rows of the voice-chat page: (label, cvar, cvarFloatList; None = yes / no);
+/// the microphone row (`s_voipInputDevice`, a cvarStrList) is second.
+const PORT_VOICE_ROWS: &[(&str, &str, Option<&str>)] = &[
+    ("Voice Chat:", "cl_voip", None),
+    ("Mic Volume:", "cl_voipCaptureMult", Some(r#""Quiet" 1 "Normal" 2 "Loud" 3 "Very Loud" 4"#)),
+    ("Sound While Talking:", "cl_voipGainDuringCapture", Some(r#""Muted" 0 "20%" 0.2 "50%" 0.5 "Full" 1"#)),
+    ("Voice Activation:", "cl_voipUseVAD", None),
+    ("Voice HUD:", "cl_voipHud", None),
+];
+
+fn port_voice_menu(devices: &[String]) -> String {
+    let page = PORT_AUDIO_MENU
+        .replace("port_audio", "port_voice")
+        .replace("\"Enhanced Audio\"", "\"Voice Chat\"")
+        .replace("\"Applies in the enhanced mode (F10); vanilla sound is unchanged\"", "\"Toggle the microphone in game with the Voice Chat Mic key (K)\"");
+    // label <= 24 characters (the value column), the value the full name
+    let list: String = devices
+        .iter()
+        .map(|d| d.replace('"', "'"))
+        .map(|d| format!("\"{}\", \"{d}\", ", d.chars().take(24).collect::<String>()))
+        .collect();
+    let mut rows: Vec<(&str, &str, Option<String>)> = PORT_VOICE_ROWS.iter().map(|&(l, c, v)| (l, c, v.map(|v| format!("cvarFloatList {{ {v} }}")))).collect();
+    rows.insert(1, ("Microphone:", "s_voipInputDevice", Some(format!("cvarStrList {{ {} }}", list.trim_end().trim_end_matches(',')))));
+    port_page_rows(&page, rows)
+}
+
+/// A port page's template with its rows (`@ROWS@`): multi items for a
+/// value list ("cvarFloatList { .. }" / "cvarStrList { .. }"), else yes / no.
+fn port_page_rows<'a, I: IntoIterator<Item = (&'a str, &'a str, Option<String>)>>(page: &str, list: I) -> String {
     let mut rows = String::new();
-    for (i, (label, cvar, list)) in PORT_AUDIO_ROWS.iter().enumerate() {
+    for (i, (label, cvar, list)) in list.into_iter().enumerate() {
         let y = 52 + i * 25;
+        // the legacy menudef.h numbers the menus are read with (1.1.0's
+        // menudef.h has YESNO 11 / MULTI 12: those are an ownerdraw and a
+        // numeric field here)
         let kind = match list {
-            Some(l) => format!("type 12\n      cvar \"{cvar}\"\n      cvarFloatList {{ {l} }}"),
-            None => format!("type 11\n      cvar \"{cvar}\""),
+            Some(l) => format!("type {IT_MULTI}\n      cvar \"{cvar}\"\n      {l}"),
+            None => format!("type {IT_YESNO}\n      cvar \"{cvar}\""),
         };
         rows += &format!(
             "    itemDef\n    {{\n      name row{i}\n      {kind}\n      text \"{label}\"\n      rect 20 {y} 300 20\n      textalign 2\n      textalignx 150\n      textaligny 15\n      textscale .25\n      forecolor 1 1 1 1\n      visible 1\n      action\n      {{\n        play \"sound/misc/menu1.wav\"\n      }}\n    }}\n"
         );
     }
-    PORT_AUDIO_MENU.replace("@ROWS@", &rows)
+    page.replace("@ROWS@", &rows)
+}
+
+/// The options' Sound panel: a "Voice Chat..." button to the port's
+/// voice-chat page on the row after Doppler Sound (a copy of that item
+/// turned into a button). A menu without that row is left as it is.
+fn patch_voice_button(text: &str) -> String {
+    let Some(k) = text.find("\"s_doppler\"") else { return text.to_string() };
+    let Some(start) = text[..k].rfind("itemDef") else { return text.to_string() };
+    let Some(open) = text[start..].find('{').map(|o| start + o) else { return text.to_string() };
+    let mut depth = 0;
+    let mut end = None;
+    for (i, ch) in text[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(open + i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(end) = end else { return text.to_string() };
+    let item = &text[start..end];
+    let Some(r) = item.find("(SCONTENT_Y+(") else { return text.to_string() };
+    let num_at = r + "(SCONTENT_Y+(".len();
+    let num_len = item[num_at..].find(|c: char| !c.is_ascii_digit()).unwrap_or(0);
+    let Ok(row) = item[num_at..num_at + num_len].parse::<i32>() else { return text.to_string() };
+    let mut copy = format!("{}{}{}", &item[..num_at], row + 1, &item[num_at + num_len..])
+        .replacen("ITEM_TYPE_YESNO", "ITEM_TYPE_BUTTON", 1)
+        .replacen("\"Doppler Sound:\"", "\"Voice Chat...\"", 1)
+        .replacen("play \"sound/misc/menu1.wav\";", "play \"sound/misc/menu1.wav\";\n        open port_voice", 1);
+    // no cvar line
+    if let Some(c) = copy.find("cvar \"s_doppler\"") {
+        let line_start = copy[..c].rfind('\n').map(|n| n + 1).unwrap_or(c);
+        let line_end = copy[c..].find('\n').map(|n| c + n + 1).unwrap_or(copy.len());
+        copy.replace_range(line_start..line_end, "");
+    }
+    format!("{}\n\n    {}{}", &text[..end], copy, &text[end..])
 }
 
 /// The options' Sound panel: its OpenAL switch (meaningless in the port)
@@ -6840,9 +6921,12 @@ fn load_ui(lib: &mut Library) -> Result<Ui, String> {
     let mut files = menu_list_files(&mut |p: &str| lib.text(p))?;
     let mut with_port = files.clone();
     with_port.push(PORT_AUDIO_MENU_FILE.to_string());
+    with_port.push(PORT_VOICE_MENU_FILE.to_string());
+    let devices = crate::voipsnd::VoipSound::input_devices();
     let port = load_menu_files(&with_port, &mut |p: &str| match p {
         PORT_AUDIO_MENU_FILE => Some(port_audio_menu()),
-        "ui/ingame_options.menu" => lib.text(p).map(|t| patch_voip_bind(&patch_sound_options(&t))),
+        PORT_VOICE_MENU_FILE => Some(port_voice_menu(&devices)),
+        "ui/ingame_options.menu" => lib.text(p).map(|t| patch_voice_button(&patch_voip_bind(&patch_sound_options(&t)))),
         _ => lib.text(p),
     });
     let (ui, defines) = match port {
@@ -8226,6 +8310,35 @@ mod tests {
             assert!(txt.contains(cvar), "{cvar} missing from the page");
         }
         assert!(menus.iter().any(|m| m.name() == "ingame_options"));
+    }
+
+    #[test]
+    fn voice_chat_page_and_its_button() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../re/source/assets");
+        let read = |p: &str| std::fs::read_to_string(repo.join(p)).ok();
+        let opts = read("ui/ingame_options.menu").expect("legacy ingame_options.menu");
+        let patched = patch_voice_button(&patch_voip_bind(&patch_sound_options(&opts)));
+        assert_eq!(patched.matches("\"s_doppler\"").count(), 1, "the copy has no cvar");
+        assert!(patched.contains("type ITEM_TYPE_BUTTON\n      text \"Voice Chat...\"\n      rect SCONTENT_X (SCONTENT_Y+(6*ELEM_H))"), "the row after Doppler");
+        assert!(patched.contains("open port_voice"));
+        assert_eq!(patch_voice_button("menuDef { }"), "menuDef { }");
+        let devices = vec!["Default".to_string(), "Headset Microphone (USB \"Pro\" Audio Device)".to_string()];
+        let page = port_voice_menu(&devices);
+        let mut r = |p: &str| match p {
+            PORT_VOICE_MENU_FILE => Some(page.clone()),
+            "ui/ingame_options.menu" => Some(patched.clone()),
+            _ => read(p),
+        };
+        let files = vec!["ui/ingame_options.menu".to_string(), PORT_VOICE_MENU_FILE.to_string()];
+        let (menus, _) = load_menu_files(&files, &mut r).unwrap();
+        let m = menus.iter().find(|m| m.name() == "port_voice").expect("port_voice parsed");
+        let txt = format!("{m:?}");
+        for cvar in ["cl_voip", "s_voipInputDevice", "cl_voipCaptureMult", "cl_voipGainDuringCapture", "cl_voipUseVAD", "cl_voipHud"] {
+            assert!(txt.contains(cvar), "{cvar} missing from the page");
+        }
+        // the device's full name is the value, its label cut to 24 characters
+        assert!(txt.contains("(\"Headset Microphone (USB \", \"Headset Microphone (USB 'Pro' Audio Device)\")"), "the device row's list");
+        assert!(page.contains("\"Headset Microphone (USB \", \"Headset"));
     }
 
     #[test]

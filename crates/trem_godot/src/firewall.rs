@@ -146,21 +146,79 @@ pub fn allow_args(exe: &str, profiles: &[String]) -> String {
     format!("advfirewall firewall add rule name=\"Tremulous (Godot port)\" dir=in action=allow enable=yes protocol=udp profile={prof} program=\"{exe}\"")
 }
 
-/// Asks Windows to add the allow rule: Windows shows its administrator
-/// prompt; nothing changes unless the player approves it there.
+/// The script the elevated PowerShell runs (dec054): the inbound block
+/// rules naming `exe` go (Windows makes one when its own "allow access"
+/// prompt is cancelled, and a block wins over any allow), then the allow
+/// rule of `allow_args` is added.
+pub fn fix_script(exe: &str, profiles: &[String]) -> String {
+    format!(
+        "$e = {}; \
+         Get-NetFirewallApplicationFilter -ErrorAction SilentlyContinue | Where-Object {{ $_.Program -and ([Environment]::ExpandEnvironmentVariables($_.Program) -ieq $e) }} | \
+         Get-NetFirewallRule -ErrorAction SilentlyContinue | Where-Object {{ \"$($_.Direction)\" -eq 'Inbound' -and \"$($_.Action)\" -eq 'Block' }} | Remove-NetFirewallRule; \
+         netsh {}; exit $LASTEXITCODE",
+        ps_quote(exe),
+        allow_args(exe, profiles)
+    )
+}
+
+/// `-EncodedCommand`'s argument: base64 of the UTF-16LE script (no
+/// quoting through Start-Process's argument list).
+pub fn encode_command(script: &str) -> String {
+    const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for c in bytes.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            if i <= c.len() {
+                out.push(B64[(n >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+/// Asks Windows to let the game in (blocking until the player answers:
+/// call it on a thread): Windows shows its administrator prompt; nothing
+/// changes unless the player approves it there.
 pub fn request_allow(profiles: &[String]) -> Result<(), String> {
     if !cfg!(windows) {
         return Err("only on Windows".into());
     }
     let exe = std::env::current_exe().map_err(|e| e.to_string())?.to_string_lossy().into_owned();
-    let script = format!("Start-Process -FilePath netsh -Verb RunAs -WindowStyle Hidden -ArgumentList {}", ps_quote(&allow_args(&exe, profiles)));
+    let script = format!(
+        "try {{ $p = Start-Process -FilePath powershell -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand','{}'; exit $p.ExitCode }} catch {{ exit 1223 }}",
+        encode_command(&fix_script(&exe, profiles))
+    );
     let o = powershell(&script).map_err(|e| e.to_string())?;
-    if o.status.success() {
-        Ok(())
-    } else {
-        Err("Windows did not add the rule (the administrator prompt was declined?)".into())
+    match o.status.code() {
+        Some(0) => Ok(()),
+        Some(1223) => Err("the administrator prompt was declined: other PCs still cannot reach the game".into()),
+        c => Err(format!("Windows did not add the rule (exit {c:?})")),
     }
 }
+
+/// The question the game asks (Windows' own dialog) for a verdict:
+/// (title, text), None when nothing needs allowing.
+pub fn prompt_text(v: &Verdict) -> Option<(String, String)> {
+    let title = "Tremulous: network access".to_string();
+    match v {
+        Verdict::NoRule(n) => Some((title, format!(
+            "Windows Firewall is stopping other PCs on your {} network from reaching Tremulous, so LAN games cannot be found, joined or hosted for friends.\n\nAllow Tremulous through Windows Firewall? Windows will ask for administrator approval.",
+            n.join(" / ")
+        ))),
+        Verdict::Blocked(n) => Some((title, format!(
+            "Windows Firewall has a rule that BLOCKS Tremulous on your {} network, so LAN games cannot be found, joined or hosted for friends.\n\nReplace it with a rule that allows Tremulous? Windows will ask for administrator approval.",
+            n.join(" / ")
+        ))),
+        _ => None,
+    }
+}
+
+/// The dialog's buttons, in the order their index comes back.
+pub const PROMPT_BUTTONS: [&str; 3] = ["Allow", "Not now", "Don't ask again"];
 
 /// The host's line for a verdict on `port`.
 pub fn message(v: &Verdict, port: u16) -> String {
@@ -218,5 +276,26 @@ mod tests {
         assert!(a.ends_with("profile=private,public program=\"C:\\x y\\T.exe\""));
         assert!(a.contains("dir=in action=allow") && a.contains("protocol=udp"));
         assert!(allow_args("a", &[]).contains("profile=private "));
+        let f = fix_script(r"C:\O'Neil\T.exe", &["Public".into()]);
+        assert!(f.starts_with(r"$e = 'C:\O''Neil\T.exe';") && f.contains("-eq 'Block' } | Remove-NetFirewallRule;"));
+        assert!(f.contains("netsh advfirewall firewall add rule") && f.contains("profile=public"));
+    }
+
+    #[test]
+    fn encoded_command_is_utf16le_base64() {
+        // PowerShell: [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes('dir'))
+        assert_eq!(encode_command("dir"), "ZABpAHIA");
+        assert_eq!(encode_command("ab"), "YQBiAA==");
+        assert_eq!(encode_command(""), "");
+    }
+
+    #[test]
+    fn prompts() {
+        assert!(prompt_text(&Verdict::Allowed(vec!["Private".into()])).is_none());
+        assert!(prompt_text(&Verdict::Unknown("x".into())).is_none());
+        let (_, t) = prompt_text(&Verdict::NoRule(vec!["Public".into()])).unwrap();
+        assert!(t.contains("Public network") && t.contains("administrator"));
+        let (_, t) = prompt_text(&Verdict::Blocked(vec!["Private".into()])).unwrap();
+        assert!(t.contains("BLOCKS"));
     }
 }

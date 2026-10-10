@@ -248,6 +248,12 @@ pub struct TremGame {
     /// dec047: the Windows Firewall check of a hosted game, and the network categories it found unallowed
     firewall_pending: Option<std::sync::mpsc::Receiver<crate::firewall::Verdict>>,
     firewall_missing: Vec<String>,
+    /// dec054: the startup check ran; the player was asked this run; the
+    /// player's dialog answer; the elevated fix running on its thread
+    firewall_started: bool,
+    firewall_asked: bool,
+    firewall_choice: Option<std::sync::mpsc::Receiver<i64>>,
+    firewall_fixing: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     missiles: HashMap<usize, MissileVis>,
     flashes: Vec<(Gd<godot::classes::OmniLight3D>, f64)>,
     mapents: crate::mapents::MapEnts,
@@ -371,6 +377,10 @@ impl INode3D for TremGame {
             upnp_map: None,
             firewall_pending: None,
             firewall_missing: Vec::new(),
+            firewall_started: false,
+            firewall_asked: false,
+            firewall_choice: None,
+            firewall_fixing: None,
             missiles: HashMap::new(),
             flashes: Vec::new(),
             mapents: Default::default(),
@@ -497,6 +507,7 @@ impl INode3D for TremGame {
             return;
         }
         let delta = self.wtb_frame(delta); // wt-b: CL_Frame's fixed avi frame time, VoIP idle
+        self.firewall_frame(); // dec054: the startup check and its dialog
         if self.loading.is_some() {
             self.step_loading();
             return;
@@ -4147,6 +4158,86 @@ impl TremGame {
         self.firewall_pending = Some(rx);
     }
 
+    /// dec054: at startup the firewall is checked like a hosted game's
+    /// (the LAN scan's answers need the inbound rule too); when other PCs
+    /// cannot reach the game, Windows' own dialog asks the player once a
+    /// run (net_firewallPrompt 0: never).
+    fn firewall_frame(&mut self) {
+        if !std::mem::replace(&mut self.firewall_started, true) {
+            self.client.cvars.get("net_firewallPrompt", "1", crate::cmd::CVAR_ARCHIVE);
+            if self.client.cvars.integer("net_firewallPrompt") != 0 {
+                self.firewall_start();
+            }
+        }
+        if self.nethost.is_none() {
+            // net_process polls while a network game runs
+            self.firewall_poll();
+        }
+        if let Some(rx) = self.firewall_choice.as_ref() {
+            if let Ok(i) = rx.try_recv() {
+                self.firewall_choice = None;
+                match i {
+                    0 => {
+                        let out = self.firewall_allow();
+                        self.host_say(out.trim_end().to_string());
+                    }
+                    2 => {
+                        self.client.cvars.set("net_firewallPrompt", "0");
+                        self.host_say("Windows Firewall: not asking again (set net_firewallPrompt 1 to be asked, or type firewall_allow)".into());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if let Some(rx) = self.firewall_fixing.as_ref() {
+            if let Ok(r) = rx.try_recv() {
+                self.firewall_fixing = None;
+                match r {
+                    Ok(()) => {
+                        self.host_say("Windows Firewall: Tremulous is allowed in; checking again".into());
+                        self.firewall_start();
+                    }
+                    Err(e) => self.host_say(format!("Windows Firewall: {e}")),
+                }
+            }
+        }
+    }
+
+    /// `firewall_allow`: Windows' administrator prompt (on a thread: it
+    /// waits for the player) adds the inbound rule for the networks found
+    /// lacking one, replacing a block rule.
+    fn firewall_allow(&mut self) -> String {
+        if self.firewall_fixing.is_some() {
+            return "firewall_allow: already waiting for the administrator prompt\n".into();
+        }
+        let mut prof = self.firewall_missing.clone();
+        if prof.is_empty() {
+            prof = vec!["Private".into()];
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let p = prof.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::firewall::request_allow(&p));
+        });
+        self.firewall_fixing = Some(rx);
+        format!("Asked Windows to allow this game in on the {} network: approve the administrator prompt\n", prof.join(", "))
+    }
+
+    /// Windows' own dialog (DisplayServer.dialog_show) with the question;
+    /// the answer comes back through a channel (no re-entry into TremGame).
+    fn firewall_ask(&mut self, title: &str, text: &str) {
+        let (tx, rx) = std::sync::mpsc::channel::<i64>();
+        let cb = Callable::from_fn("firewall_choice", move |args: &[&Variant]| {
+            let i = args.first().and_then(|v| v.try_to::<i64>().ok()).unwrap_or(1);
+            let _ = tx.send(i);
+        });
+        let buttons: PackedStringArray = crate::firewall::PROMPT_BUTTONS.iter().map(|b| GString::from(*b)).collect();
+        let e = godot::classes::DisplayServer::singleton().dialog_show(title, text, &buttons, &cb);
+        if e == godot::global::Error::OK {
+            self.firewall_choice = Some(rx);
+        }
+    }
+
     fn firewall_poll(&mut self) {
         let Some(rx) = self.firewall_pending.as_ref() else { return };
         let Ok(v) = rx.try_recv() else { return };
@@ -4159,6 +4250,12 @@ impl TremGame {
         let m = crate::firewall::message(&v, port);
         if !m.is_empty() {
             self.host_say(m);
+        }
+        // dec054: ask once a run, unless the player said never
+        if let Some((title, text)) = crate::firewall::prompt_text(&v) {
+            if self.client.cvars.integer("net_firewallPrompt") != 0 && !std::mem::replace(&mut self.firewall_asked, true) && self.firewall_fixing.is_none() {
+                self.firewall_ask(&title, &text);
+            }
         }
     }
 
@@ -4317,17 +4414,7 @@ impl TremGame {
             }
             "firewall_allow" => {
                 // dec047: Windows' administrator prompt adds the inbound rule
-                let mut prof = self.firewall_missing.clone();
-                if prof.is_empty() {
-                    prof = vec!["Private".into()];
-                }
-                Some(match crate::firewall::request_allow(&prof) {
-                    Ok(()) => {
-                        self.firewall_start();
-                        format!("Asked Windows to allow this game in on the {} network: approve the administrator prompt\n", prof.join(", "))
-                    }
-                    Err(e) => format!("firewall_allow: {e}\n"),
-                })
+                Some(self.firewall_allow())
             }
             "reconnect" => {
                 // CL_Reconnect_f: connect cl_reconnectArgs
@@ -5358,6 +5445,10 @@ pub(crate) struct WtB {
     /// TremConsole has the keys (KEYCATCH_CONSOLE)
     console_down: bool,
     registered: bool,
+    /// the voice HUD's note under the microphone: (text, warning, until ms)
+    voip_note: Option<(String, bool, u64)>,
+    /// voip_toggle as the last frame saw it
+    voip_prev_toggle: bool,
 }
 
 impl TremGame {
@@ -5378,6 +5469,67 @@ impl TremGame {
         for (n, v) in crate::avicap::AVI_CVARS {
             self.client.cvars.get(n, v, if *n == "cl_forceavidemo" { 0 } else { CVAR_ARCHIVE });
         }
+        // the port's voice HUD and capture device (dec053)
+        self.client.cvars.get("cl_voipHud", "1", CVAR_ARCHIVE);
+        self.client.cvars.get("s_voipInputDevice", "Default", CVAR_ARCHIVE);
+        let dev = self.client.cvars.string("s_voipInputDevice");
+        self.wtb.voip.set_input_device(&dev);
+        self.client.cvars.take_modified("s_voipInputDevice");
+    }
+
+    /// The voice HUD's microphone note.
+    fn wtb_voip_note(&mut self, text: &str, warn: bool) {
+        let now = godot::classes::Time::singleton().get_ticks_msec();
+        self.wtb.voip_note = Some((text.to_string(), warn, now + crate::voiphud::NOTE_MS));
+    }
+
+    /// Each frame: the capture device follows s_voipInputDevice; the
+    /// microphone toggle goes off where there is nothing to send to (no
+    /// online game); its changes become HUD notes.
+    fn wtb_voip_frame(&mut self) {
+        if self.client.cvars.take_modified("s_voipInputDevice") {
+            let dev = self.client.cvars.string("s_voipInputDevice");
+            self.wtb.voip.set_input_device(&dev);
+        }
+        if self.client.voip_toggle && self.nethost.is_none() {
+            self.client.voip_toggle = false;
+            self.client.cvars.set("cl_voipSend", "0");
+            self.wtb_print("VoIP: microphone off (voice chat works in online games: Play, then join or create a server)\n");
+            self.wtb_voip_note("Voice chat works in online games only", true);
+            self.wtb.voip_prev_toggle = false;
+            return;
+        }
+        let t = self.client.voip_toggle;
+        if t != std::mem::replace(&mut self.wtb.voip_prev_toggle, t) {
+            if t {
+                self.wtb.voip_note = None;
+            } else {
+                self.wtb_voip_note("MIC OFF", false);
+            }
+        }
+    }
+
+    /// The voice HUD (None: hidden or nothing to show).
+    pub(crate) fn wtb_voip_hud(&self) -> Option<crate::voiphud::VoipHud> {
+        if self.client.cvars.integer("cl_voipHud") == 0 {
+            return None;
+        }
+        let now = godot::classes::Time::singleton().get_ticks_msec();
+        let nh = self.nethost.as_ref();
+        let mic_on = nh.is_some_and(|n| n.cl.voip.capturing) && self.client.cvars.integer("cl_voipSend") != 0;
+        let power = nh.map(|n| n.cl.voip.power).unwrap_or(0.0);
+        let threshold = self.client.cvars.value("cl_voipVADThreshold");
+        let me = nh.and_then(|n| n.client_num());
+        let talkers = match self.world.as_ref() {
+            Some(w) => self.wtb.voip.last_heard.iter().enumerate()
+                .filter(|(i, t)| **t > 0 && now.saturating_sub(**t) < crate::voiphud::TALKER_HOLD_MS && Some(*i) != me && *i < w.clients.len())
+                .map(|(i, _)| crate::voiphud::plain_name(&w.clients[i].name, 24))
+                .collect(),
+            None => Vec::new(),
+        };
+        let note = self.wtb.voip_note.as_ref().filter(|n| n.2 > now).map(|n| (n.0.clone(), n.1));
+        let h = crate::voiphud::VoipHud { mic_on, talking: mic_on && power >= threshold.max(0.01), level: crate::voiphud::level_of(power), note, talkers };
+        (!h.is_empty()).then_some(h)
     }
 
     /// `clc.demoplaying` (the demo player sets the kernel's mirror).
@@ -5390,6 +5542,7 @@ impl TremGame {
     /// capture device closes without a session; the frame time to use.
     fn wtb_frame(&mut self, delta: f64) -> f64 {
         self.wtb_register_cvars();
+        self.wtb_voip_frame();
         if !self.net_active() {
             // CL_Frame runs CL_CaptureVoip disconnected too (CL_Disconnect's
             // clean-up: cl_voipSend 0, S_StopCapture, S_MasterGain( 1 ))
@@ -5465,8 +5618,21 @@ impl TremGame {
         }
         let out = nh.cl.print_out.split_off(before.min(nh.cl.print_out.len()));
         let plays = std::mem::take(&mut nh.cl.voip.playback);
+        let refused = nh.cl.voip.refused.take();
         self.nethost = Some(nh);
         self.wtb_print(&out);
+        // the microphone toggle: CL_CaptureVoip would not capture
+        if self.client.voip_toggle && self.client.cvars.integer("cl_voipSend") == 0 {
+            self.client.voip_toggle = false;
+            self.wtb.voip_prev_toggle = false;
+            let why = refused.unwrap_or("not in a game");
+            self.wtb_print(&format!("VoIP: microphone off ({why})\n"));
+            let mut note = why.to_string();
+            if let Some(c) = note.get_mut(0..1) {
+                c.make_ascii_uppercase();
+            }
+            self.wtb_voip_note(&note, true);
+        }
         let mut parent = parent;
         for p in plays {
             // loopSounds[ entityNum ].origin: the talker's entity
@@ -5571,6 +5737,10 @@ impl TremGame {
     pub(crate) fn wtb_voip_meter(&self) -> Option<String> {
         let nh = self.nethost.as_ref()?;
         let c = &self.client.cvars;
+        // the voice HUD shows the level instead
+        if c.integer("cl_voipHud") != 0 {
+            return None;
+        }
         nh.cl.voip_meter(c.integer("cl_voipShowMeter") != 0, c.integer("cl_voipSend") != 0, c.integer("cl_voip") != 0)
     }
 }

@@ -1098,6 +1098,7 @@ impl IControl for TremConsole {
             g.misc_console_key(k, false, false, "");
         }
         let meter = g.wtb_voip_meter();
+        let voice = g.wtb_voip_hud();
         let c = g.misc_console();
         c.con.run(down, speed, frametime);
         let frac = c.con.display_frac;
@@ -1107,7 +1108,11 @@ impl IControl for TremConsole {
         if let Some(m) = meter.as_deref() {
             self.ops.extend(draw_voip_meter(m));
         }
-        let visible = frac > 0.0 || meter.is_some();
+        // the port's voice HUD (dec053)
+        if let Some(h) = voice.as_ref() {
+            self.ops.extend(crate::voiphud::draw(h));
+        }
+        let visible = frac > 0.0 || meter.is_some() || voice.is_some();
         self.base_mut().set_visible(visible);
         self.base_mut().queue_redraw();
     }

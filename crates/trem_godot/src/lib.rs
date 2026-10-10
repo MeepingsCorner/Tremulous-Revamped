@@ -33,6 +33,7 @@ mod effects;
 mod particles;
 mod trails;
 mod voipsnd; // wt-b VoIP
+mod voiphud; // the port's voice-chat HUD (dec053)
 mod avicap; // wt-b video capture
 mod gfx; // graphics modes (vanilla / enhanced)
 mod rt; // ray-traced effects of the enhanced mode

@@ -228,6 +228,9 @@ pub struct Client {
     out: String,
     /// `in_restart` ran (`IN_Restart`: the joystick is opened again)
     pub in_restart: bool,
+    /// the port's microphone toggle (`voip_toggle`): on until toggled off
+    /// or until CL_CaptureVoip refuses it (the host turns it off then)
+    pub voip_toggle: bool,
 }
 
 impl Default for Client {
@@ -239,7 +242,7 @@ impl Default for Client {
 impl Client {
     /// `CL_Init` / `CL_InitInput` / `CG_RegisterCvars`: the client cvars.
     pub fn new() -> Self {
-        let mut c = Client { keys: Keys::default(), cvars: Cvars::default(), cbuf: Cbuf::default(), input: ClInput::default(), wsel: WeaponSelect::default(), catcher: 0, out: String::new(), in_restart: false };
+        let mut c = Client { keys: Keys::default(), cvars: Cvars::default(), cbuf: Cbuf::default(), input: ClInput::default(), wsel: WeaponSelect::default(), catcher: 0, out: String::new(), in_restart: false, voip_toggle: false };
         input::register_cvars(&mut c.cvars);
         crate::userinfo::register_cvars(&mut c.cvars);
         crate::joystick::register_cvars(&mut c.cvars);
@@ -511,8 +514,11 @@ impl Client {
             return;
         }
         // the port's microphone toggle (k): +voiprecord that stays down
+        // (its own state: CL_CaptureVoip turns cl_voipSend back to 0 when
+        // it will not capture, so the cvar cannot say what the key did)
         if c == "voip_toggle" {
-            let on = self.cvars.integer("cl_voipSend") == 0;
+            let on = !self.voip_toggle;
+            self.voip_toggle = on;
             self.cvars.set("cl_voipSend", trem_sim::kernel::voip::voip_record(on));
             return self.print(if on { "VoIP: microphone on\n" } else { "VoIP: microphone off\n" });
         }
@@ -840,6 +846,8 @@ mod tests {
         c.execute(&mut h);
         assert_eq!(c.cvars.integer("cl_voipSend"), 1);
         assert_eq!(c.take_output(), "VoIP: microphone on\n");
+        // CL_CaptureVoip may set cl_voipSend back to 0: the next press is still "off"
+        c.cvars.set("cl_voipSend", "0");
         c.add_text("voip_toggle\n");
         c.execute(&mut h);
         assert_eq!(c.cvars.integer("cl_voipSend"), 0);

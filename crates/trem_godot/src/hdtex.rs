@@ -6,7 +6,8 @@
 //! (realesrgan-ncnn-vulkan, on the GPU) in one or two x4 passes, cropped,
 //! resized to `target` (4096) on its longest side with Lanczos, given its
 //! original alpha back, mipmapped, block-compressed (S3TC: DXT1, or DXT5
-//! with alpha) and written as `<key>.hdtex`, with a generated normal map
+//! with alpha) and written as `<key>.hdtex` (TREMHD02: each mip level
+//! zstd-compressed, lossless, trem_hdpack, dec055), with a generated normal map
 //! (`<key>.hdnrm`, 1024) beside it.
 //!
 //! At run time `with_store` serves them by image key (the pk3 path without
@@ -22,12 +23,8 @@ use godot::classes::{Image, ImageTexture};
 use godot::prelude::*;
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-const MAGIC: &[u8; 8] = b"TREMHD01";
-/// magic, w, h, format, mip count, mean rgb, flags
-const HEADER: usize = 8 + 4 * 5 + 4 * 3;
 
 /// The image key of a pk3 path: lower case, '/' separators, no extension.
 pub fn key_of(path: &str) -> String {
@@ -82,70 +79,34 @@ pub fn ui(tex: &Gd<godot::classes::Texture2D>) -> Gd<godot::classes::Texture2D> 
     key.and_then(|k| get(&k)).map(|h| h.albedo.upcast()).unwrap_or_else(|| tex.clone())
 }
 
-fn block_bytes(fmt: ImageFormat) -> Option<usize> {
-    match fmt {
-        ImageFormat::DXT1 | ImageFormat::RGTC_R => Some(8),
-        ImageFormat::DXT3 | ImageFormat::DXT5 | ImageFormat::BPTC_RGBA | ImageFormat::RGTC_RG => Some(16),
-        _ => None,
-    }
-}
-
+#[cfg(test)]
 fn level_bytes(fmt: ImageFormat, w: usize, h: usize) -> usize {
-    match block_bytes(fmt) {
-        Some(b) => w.div_ceil(4).max(1) * h.div_ceil(4).max(1) * b,
-        None => w * h * 4,
-    }
+    trem_hdpack::level_bytes(fmt.ord() as u32, w, h)
 }
 
-/// Write an Image (with its mip chain) as a .hdtex file.
+/// zstd level of the files the builder writes (dec055; `hdpack pack`
+/// shrinks a pack built before it the same way).
+const PACK_LEVEL: i32 = 19;
+
+/// Write an Image (with its mip chain) as a .hdtex file: TREMHD02, each
+/// level zstd-compressed (trem_hdpack; lossless).
 pub fn write(path: &Path, img: &Gd<Image>, mean: [f32; 3], alpha: bool) -> std::io::Result<()> {
     if let Some(d) = path.parent() {
         std::fs::create_dir_all(d)?;
     }
     let data = img.get_data();
-    let mut f = std::fs::File::create(path)?;
-    f.write_all(MAGIC)?;
-    for v in [img.get_width() as u32, img.get_height() as u32, img.get_format().ord() as u32, img.get_mipmap_count() as u32 + 1, alpha as u32] {
-        f.write_all(&v.to_le_bytes())?;
-    }
-    for m in mean {
-        f.write_all(&m.to_le_bytes())?;
-    }
-    f.write_all(data.as_slice())
+    let hd = trem_hdpack::Header { w: img.get_width() as usize, h: img.get_height() as usize, fmt: img.get_format().ord() as u32, mips: img.get_mipmap_count() as usize + 1, alpha, mean };
+    let bytes = trem_hdpack::encode_levels(&hd, data.as_slice(), PACK_LEVEL)?;
+    std::fs::write(path, bytes)
 }
 
-/// Read a .hdtex, skipping the mip levels larger than `max_size`.
-pub fn read(path: &Path, max_size: usize) -> Option<(Gd<Image>, [f32; 3])> {
-    let mut f = std::fs::File::open(path).ok()?;
-    let mut h = [0u8; HEADER];
-    f.read_exact(&mut h).ok()?;
-    if &h[..8] != MAGIC {
-        return None;
-    }
-    let u = |i: usize| u32::from_le_bytes(h[8 + 4 * i..12 + 4 * i].try_into().unwrap()) as usize;
-    let (mut w, mut hh, fmt, mips) = (u(0), u(1), u(2), u(3));
-    let mean = [0, 1, 2].map(|k| f32::from_le_bytes(h[28 + 4 * k..32 + 4 * k].try_into().unwrap()));
-    let fmt = ImageFormat::try_from_ord(fmt as i32)?;
-    let mut skip = 0usize;
-    let mut levels = mips.max(1);
-    while (w > max_size || hh > max_size) && levels > 1 {
-        skip += level_bytes(fmt, w, hh);
-        w = (w / 2).max(1);
-        hh = (hh / 2).max(1);
-        levels -= 1;
-    }
-    let mut total = 0usize;
-    let (mut lw, mut lh) = (w, hh);
-    for _ in 0..levels {
-        total += level_bytes(fmt, lw, lh);
-        lw = (lw / 2).max(1);
-        lh = (lh / 2).max(1);
-    }
-    f.seek(SeekFrom::Current(skip as i64)).ok()?;
-    let mut data = vec![0u8; total];
-    f.read_exact(&mut data).ok()?;
-    let img = Image::create_from_data(w as i32, hh as i32, levels > 1, fmt, &PackedByteArray::from(data.as_slice()))?;
-    Some((img, mean))
+/// Read `rel` of the pack at `root` (TREMHD01 / 02 or a duplicate's
+/// link), skipping the mip levels larger than `max_size`.
+pub fn read(root: &Path, rel: &str, max_size: usize) -> Option<(Gd<Image>, [f32; 3])> {
+    let t = trem_hdpack::read(root, rel, max_size)?;
+    let fmt = ImageFormat::try_from_ord(t.header.fmt as i32)?;
+    let img = Image::create_from_data(t.w as i32, t.h as i32, t.levels > 1, fmt, &PackedByteArray::from(t.data.as_slice()))?;
+    Some((img, t.header.mean))
 }
 
 /// An HD texture: albedo, its normal map, mean linear albedo.
@@ -167,9 +128,9 @@ impl HdStore {
         if let Some(t) = self.cache.get(key) {
             return t.clone();
         }
-        let t = read(&self.root.join(format!("{key}.hdtex")), self.max_size).and_then(|(img, mean)| {
+        let t = read(&self.root, &format!("{key}.hdtex"), self.max_size).and_then(|(img, mean)| {
             let albedo = ImageTexture::create_from_image(&img)?;
-            let normal = read(&self.root.join(format!("{key}.hdnrm")), self.max_size).and_then(|(n, _)| ImageTexture::create_from_image(&n));
+            let normal = read(&self.root, &format!("{key}.hdnrm"), self.max_size).and_then(|(n, _)| ImageTexture::create_from_image(&n));
             Some(HdTex { albedo, normal, mean })
         });
         self.cache.insert(key.to_string(), t.clone());

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/sheetty", "crates/sheetty-cli", "crates/trem_sim", "crates/trem_godot", "crates/trem_opus"]
+members = ["crates/sheetty", "crates/sheetty-cli", "crates/trem_sim", "crates/trem_godot", "crates/trem_opus", "crates/trem_hdpack"]
 
 [workspace.package]
 version = "0.1.0"

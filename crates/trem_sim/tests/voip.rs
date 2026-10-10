@@ -315,6 +315,16 @@ fn no_voip_without_support_or_rate() {
     assert_eq!(peers[0].host.cvar_integer("cl_voip"), 0);
     assert_eq!(peers[0].host.cvar_string("cl_voipProtocol"), "");
     assert!(peers[0].cl.print_out.contains("Your network rate is too slow for VoIP."));
+    // cl_voipSend 1 is turned back to 0, and the port says why (dec053)
+    peers[0].host.set("cl_voipSend", "1");
+    step(&mut sv, &mut snet, &mut peers, 16);
+    assert_eq!(peers[0].host.cvar_integer("cl_voipSend"), 0);
+    assert_eq!(peers[0].cl.voip.refused.take(), Some("voice chat is off in the options"));
+    peers[1].cl.voip.enabled = false;
+    peers[1].host.set("cl_voipSend", "1");
+    let p = &mut peers[1];
+    p.cl.capture_voip(&mut p.host);
+    assert_eq!(peers[1].cl.voip.refused.take(), Some("this server has no voice chat"));
     // the voip command refuses without a VoIP server
     sv.cvars.voip = 0;
     peers[1].cl.voip.enabled = false;

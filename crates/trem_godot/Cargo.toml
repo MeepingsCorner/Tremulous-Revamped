@@ -12,6 +12,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 trem_sim = { path = "../trem_sim" }
+trem_hdpack = { path = "../trem_hdpack" }
 godot = { version = "0.5", features = ["api-4-7", "experimental-godot-api"] }
 
 [build-dependencies]

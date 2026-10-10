@@ -170,12 +170,20 @@ from snapshots with prediction. The single-process game stays the default.
   directly (`connect 192.168.x.y:30720`). On Windows the host also checks
   the firewall and says when other PCs cannot reach the game; the console
   command `firewall_allow` then asks Windows (its administrator prompt) to
-  add the rule (dec047). Check from a terminal:
+  add the rule (dec047). The game also checks at startup and, when other
+  PCs cannot reach it, asks in a Windows dialog: Allow (then approve the
+  administrator prompt; a block rule Windows made for the game is replaced),
+  Not now, or Don't ask again (`net_firewallPrompt 0`; dec054). Check from a terminal:
   `cargo run --release -p trem_sim --example server_list -- lan` or
   `-- master` (both print each server's ping, players, map and name).
 * **VoIP** (dec037): ioquake3's Opus voice chat, interoperable with original
   clients and servers (the bundled libopus 1.1 of `re/source`, built by
-  `crates/trem_opus`). K toggles the microphone (`voip_toggle`, dec052); bind push-to-talk with `bind <key> +voiprecord` (or
+  `crates/trem_opus`). K toggles the microphone (`voip_toggle`, dec052; it
+  goes off with the reason when the server has no voice chat, dec053); a
+  voice HUD at the left shows MIC ON / TALKING with the level, MIC OFF, and
+  who is talking (`cl_voipHud`); Options → Sound → Voice Chat... picks the
+  microphone (`s_voipInputDevice`) and sets voice chat on/off, mic volume,
+  game sound while talking, voice activation and the HUD. Bind push-to-talk with `bind <key> +voiprecord` (or
   `cl_voipUseVAD 1`); `cl_voipSendTarget` is `spatial` (heard at your
   position), `all`, `attacker`, `crosshair` or client numbers; `voip
   ignore|unignore <n>`, `voip gain <n> [value]`, `voip muteall|unmuteall`;
@@ -199,6 +207,16 @@ cp target/release/libtrem_godot.so godot/bin/             # macOS: .dylib, Windo
 # Windows from Linux:
 CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
   cargo build --release -p trem_godot --target x86_64-pc-windows-gnu
+```
+
+The 4K texture pack (`hd/`) is stored losslessly compressed (dec055,
+`crates/trem_hdpack`): each mip level is zstd-compressed and identical
+textures are links, so the GPU gets exactly the same data. Shrink a pack
+built before that (or check one) with:
+
+```sh
+cargo run --release -p trem_hdpack --bin hdpack -- stat <hd folder>
+cargo run --release -p trem_hdpack --bin hdpack -- pack <hd folder>
 ```
 
 ## Verify

@@ -295,6 +295,9 @@ pub struct ClVoip {
     pub command_registered: bool,
     /// `cl_voip->integer` as the last `capture_voip` read it
     pub cl_voip: bool,
+    /// port: why the last cl_voipSend 1 was turned back to 0 (the
+    /// dontCapture reasons of CL_CaptureVoip), for the microphone toggle
+    pub refused: Option<&'static str>,
 }
 
 impl Default for ClVoip {
@@ -324,6 +327,7 @@ impl Default for ClVoip {
             capturing: false,
             command_registered: false,
             cl_voip: true,
+            refused: None,
         }
     }
 }
@@ -641,17 +645,23 @@ impl NetClient {
             host.cvar_set("cl_voipSend", "1"); // lots of things reset this.
         }
         if host.cvar_take_modified("cl_voipSend") {
-            let dont_capture = if self.state != ConnState::Active {
-                true // not connected to a server.
+            let reason = if self.state != ConnState::Active {
+                Some("not in a game") // not connected to a server.
             } else if !self.voip.enabled {
-                true // server doesn't support VoIP.
+                Some("this server has no voice chat") // server doesn't support VoIP.
             } else if self.voip.demoplaying {
-                true // playing back a demo.
+                Some("a demo is playing") // playing back a demo.
             } else if host.cvar_integer("cl_voip") == 0 {
-                true // client has VoIP support disabled.
+                Some("voice chat is off in the options") // client has VoIP support disabled.
+            } else if audio_mult == 0.0 {
+                Some("the microphone volume is 0") // basically silenced incoming audio.
             } else {
-                audio_mult == 0.0 // basically silenced incoming audio.
+                None
             };
+            let dont_capture = reason.is_some();
+            if dont_capture && host.cvar_integer("cl_voipSend") != 0 {
+                self.voip.refused = reason;
+            }
             if dont_capture {
                 host.cvar_set("cl_voipSend", "0");
                 host.cvar_take_modified("cl_voipSend");
