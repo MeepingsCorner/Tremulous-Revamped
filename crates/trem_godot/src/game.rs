@@ -5550,7 +5550,13 @@ impl TremGame {
             self.wtb.voip_check_at = 0;
             let v = &self.wtb.voip;
             let msg = if !capturing {
-                "VoIP: microphone check: not capturing (see the line above for why)\n".to_string()
+                let nh = self.nethost.as_ref();
+                format!(
+                    "VoIP: microphone check: not capturing (server voice chat {}, codec {}, cl_voipSend {})\n",
+                    nh.is_some_and(|n| n.cl.voip.enabled),
+                    nh.is_some_and(|n| n.cl.voip.codec_initialized),
+                    self.client.cvars.integer("cl_voipSend")
+                )
             } else if v.pumped == 0 {
                 "VoIP: microphone check: NO audio from the capture device in 2 s (Windows microphone access, or the device is in use)\n".to_string()
             } else {
@@ -5709,8 +5715,16 @@ impl TremGame {
         }
         let out = nh.cl.print_out.split_off(before.min(nh.cl.print_out.len()));
         let plays = std::mem::take(&mut nh.cl.voip.playback);
-        let refused = nh.cl.voip.refused.take();
+        let mut refused = nh.cl.voip.refused.take();
+        // in a game on a server without this voice chat (no sv_voipProtocol
+        // opus: Tremulous 1.1 and GPP servers): CL_CaptureVoip returns
+        // before its refusal when the codec never started, so say it here
+        let no_voice = nh.client_num().is_some() && nh.cl.state == trem_sim::kernel::cl::ConnState::Active && (!nh.cl.voip.enabled || !nh.cl.voip.codec_initialized);
         self.nethost = Some(nh);
+        if no_voice && self.client.voip_toggle {
+            self.client.cvars.set("cl_voipSend", "0");
+            refused = refused.or(Some("this server has no voice chat: it works on servers made with this game (Create Server)"));
+        }
         self.wtb_print(&out);
         // the microphone toggle: CL_CaptureVoip would not capture
         if self.client.voip_toggle && self.client.cvars.integer("cl_voipSend") == 0 {
