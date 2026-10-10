@@ -30,10 +30,15 @@ Push-Location $root
 try {
     cargo build --release -p trem_godot --target-dir $targetDir
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed ($LASTEXITCODE)" }
-    Copy-Item (Join-Path $targetDir 'release\trem_godot.dll') 'godot\bin\trem_godot.dll' -Force
-    $leak = Select-String -Path 'godot\bin\trem_godot.dll' -SimpleMatch -Pattern $env:USERNAME, $env:USERPROFILE -List
-    if ($leak) { Write-Warning "godot\bin\trem_godot.dll still contains '$($leak.Pattern)'" }
-    else { Write-Host "godot\bin\trem_godot.dll: built, no user paths inside" -ForegroundColor Green }
+    $dlls = @('trem_godot.dll')
+    # the FMOD sound path, built only when the SDK files are in third_party
+    if (Test-Path (Join-Path $targetDir 'release\trem_audio.dll')) { $dlls += 'trem_audio.dll' }
+    foreach ($dll in $dlls) {
+        Copy-Item (Join-Path $targetDir "release\$dll") "godot\bin\$dll" -Force
+        $leak = Select-String -Path "godot\bin\$dll" -SimpleMatch -Pattern $env:USERNAME, $env:USERPROFILE -List
+        if ($leak) { Write-Warning "godot\bin\$dll still contains '$($leak.Pattern)'" }
+        else { Write-Host "godot\bin\${dll}: built, no user paths inside" -ForegroundColor Green }
+    }
 } finally {
     Pop-Location
     Remove-Item Env:CARGO_ENCODED_RUSTFLAGS -ErrorAction SilentlyContinue

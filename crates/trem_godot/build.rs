@@ -45,6 +45,8 @@ fn main() {
         .arg(format!("/Fe{}", dll.display()))
         .arg("/link")
         .arg("/DEBUG")
+        // only the PDB's file name in the DLL, not the build folder's path
+        .arg("/PDBALTPATH:%_PDB%")
         .arg(fmod_lib.join("fmod_vc.lib"))
         .arg(sa_lib.join("phonon.lib"));
     let st = cmd.status().expect("cl.exe");
