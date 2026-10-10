@@ -153,8 +153,9 @@ from snapshots with prediction. The single-process game stays the default.
   games.
 * **Online play** (dec039): the Internet tab lists master.tremulous.net's
   servers (the request carries protocol 71, which that master needs; the
-  C's game-name request got an empty list). Servers of other protocols
-  (1.1's 69, GPP's 70) are not listed; mod servers on protocol 71 are
+  C's game-name request got an empty list). The master is also asked for
+  1.1's protocol 69 and both answers are merged, so vanilla 1.1 servers
+  are listed too (dec040); GPP's 70 is not listed; mod servers on protocol 71 are
   listed but run game code the port does not have. To host for players
   outside your network set Create Server → Dedicated: Internet (`dedicated 2`; the port keeps you playing on it, a listen server): the
   server announces itself to the master every 5 minutes. Forward UDP 30720
