@@ -408,7 +408,7 @@ impl Client {
             out.push(format!("-button{i}"));
         }
         // wt-b: cl_input.c +/-voiprecord, cl_main.c video / stopvideo
-        out.extend(["+voiprecord", "-voiprecord", "voip_toggle", "video", "stopvideo"].map(String::from));
+        out.extend(["+voiprecord", "-voiprecord", "voip_toggle", "voip_refreshdevices", "video", "stopvideo"].map(String::from));
         out.extend(HOST_COMMANDS.iter().chain(UI_HOST_COMMANDS).chain(cgcmds::CG_COMMANDS).chain(cgcmds::CG_FORWARDED_COMMANDS).map(|s| s.to_string()));
         out
     }

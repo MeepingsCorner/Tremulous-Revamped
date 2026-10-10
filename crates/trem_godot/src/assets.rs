@@ -35,13 +35,16 @@ impl Pk3Set {
     }
 
     pub fn read(&mut self, name: &str) -> Option<PackedByteArray> {
+        // FS_FOpenFileRead skips a leading slash: chaingun_barrel.md3's
+        // shader is "/models/weapons/chaingun/chaingun.tga"
+        let name = name.trim_start_matches(['/', '\\']);
         let (ri, real) = self.index.get(&name.to_lowercase())?.clone();
         let data = self.readers[ri].read_file(&real);
         (!data.is_empty()).then_some(data)
     }
 
     pub fn has_file(&self, name: &str) -> bool {
-        self.index.contains_key(&name.to_lowercase())
+        self.index.contains_key(&name.trim_start_matches(['/', '\\']).to_lowercase())
     }
 
     pub fn files(&self) -> impl Iterator<Item = &String> {

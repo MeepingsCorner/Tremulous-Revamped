@@ -10,6 +10,21 @@ use crate::console::ConDraw;
 pub const TALKER_HOLD_MS: u64 = 400;
 /// How long a microphone note ("MIC OFF", a refusal) stays (ms).
 pub const NOTE_MS: u64 = 3000;
+/// The local player's "talking" floor with voice activation off (the
+/// capture power's 0..100 scale: about -40 dBFS RMS). Everything is sent
+/// then, so cl_voipVADThreshold (0.25, -26 dBFS) is not what decides it,
+/// and normal speech on a default-gain microphone stays under it.
+pub const SPEECH_FLOOR: f32 = 0.01;
+
+/// The power over which the local player counts as talking: what voice
+/// activation sends (cl_voipVADThreshold) with it on, else SPEECH_FLOOR.
+pub fn talk_threshold(use_vad: bool, vad_threshold: f32) -> f32 {
+    if use_vad {
+        vad_threshold.max(SPEECH_FLOOR)
+    } else {
+        SPEECH_FLOOR
+    }
+}
 
 /// What the HUD shows this frame.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -156,5 +171,14 @@ mod tests {
         assert_eq!(plain_name("abcdef", 3), "abc");
         assert_eq!(level_of(0.05), 0.5);
         assert_eq!(level_of(3.0), 1.0);
+    }
+
+    #[test]
+    fn local_talk_threshold() {
+        // voice activation off: speech at -35 dBFS RMS (power ~0.03) is talking
+        assert!(0.03 >= talk_threshold(false, 0.25));
+        // on: what voice activation sends
+        assert_eq!(talk_threshold(true, 0.25), 0.25);
+        assert_eq!(talk_threshold(true, 0.0), SPEECH_FLOOR);
     }
 }

@@ -350,7 +350,8 @@ impl Library {
     }
 
     pub fn texture(&mut self, name: &str) -> Option<Gd<Texture2D>> {
-        let name = &name.replace('\\', "/");
+        // a leading slash is the file system's to skip (chaingun_barrel.md3)
+        let name = &name.replace('\\', "/").trim_start_matches('/').to_string();
         let key = name.to_lowercase();
         if let Some(t) = self.textures.get(&key) {
             return t.clone();

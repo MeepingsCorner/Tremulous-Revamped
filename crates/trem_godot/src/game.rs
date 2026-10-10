@@ -2880,7 +2880,11 @@ impl TremGame {
             Event::Shotgun if !have_fx => self.spawn_fx(e.origin, "#ffd070", 6.0, 0.15, 1.0),
             Event::HumanBuildableExplosion | Event::AlienBuildableExplosion if !have_fx => self.spawn_fx(e.origin, if e.event == Event::AlienBuildableExplosion { "#60ff40" } else { "#ff9030" }, 40.0, 0.8, 4.0),
             Event::AlienAcidtube if !have_fx => self.spawn_fx(e.origin, "#80ff20", 60.0, 0.6, 2.0),
-            Event::OvermindAttack => self.spawn_fx(e.origin, "#b040ff", 30.0, 0.4, 3.0),
+            // the port's pulse at the overmind (cg_event.c only plays the
+            // announcement): enhanced mode only; in the classic (vanilla)
+            // mode its lit, emissive sphere showed as purple and green
+            // lights (the base light over the overmind) and a glow
+            Event::OvermindAttack if self.gfx.enhanced => self.spawn_fx(e.origin, "#b040ff", 30.0, 0.4, 3.0),
             Event::Teslatrail | Event::Lev2Zap if !have_fx => self.spawn_fx(e.origin, "#80c0ff", 10.0, 0.25, 2.0),
             Event::Pain if e.entity == me => {}
             Event::BuildDelay if e.entity == me => {
@@ -5449,6 +5453,10 @@ pub(crate) struct WtB {
     voip_note: Option<(String, bool, u64)>,
     /// voip_toggle as the last frame saw it
     voip_prev_toggle: bool,
+    /// when the local player's captured voice was last over the talking
+    /// threshold (ms): the server never sends a player's own voice back,
+    /// so last_heard cannot list them
+    voip_self_talk: u64,
 }
 
 impl TremGame {
@@ -5507,6 +5515,32 @@ impl TremGame {
                 self.wtb_voip_note("MIC OFF", false);
             }
         }
+        // the local player's talking state, held like a heard talker's
+        let capturing = self.nethost.as_ref().is_some_and(|n| n.cl.voip.capturing) && self.client.cvars.integer("cl_voipSend") != 0;
+        let power = self.nethost.as_ref().map(|n| n.cl.voip.power).unwrap_or(0.0);
+        let use_vad = self.client.cvars.integer("cl_voipUseVAD") != 0;
+        if capturing && power >= crate::voiphud::talk_threshold(use_vad, self.client.cvars.value("cl_voipVADThreshold")) {
+            self.wtb.voip_self_talk = godot::classes::Time::singleton().get_ticks_msec();
+        }
+    }
+
+    /// `voip_refreshdevices` (the voice page's Refresh button): AudioServer
+    /// lists the capture devices again, s_voipInputDevice goes back to
+    /// "Default" if its device is gone, and the capture restarts on it.
+    fn wtb_voip_refresh_devices(&mut self) -> String {
+        let devices = crate::voipsnd::VoipSound::input_devices();
+        let mut dev = self.client.cvars.string("s_voipInputDevice");
+        let mut out = String::new();
+        if !devices.iter().any(|d| *d == dev) {
+            out += &format!("VoIP: microphone \"{dev}\" is gone, using Default\n");
+            dev = "Default".into();
+            self.client.cvars.set("s_voipInputDevice", &dev);
+        }
+        self.client.cvars.take_modified("s_voipInputDevice");
+        self.wtb.voip.set_input_device(&dev);
+        self.wtb.voip.restart_capture();
+        out += &format!("VoIP: {} capture device(s): {}\n", devices.len(), devices.join(", "));
+        out
     }
 
     /// The voice HUD (None: hidden or nothing to show).
@@ -5518,17 +5552,25 @@ impl TremGame {
         let nh = self.nethost.as_ref();
         let mic_on = nh.is_some_and(|n| n.cl.voip.capturing) && self.client.cvars.integer("cl_voipSend") != 0;
         let power = nh.map(|n| n.cl.voip.power).unwrap_or(0.0);
-        let threshold = self.client.cvars.value("cl_voipVADThreshold");
         let me = nh.and_then(|n| n.client_num());
+        // the local player: from the capture (their voice never comes back
+        // from the server), held TALKER_HOLD_MS between packets
+        let talking = mic_on && self.wtb.voip_self_talk > 0 && now.saturating_sub(self.wtb.voip_self_talk) < crate::voiphud::TALKER_HOLD_MS;
         let talkers = match self.world.as_ref() {
-            Some(w) => self.wtb.voip.last_heard.iter().enumerate()
-                .filter(|(i, t)| **t > 0 && now.saturating_sub(**t) < crate::voiphud::TALKER_HOLD_MS && Some(*i) != me && *i < w.clients.len())
-                .map(|(i, _)| crate::voiphud::plain_name(&w.clients[i].name, 24))
-                .collect(),
+            Some(w) => {
+                let mut v: Vec<String> = Vec::new();
+                if let Some(m) = me.filter(|m| talking && *m < w.clients.len()) {
+                    v.push(crate::voiphud::plain_name(&w.clients[m].name, 24));
+                }
+                v.extend(self.wtb.voip.last_heard.iter().enumerate()
+                    .filter(|(i, t)| **t > 0 && now.saturating_sub(**t) < crate::voiphud::TALKER_HOLD_MS && Some(*i) != me && *i < w.clients.len())
+                    .map(|(i, _)| crate::voiphud::plain_name(&w.clients[i].name, 24)));
+                v
+            }
             None => Vec::new(),
         };
         let note = self.wtb.voip_note.as_ref().filter(|n| n.2 > now).map(|n| (n.0.clone(), n.1));
-        let h = crate::voiphud::VoipHud { mic_on, talking: mic_on && power >= threshold.max(0.01), level: crate::voiphud::level_of(power), note, talkers };
+        let h = crate::voiphud::VoipHud { mic_on, talking, level: crate::voiphud::level_of(power), note, talkers };
         (!h.is_empty()).then_some(h)
     }
 
@@ -5671,6 +5713,7 @@ impl TremGame {
                 Some(self.wtb_open_video(argv.get(1).map(|s| s.as_str())))
             }
             "stopvideo" => Some(self.wtb_stop_video()),
+            "voip_refreshdevices" => Some(self.wtb_voip_refresh_devices()),
             _ => None,
         }
     }

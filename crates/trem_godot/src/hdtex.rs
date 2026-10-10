@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 /// The image key of a pk3 path: lower case, '/' separators, no extension.
 pub fn key_of(path: &str) -> String {
-    let p = path.replace('\\', "/").to_lowercase();
+    let p = path.replace('\\', "/").trim_start_matches('/').to_lowercase();
     match p.rsplit_once('.') {
         Some((stem, ext)) if matches!(ext, "tga" | "jpg" | "jpeg" | "png") => stem.to_string(),
         _ => p,

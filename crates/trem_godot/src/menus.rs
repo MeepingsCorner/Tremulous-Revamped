@@ -2903,6 +2903,21 @@ impl Ui {
             "loaddemos" => self.load_demos(),
             "loadmovies" => self.load_movies(),
             "loadmods" => self.load_mods(),
+            // the port's voice page (dec053): the microphone list again,
+            // "Default" if the chosen device is gone, and the capture
+            // restarted on it (TremGame's voip_refreshdevices)
+            "voiprefreshdevices" => {
+                let pairs = voice_device_pairs(&crate::voipsnd::VoipSound::input_devices());
+                for it in self.sets[0].iter_mut().flat_map(|m| m.items.iter_mut()) {
+                    if it.def.cvar.as_deref().is_some_and(|c| c.eq_ignore_ascii_case("s_voipInputDevice")) {
+                        it.def.multi = pairs.clone();
+                    }
+                }
+                if !pairs.iter().any(|(_, v)| *v == self.cvar("s_voipInputDevice")) {
+                    self.set_cvar("s_voipInputDevice", "Default");
+                }
+                self.exec("voip_refreshdevices\n");
+            }
             "playmovie" => {
                 if let Some(m) = self.movies.get(self.selection(Feeder::Cinematics).max(0) as usize).cloned() {
                     self.preview_movie = false;
@@ -6774,20 +6789,47 @@ const PORT_VOICE_ROWS: &[(&str, &str, Option<&str>)] = &[
     ("Voice HUD:", "cl_voipHud", None),
 ];
 
+/// The microphone row's (label, value) pairs: the label <= 24 characters
+/// (the value column), the value the full name (`"` read as `'`).
+fn voice_device_pairs(devices: &[String]) -> Vec<(String, String)> {
+    devices.iter().map(|d| d.replace('"', "'")).map(|d| (d.chars().take(24).collect(), d)).collect()
+}
+
+/// The voice page's Refresh button, left of the microphone row (whose
+/// rect starts after it): `uiScript voipRefreshDevices`.
+const PORT_VOICE_REFRESH: &str = r#"    itemDef
+    {
+      name refreshmic
+      type 1
+      text "Refresh"
+      style 0
+      rect 20 77 70 20
+      textalign 1
+      textvalign 1
+      textscale .22
+      forecolor 1 1 1 1
+      visible 1
+      action
+      {
+        play "sound/misc/menu1.wav";
+        uiScript voipRefreshDevices
+      }
+    }
+"#;
+
 fn port_voice_menu(devices: &[String]) -> String {
     let page = PORT_AUDIO_MENU
         .replace("port_audio", "port_voice")
         .replace("\"Enhanced Audio\"", "\"Voice Chat\"")
         .replace("\"Applies in the enhanced mode (F10); vanilla sound is unchanged\"", "\"Toggle the microphone in game with the Voice Chat Mic key (K)\"");
-    // label <= 24 characters (the value column), the value the full name
-    let list: String = devices
-        .iter()
-        .map(|d| d.replace('"', "'"))
-        .map(|d| format!("\"{}\", \"{d}\", ", d.chars().take(24).collect::<String>()))
-        .collect();
+    let list: String = voice_device_pairs(devices).iter().map(|(l, v)| format!("\"{l}\", \"{v}\", ")).collect();
     let mut rows: Vec<(&str, &str, Option<String>)> = PORT_VOICE_ROWS.iter().map(|&(l, c, v)| (l, c, v.map(|v| format!("cvarFloatList {{ {v} }}")))).collect();
     rows.insert(1, ("Microphone:", "s_voipInputDevice", Some(format!("cvarStrList {{ {} }}", list.trim_end().trim_end_matches(',')))));
+    // the microphone row starts right of the Refresh button; its label
+    // still ends at x + w + textalignx = 170 like the other rows
     port_page_rows(&page, rows)
+        .replacen("rect 20 77 300 20", "rect 100 77 220 20", 1)
+        .replacen("    itemDef\n    {\n      name back", &format!("{PORT_VOICE_REFRESH}    itemDef\n    {{\n      name back"), 1)
 }
 
 /// A port page's template with its rows (`@ROWS@`): multi items for a
@@ -8347,6 +8389,10 @@ mod tests {
         // the device's full name is the value, its label cut to 24 characters
         assert!(txt.contains("(\"Headset Microphone (USB \", \"Headset Microphone (USB 'Pro' Audio Device)\")"), "the device row's list");
         assert!(page.contains("\"Headset Microphone (USB \", \"Headset"));
+        // the Refresh button left of the microphone row, which starts after it
+        assert!(txt.contains("refreshmic") && txt.contains("voipRefreshDevices"), "the Refresh button");
+        assert!(page.contains("rect 20 77 70 20") && page.contains("rect 100 77 220 20"));
+        assert_eq!(page.matches("rect 20 77 300 20").count(), 0);
     }
 
     #[test]

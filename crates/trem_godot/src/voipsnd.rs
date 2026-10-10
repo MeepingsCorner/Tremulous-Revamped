@@ -107,6 +107,26 @@ impl VoipSound {
         }
     }
 
+    /// The capture restarted (the voice page's Refresh): the microphone
+    /// player stops and plays again and what was buffered is dropped.
+    pub fn restart_capture(&mut self) {
+        if !self.capturing {
+            return;
+        }
+        self.buf.clear();
+        self.resample_pos = 0.0;
+        self.last_in = 0.0;
+        if let Some(fx) = self.capture_fx.as_mut() {
+            fx.clear_buffer();
+        }
+        if self.test_tone.is_none() {
+            if let Some(m) = self.mic.as_mut() {
+                m.stop();
+                m.play();
+            }
+        }
+    }
+
     /// The capture devices AudioServer knows ("Default" first).
     pub fn input_devices() -> Vec<String> {
         let mut v: Vec<String> = AudioServer::singleton().get_input_device_list().as_slice().iter().map(|d| d.to_string()).collect();
