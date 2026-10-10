@@ -764,9 +764,12 @@ impl GfxRuntime {
                 s.set_visible(!hide);
             }
         }
+        // the reactor's blue and the overmind's green lights are the sheet
+        // arena's lighting: cgame has none, so a BSP map hides them in the
+        // classic (vanilla) mode too
         for l in self.fake_lights.iter_mut() {
             if l.is_instance_valid() {
-                l.set_visible(!hide);
+                l.set_visible(!self.is_bsp);
             }
         }
         for f in self.fog_nodes.iter_mut() {
