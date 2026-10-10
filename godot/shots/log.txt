@@ -26,34 +26,34 @@ actor: ent 147 origin=(1792,448,20) bSome(Telenode) scale=1 z_offset=0 parts=[in
 actor: ent 148 origin=(1664,320,20) bSome(Telenode) scale=1 z_offset=0 parts=[in_tree=true vis=true pos=(52.00,0.63,-10.00) surfs=4/4]
 actor: ent 149 origin=(1664,448,31) bSome(Reactor) scale=0.85 z_offset=-2 parts=[in_tree=true vis=true pos=(52.00,0.91,-14.00) surfs=6/6]
 spawner_shot: setviewpos 1682 448 30 0 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_0_0.png
+spawner_shot: saved godot/shots/telenode_0_0.png
 spawner_shot: setviewpos 1792 338 30 90 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_0_1.png
+spawner_shot: saved godot/shots/telenode_0_1.png
 spawner_shot: setviewpos 1902 448 30 180 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_0_2.png
+spawner_shot: saved godot/shots/telenode_0_2.png
 spawner_shot: setviewpos 1792 558 30 270 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_0_3.png
+spawner_shot: saved godot/shots/telenode_0_3.png
 spawner_shot: setviewpos 1554 320 30 0 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_1_0.png
+spawner_shot: saved godot/shots/telenode_1_0.png
 spawner_shot: setviewpos 1664 210 30 90 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_1_1.png
+spawner_shot: saved godot/shots/telenode_1_1.png
 spawner_shot: setviewpos 1774 320 30 180 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_1_2.png
+spawner_shot: saved godot/shots/telenode_1_2.png
 spawner_shot: setviewpos 1664 430 30 270 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/telenode_1_3.png
+spawner_shot: saved godot/shots/telenode_1_3.png
 spawner_shot: setviewpos -1966 448 41 0 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_0_0.png
+spawner_shot: saved godot/shots/eggpod_0_0.png
 spawner_shot: setviewpos -1856 338 41 90 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_0_1.png
+spawner_shot: saved godot/shots/eggpod_0_1.png
 spawner_shot: setviewpos -1746 448 41 180 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_0_2.png
+spawner_shot: saved godot/shots/eggpod_0_2.png
 spawner_shot: setviewpos -1856 558 41 270 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_0_3.png
+spawner_shot: saved godot/shots/eggpod_0_3.png
 spawner_shot: setviewpos -1838 320 41 0 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_1_0.png
+spawner_shot: saved godot/shots/eggpod_1_0.png
 spawner_shot: setviewpos -1728 210 41 90 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_1_1.png
+spawner_shot: saved godot/shots/eggpod_1_1.png
 spawner_shot: setviewpos -1618 320 41 180 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_1_2.png
+spawner_shot: saved godot/shots/eggpod_1_2.png
 spawner_shot: setviewpos -1728 430 41 270 -> ok
-spawner_shot: saved C:/Users/Owner/Desktop/Tremulous/tremulous-godot-port/tremulous-godot/godot/shots/eggpod_1_3.png
+spawner_shot: saved godot/shots/eggpod_1_3.png

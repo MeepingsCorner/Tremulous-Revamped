@@ -209,6 +209,18 @@ CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER=x86_64-w64-mingw32-gcc \
   cargo build --release -p trem_godot --target x86_64-pc-windows-gnu
 ```
 
+On Windows, build the DLL that gets committed to `godot/bin/` with
+`powershell -ExecutionPolicy Bypass -File tools\build_release.ps1`: it passes
+`--remap-path-prefix` for the Cargo home and the repo (stable Cargo has no
+`trim-paths` yet), so panic locations name `/cargo/...` and `/src/...`
+instead of folders under your user profile, builds into `target/dist`, and
+copies the DLL to `godot/bin/`.
+
+`godot-mcp.config.json` is an MCP server entry for `@coding-solo/godot-mcp`.
+Its `GODOT_PATH` uses `${USERPROFILE}`, which Claude Code expands in MCP
+configs; a client that does not expand variables needs the full path to the
+Godot executable there instead.
+
 The 4K texture pack (`hd/`) is stored losslessly compressed (dec055,
 `crates/trem_hdpack`): each mip level is zstd-compressed and identical
 textures are links, so the GPU gets exactly the same data. Shrink a pack

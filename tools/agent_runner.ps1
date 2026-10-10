@@ -22,7 +22,7 @@ foreach ($d in @($agent, $queue, $out, $ran)) { New-Item -ItemType Directory -Fo
 $env:Path = "$env:USERPROFILE\.cargo\bin;$env:Path"
 $env:TREM11_DED  = "C:\Program Files (x86)\Tremulous\tremulous.exe"
 $env:TREM11_BASE = "C:\Program Files (x86)\Tremulous"
-$env:GODOT = "C:\Users\Owner\Downloads\Godot\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe"
+if (-not $env:GODOT) { $env:GODOT = "$env:USERPROFILE\Downloads\Godot\Godot_v4.7.2-stable_win64.exe\Godot_v4.7.2-stable_win64_console.exe" }
 
 Write-Host "agent runner: watching $queue (Ctrl+C to stop)" -ForegroundColor Cyan
 

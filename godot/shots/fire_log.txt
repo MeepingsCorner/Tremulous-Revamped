@@ -1,4 +1,4 @@
-autogen: seta name "Owner"
+autogen: seta name "Player"
 autogen: seta r_width "0"
 autogen: seta rate "90000"
 autogen: seta snaps "40"

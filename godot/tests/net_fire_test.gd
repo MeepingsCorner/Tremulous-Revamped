@@ -65,6 +65,6 @@ func _run() -> void:
 	await _wait(2.0)
 	say("status after scores: " + game.net_status())
 	say("disconnect: " + game.console("disconnect"))
-	game.exec("name Owner\n")
+	game.exec("name Player\n")
 	await _wait(25.0)
 	get_tree().quit()
