@@ -221,6 +221,12 @@ Its `GODOT_PATH` uses `${USERPROFILE}`, which Claude Code expands in MCP
 configs; a client that does not expand variables needs the full path to the
 Godot executable there instead.
 
+The 4K texture pack is too big for the repo: download both zips from the
+[4K texture pack release](https://github.com/MeepingsCorner/Tremulous-Revamped/releases/tag/hd-textures-v1)
+and unzip them into one `hd` folder, next to the packaged game's executable
+or in the game's user folder
+(`%APPDATA%\Godot\app_userdata\Tremulous (Godot + Rust port)\hd`).
+
 The 4K texture pack (`hd/`) is stored losslessly compressed (dec055,
 `crates/trem_hdpack`): each mip level is zstd-compressed and identical
 textures are links, so the GPU gets exactly the same data. Shrink a pack
