@@ -256,10 +256,17 @@ pub struct Host<'a> {
     pub parent: Gd<Node>,
     pub attacker: i32,
     pub crosshair: i32,
+    /// dec056: the microphone toggle is on. Voice activation listens only
+    /// then (CL_CaptureVoip keeps cl_voipSend at 1 while cl_voipUseVAD is
+    /// set, so the toggle could not turn the microphone off)
+    pub mic_open: bool,
 }
 
 impl VoipHost for Host<'_> {
     fn cvar_string(&self, name: &str) -> String {
+        if !self.mic_open && name.eq_ignore_ascii_case("cl_voipUseVAD") {
+            return "0".into();
+        }
         self.cvars.string(name)
     }
     fn cvar_set(&mut self, name: &str, value: &str) {

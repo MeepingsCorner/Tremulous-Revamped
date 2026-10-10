@@ -1,7 +1,8 @@
 //! The port's voice-chat HUD (dec053): the microphone's state (on, off,
 //! talking, with the capture level) and the players heard talking, drawn
 //! by TremConsole over the game like `SCR_DrawVoipMeter` (640x480 virtual
-//! units, the console's bigchars at 8 units). `cl_voipHud 0` hides it.
+//! units, the console's bigchars at 10 units, at the left between the chat
+//! and the tutorial lines; dec056). `cl_voipHud 0` hides it.
 
 use crate::console::ConDraw;
 
@@ -53,22 +54,25 @@ pub fn plain_name(name: &str, max: usize) -> String {
     out.chars().take(max).collect()
 }
 
-const X: f32 = 8.0;
-/// the top of the panel: above the HUD's bottom-left rings
-const Y: f32 = 300.0;
-const LINE: f32 = 12.0;
+const X: f32 = 10.0;
+/// the top of the panel: below the chat / notify lines, above the
+/// tutorial text and the HUD's bottom-left rings
+const Y: f32 = 190.0;
+/// character size
+const CH: f32 = 10.0;
+const LINE: f32 = 14.0;
 const GREEN: [f32; 4] = [0.3, 1.0, 0.3, 1.0];
 const BRIGHT: [f32; 4] = [0.6, 1.0, 0.6, 1.0];
 const GREY: [f32; 4] = [0.7, 0.7, 0.7, 1.0];
 const YELLOW: [f32; 4] = [1.0, 0.85, 0.2, 1.0];
 const WHITE: [f32; 4] = [1.0, 1.0, 1.0, 1.0];
 
-/// 8-unit text with the console's drop shadow.
+/// CH-unit text with the console's drop shadow.
 fn text(out: &mut Vec<ConDraw>, x: f32, y: f32, s: &str, color: [f32; 4]) {
     for (off, c) in [(1.0, [0.0, 0.0, 0.0, color[3]]), (0.0, color)] {
         for (i, ch) in s.bytes().enumerate() {
             if ch != b' ' {
-                out.push(ConDraw::VirtChar(x + i as f32 * 8.0 + off, y + off, 8.0, ch, c));
+                out.push(ConDraw::VirtChar(x + i as f32 * CH + off, y + off, CH, ch, c));
             }
         }
     }
@@ -79,24 +83,24 @@ pub fn draw(h: &VoipHud) -> Vec<ConDraw> {
     let mut out = Vec::new();
     let mut y = Y;
     if h.mic_on {
-        out.push(ConDraw::Fill([X - 3.0, y - 3.0, 150.0, LINE + 2.0], [0.0, 0.0, 0.0, 0.5]));
+        out.push(ConDraw::Fill([X - 4.0, y - 4.0, 182.0, CH + 8.0], [0.0, 0.0, 0.0, 0.55]));
         let (label, color) = if h.talking { ("TALKING", BRIGHT) } else { ("MIC ON", GREEN) };
         text(&mut out, X, y, label, color);
         // the level bar
-        let (bx, bw) = (X + 64.0, 76.0);
-        out.push(ConDraw::Fill([bx, y + 1.0, bw, 6.0], [0.2, 0.2, 0.2, 0.8]));
+        let (bx, bw) = (X + 7.0 * CH + 6.0, 98.0);
+        out.push(ConDraw::Fill([bx, y + 2.0, bw, CH - 4.0], [0.2, 0.2, 0.2, 0.8]));
         if h.level > 0.0 {
-            out.push(ConDraw::Fill([bx, y + 1.0, bw * h.level.clamp(0.0, 1.0), 6.0], color));
+            out.push(ConDraw::Fill([bx, y + 2.0, bw * h.level.clamp(0.0, 1.0), CH - 4.0], color));
         }
         y += LINE + 2.0;
     }
     if let Some((note, warn)) = &h.note {
-        // wrapped at 36 characters
+        // wrapped at 30 characters
         let words: Vec<&str> = note.split(' ').collect();
         let mut line = String::new();
         let mut lines = Vec::new();
         for w in words {
-            if !line.is_empty() && line.len() + 1 + w.len() > 36 {
+            if !line.is_empty() && line.len() + 1 + w.len() > 30 {
                 lines.push(std::mem::take(&mut line));
             }
             if !line.is_empty() {
@@ -115,7 +119,7 @@ pub fn draw(h: &VoipHud) -> Vec<ConDraw> {
     }
     for name in &h.talkers {
         text(&mut out, X, y, ")))", GREEN);
-        text(&mut out, X + 32.0, y, name, WHITE);
+        text(&mut out, X + 4.0 * CH, y, name, WHITE);
         y += LINE - 2.0;
     }
     out

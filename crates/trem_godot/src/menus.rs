@@ -6666,7 +6666,8 @@ impl Ui {
 /// The port's enhanced-audio page (fmodaudio.rs cvars), opened from the
 /// options' Sound panel; built in, never read from (or added to) the pk3s.
 pub const PORT_AUDIO_MENU_FILE: &str = "ui/port_audio.menu";
-pub const PORT_AUDIO_MENU: &str = r#"// numbers, not ui/menudef.h names: not every data set defines them
+pub const PORT_AUDIO_MENU: &str = r#"// numbers, not ui/menudef.h names: not every data set defines them;
+// text placed the legacy ui's way (textalignx an offset, textvalign 1 centre)
 {
   menuDef
   {
@@ -6674,7 +6675,7 @@ pub const PORT_AUDIO_MENU: &str = r#"// numbers, not ui/menudef.h names: not eve
     visible 0
     fullScreen 0
     outOfBoundsClick
-    rect 150 70 340 290
+    rect 240 70 340 290
     focusColor 1 .75 0 1
     onESC { close port_audio }
 
@@ -6693,12 +6694,12 @@ pub const PORT_AUDIO_MENU: &str = r#"// numbers, not ui/menudef.h names: not eve
     itemDef
     {
       name title
+      type 1
       text "Enhanced Audio"
       style 0
       rect 0 8 340 20
       textalign 1
-      textalignx 170
-      textaligny 17
+      textvalign 1
       textscale .3
       forecolor 1 1 1 1
       visible 1
@@ -6707,12 +6708,12 @@ pub const PORT_AUDIO_MENU: &str = r#"// numbers, not ui/menudef.h names: not eve
     itemDef
     {
       name note
+      type 1
       text "Applies in the enhanced mode (F10); vanilla sound is unchanged"
       style 0
       rect 0 30 340 14
       textalign 1
-      textalignx 170
-      textaligny 12
+      textvalign 1
       textscale .2
       forecolor .7 .7 .7 1
       visible 1
@@ -6727,8 +6728,7 @@ pub const PORT_AUDIO_MENU: &str = r#"// numbers, not ui/menudef.h names: not eve
       style 0
       rect 132 258 75 20
       textalign 1
-      textalignx 37
-      textaligny 15
+      textvalign 1
       textscale .25
       forecolor 1 1 1 1
       visible 1
@@ -6804,78 +6804,10 @@ fn port_page_rows<'a, I: IntoIterator<Item = (&'a str, &'a str, Option<String>)>
             None => format!("type {IT_YESNO}\n      cvar \"{cvar}\""),
         };
         rows += &format!(
-            "    itemDef\n    {{\n      name row{i}\n      {kind}\n      text \"{label}\"\n      rect 20 {y} 300 20\n      textalign 2\n      textalignx 150\n      textaligny 15\n      textscale .25\n      forecolor 1 1 1 1\n      visible 1\n      action\n      {{\n        play \"sound/misc/menu1.wav\"\n      }}\n    }}\n"
+            "    itemDef\n    {{\n      name row{i}\n      {kind}\n      text \"{label}\"\n      rect 20 {y} 300 20\n      textalign 2\n      textalignx -150\n      textvalign 1\n      textscale .25\n      forecolor 1 1 1 1\n      visible 1\n      action\n      {{\n        play \"sound/misc/menu1.wav\"\n      }}\n    }}\n"
         );
     }
     page.replace("@ROWS@", &rows)
-}
-
-/// The options' Sound panel: a "Voice Chat..." button to the port's
-/// voice-chat page on the row after Doppler Sound (a copy of that item
-/// turned into a button). A menu without that row is left as it is.
-fn patch_voice_button(text: &str) -> String {
-    let Some(k) = text.find("\"s_doppler\"") else { return text.to_string() };
-    let Some(start) = text[..k].rfind("itemDef") else { return text.to_string() };
-    let Some(open) = text[start..].find('{').map(|o| start + o) else { return text.to_string() };
-    let mut depth = 0;
-    let mut end = None;
-    for (i, ch) in text[open..].char_indices() {
-        match ch {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    end = Some(open + i + 1);
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-    let Some(end) = end else { return text.to_string() };
-    let item = &text[start..end];
-    let Some(r) = item.find("(SCONTENT_Y+(") else { return text.to_string() };
-    let num_at = r + "(SCONTENT_Y+(".len();
-    let num_len = item[num_at..].find(|c: char| !c.is_ascii_digit()).unwrap_or(0);
-    let Ok(row) = item[num_at..num_at + num_len].parse::<i32>() else { return text.to_string() };
-    let mut copy = format!("{}{}{}", &item[..num_at], row + 1, &item[num_at + num_len..])
-        .replacen("ITEM_TYPE_YESNO", "ITEM_TYPE_BUTTON", 1)
-        .replacen("\"Doppler Sound:\"", "\"Voice Chat...\"", 1)
-        .replacen("play \"sound/misc/menu1.wav\";", "play \"sound/misc/menu1.wav\";\n        open port_voice", 1);
-    // no cvar line
-    if let Some(c) = copy.find("cvar \"s_doppler\"") {
-        let line_start = copy[..c].rfind('\n').map(|n| n + 1).unwrap_or(c);
-        let line_end = copy[c..].find('\n').map(|n| c + n + 1).unwrap_or(copy.len());
-        copy.replace_range(line_start..line_end, "");
-    }
-    format!("{}\n\n    {}{}", &text[..end], copy, &text[end..])
-}
-
-/// The options' Sound panel: its OpenAL switch (meaningless in the port)
-/// becomes the button to the enhanced-audio page.
-fn patch_sound_options(text: &str) -> String {
-    let Some(k) = text.find("\"s_useOpenAL\"") else { return text.to_string() };
-    let Some(start) = text[..k].rfind("itemDef") else { return text.to_string() };
-    // the item's closing brace
-    let Some(open) = text[start..].find('{').map(|o| start + o) else { return text.to_string() };
-    let mut depth = 0;
-    let mut end = None;
-    for (i, ch) in text[open..].char_indices() {
-        match ch {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    end = Some(open + i + 1);
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-    let Some(end) = end else { return text.to_string() };
-    let button = "itemDef\n    {\n      name netsound\n      group optionsGrp\n      type 1\n      text \"Enhanced Audio...\"\n      style 0\n      rect 96 120 192 15\n      textalign 1\n      textalignx 96\n      textaligny 12\n      textscale .25\n      forecolor 1 1 1 1\n      visible 0\n      action\n      {\n        play \"sound/misc/menu1.wav\";\n        open port_audio\n      }\n    }";
-    format!("{}{}{}", &text[..start], button, &text[end..])
 }
 
 /// The options' Controls / Misc panel: a "Voice Chat Mic:" bind row for
@@ -6911,6 +6843,79 @@ fn patch_voip_bind(text: &str) -> String {
         .replacen("\"screenshotJPEG\"", "\"voip_toggle\"", 1)
         .replacen("\"Screenshot:\"", "\"Voice Chat Mic:\"", 1);
     format!("{}\n\n    {}{}", &text[..end], copy, &text[end..])
+}
+
+/// The byte range of the `itemDef { .. }` holding `needle`.
+fn item_range(text: &str, needle: &str) -> Option<(usize, usize)> {
+    let k = text.find(needle)?;
+    let start = text[..k].rfind("itemDef")?;
+    let open = text[start..].find('{').map(|o| start + o)?;
+    let mut depth = 0;
+    for (i, ch) in text[open..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((start, open + i + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// A panel row (the item of `cvar`) as a button labelled `label` that
+/// opens `menu`: its rect, alignment and group stay, so it sits in the
+/// panel like the other rows; `row_delta` moves it that many rows down
+/// (rect "SCONTENT_X (SCONTENT_Y+(<n>*ELEM_H)) ..." of the legacy menus).
+fn row_button(item: &str, cvar: &str, label: &str, menu: &str, row_delta: i32) -> Option<String> {
+    let mut b = item.to_string();
+    if row_delta != 0 {
+        let r = b.find("(SCONTENT_Y+(")?;
+        let at = r + "(SCONTENT_Y+(".len();
+        let len = b[at..].find(|c: char| !c.is_ascii_digit())?;
+        let row: i32 = b[at..at + len].parse().ok()?;
+        b.replace_range(at..at + len, &(row + row_delta).to_string());
+    }
+    // the type: a button (ITEM_TYPE_BUTTON, 2 in the legacy menudef.h)
+    let ty = b.find("type ")?;
+    let ty_end = b[ty..].find('\n').map(|n| ty + n)?;
+    b.replace_range(ty..ty_end, "type ITEM_TYPE_BUTTON");
+    // no cvar line, the label, and the page to open
+    let c = b.find(&format!("cvar \"{cvar}\""))?;
+    let line_start = b[..c].rfind('\n').map(|n| n + 1).unwrap_or(c);
+    let line_end = b[c..].find('\n').map(|n| c + n + 1).unwrap_or(b.len());
+    b.replace_range(line_start..line_end, "");
+    let tx = b.find("text \"")?;
+    let tx_end = b[tx + 6..].find('"').map(|n| tx + 6 + n + 1)?;
+    b.replace_range(tx..tx_end, &format!("text \"{label}\""));
+    match b.find("play \"sound/misc/menu1.wav\";") {
+        Some(pl) => b.insert_str(pl + "play \"sound/misc/menu1.wav\";".len(), &format!("\n        open {menu}")),
+        None => {
+            let close = b.rfind('}')?;
+            b.insert_str(close, &format!("  action\n      {{\n        play \"sound/misc/menu1.wav\";\n        open {menu}\n      }}\n    "));
+        }
+    }
+    Some(b)
+}
+
+/// The options' Sound panel: a "Voice Chat..." button to the port's
+/// voice-chat page on the row after Doppler Sound. A menu without that
+/// row is left as it is.
+fn patch_voice_button(text: &str) -> String {
+    let Some((start, end)) = item_range(text, "\"s_doppler\"") else { return text.to_string() };
+    let Some(b) = row_button(&text[start..end], "s_doppler", "Voice Chat...", "port_voice", 1) else { return text.to_string() };
+    format!("{}\n\n    {}{}", &text[..end], b, &text[end..])
+}
+
+/// The options' Sound panel: its OpenAL switch (meaningless in the port)
+/// becomes the button to the enhanced-audio page, on the same row.
+fn patch_sound_options(text: &str) -> String {
+    let Some((start, end)) = item_range(text, "\"s_useOpenAL\"") else { return text.to_string() };
+    let Some(b) = row_button(&text[start..end], "s_useOpenAL", "Enhanced Audio...", "port_audio", 0) else { return text.to_string() };
+    format!("{}{}{}", &text[..start], b, &text[end..])
 }
 
 /// `UI_Init`'s loading: menus (ui + cgame scoreboard), fonts, help,
@@ -7674,6 +7679,9 @@ impl TremMenus {
             let gm = game.bind();
             let c = gm.client_cvars_ref();
             let mut synced: Vec<String> = names.into_iter().filter(|n| c.find(n).is_some()).collect();
+            // the voice chat page's cvars (dec053; registered with the
+            // first frame, maybe after this): copied once they exist
+            synced.extend(trem_sim::kernel::voip::CL_VOIP_CVARS.iter().map(|(n, _, _)| n.to_ascii_lowercase()).chain(["cl_voiphud", "s_voipinputdevice"].map(String::from)));
             synced.sort();
             synced.dedup();
             self.synced = synced;

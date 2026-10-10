@@ -5613,7 +5613,8 @@ impl TremGame {
         // only what CL_CaptureVoip prints (the client's other text has its own readers)
         let before = nh.cl.print_out.len();
         {
-            let mut h = crate::voipsnd::Host { cvars: &mut self.client.cvars, snd: &mut self.wtb.voip, parent: parent.clone(), attacker, crosshair };
+            let mic_open = self.client.voip_toggle;
+            let mut h = crate::voipsnd::Host { cvars: &mut self.client.cvars, snd: &mut self.wtb.voip, parent: parent.clone(), attacker, crosshair, mic_open };
             nh.cl.capture_voip(&mut h);
         }
         let out = nh.cl.print_out.split_off(before.min(nh.cl.print_out.len()));
@@ -5753,6 +5754,23 @@ impl TremGame {
     #[func]
     fn voip_test_tone(&mut self, freq: f32, amplitude: f32) {
         self.wtb.voip.set_test_tone((freq > 0.0).then_some((freq, amplitude)));
+    }
+
+    /// dec053: the voice HUD's inputs and what it draws (tests).
+    #[func]
+    fn voip_hud_state(&self) -> GString {
+        let nh = self.nethost.as_ref();
+        let s = format!(
+            "toggle={} cl_voipSend={} net={} enabled={} capturing={} power={:.3} hud={:?}",
+            self.client.voip_toggle,
+            self.client.cvars.integer("cl_voipSend"),
+            nh.is_some(),
+            nh.is_some_and(|n| n.cl.voip.enabled),
+            nh.is_some_and(|n| n.cl.voip.capturing),
+            nh.map(|n| n.cl.voip.power).unwrap_or(0.0),
+            self.wtb_voip_hud()
+        );
+        GString::from(s.as_str())
     }
 
     /// wt-b: "sender:samples:peak ..." of the voice received so far.
