@@ -2016,7 +2016,8 @@ impl TremGame {
         self.misc.names.clear();
         self.misc.vote.reset();
         self.misc.dev.reset();
-        let n = self.bots_per_team.max(0);
+        // port_bots: the createserver menu's Bots Per Team (0: no bots)
+        let n = self.net_cvar("port_bots").map(|v| trem_sim::kernel::spawn::c_atoi(&v)).unwrap_or(self.bots_per_team).clamp(0, 16);
         for t in [Team::Aliens, Team::Humans] {
             for k_ in 0..n {
                 let name = format!("{}{}", if t == Team::Aliens { "Xeno" } else { "Marine" }, k_ + 1);
@@ -5460,6 +5461,11 @@ pub(crate) struct WtB {
     /// voip_refreshdevices ran: done on the next frame, since a console
     /// command runs while the client (and its cvars) is lent out
     voip_refresh: bool,
+    /// when the microphone check goes to the console and the log (ms, 0
+    /// none): what the capture delivered in its first 2 s
+    voip_check_at: u64,
+    /// the loudest power since the microphone went on
+    voip_peak_power: f32,
 }
 
 impl TremGame {
@@ -5516,16 +5522,42 @@ impl TremGame {
         }
         let t = self.client.voip_toggle;
         if t != std::mem::replace(&mut self.wtb.voip_prev_toggle, t) {
+            let now = godot::classes::Time::singleton().get_ticks_msec();
             if t {
                 self.wtb.voip_note = None;
+                self.wtb.voip.pumped = 0;
+                self.wtb.voip.pump_peak = 0.0;
+                self.wtb.voip_peak_power = 0.0;
+                self.wtb.voip_check_at = now + 2000;
+                let dev = godot::classes::AudioServer::singleton().get_input_device().to_string();
+                self.wtb_print(&format!("VoIP: capture device \"{dev}\"\n"));
             } else {
                 self.wtb_voip_note("MIC OFF", false);
+                if self.wtb.voip_check_at == 0 {
+                    let th = self.wtb_voip_talk_threshold(self.client.cvars.integer("cl_voipUseVAD") != 0);
+                    self.wtb_print(&format!("VoIP: loudest voice while on: power {:.4} (talking from {:.4})\n", self.wtb.voip_peak_power, th));
+                }
+                self.wtb.voip_check_at = 0;
             }
         }
         // the local player's talking state, held like a heard talker's
         let capturing = self.nethost.as_ref().is_some_and(|n| n.cl.voip.capturing) && self.client.cvars.integer("cl_voipSend") != 0;
         let power = self.nethost.as_ref().map(|n| n.cl.voip.power).unwrap_or(0.0);
         let use_vad = self.client.cvars.integer("cl_voipUseVAD") != 0;
+        self.wtb.voip_peak_power = self.wtb.voip_peak_power.max(power);
+        let now = godot::classes::Time::singleton().get_ticks_msec();
+        if self.wtb.voip_check_at > 0 && now >= self.wtb.voip_check_at {
+            self.wtb.voip_check_at = 0;
+            let v = &self.wtb.voip;
+            let msg = if !capturing {
+                "VoIP: microphone check: not capturing (see the line above for why)\n".to_string()
+            } else if v.pumped == 0 {
+                "VoIP: microphone check: NO audio from the capture device in 2 s (Windows microphone access, or the device is in use)\n".to_string()
+            } else {
+                format!("VoIP: microphone check: {} frames in 2 s, peak level {:.4}, power {:.4}\n", v.pumped, v.pump_peak, self.wtb.voip_peak_power)
+            };
+            self.wtb_print(&msg);
+        }
         if capturing && power >= self.wtb_voip_talk_threshold(use_vad) {
             self.wtb.voip_self_talk = godot::classes::Time::singleton().get_ticks_msec();
         }

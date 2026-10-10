@@ -4,6 +4,10 @@ extends Node
 ## godot --path godot res://tests/mic_probe.tscn
 func _ready() -> void:
 	var a := AudioServer
+	if OS.get_environment("PROBE_DEV") != "":
+		a.input_device = OS.get_environment("PROBE_DEV")
+		await get_tree().create_timer(0.5).timeout
+		print("probe: set input_device -> now ", a.input_device)
 	print("probe: driver ", a.get_driver_name() if a.has_method("get_driver_name") else "?", " mix_rate ", a.get_mix_rate(), " inputs ", a.get_input_device_list(), " input ", a.input_device)
 	var bus := a.bus_count
 	a.add_bus()
