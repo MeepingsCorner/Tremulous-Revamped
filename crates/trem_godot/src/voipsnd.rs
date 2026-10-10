@@ -40,6 +40,8 @@ pub struct VoipSound {
     resample_pos: f64,
     last_in: f32,
     capturing: bool,
+    /// the capture runs as the microphone test (outside an online game)
+    monitoring: bool,
     /// a synthetic source instead of the microphone: (freq, amplitude, phase in samples, start ms)
     test_tone: Option<(f32, f32, u64, u64)>,
     /// S_MasterGain
@@ -108,6 +110,46 @@ impl VoipSound {
                 m.play();
             }
         }
+    }
+
+    /// The microphone test outside an online game: the capture runs for
+    /// the voice HUD only and nothing is sent. The power (CL_CaptureVoip's
+    /// 0..100 scale) of what arrived since the last call, None if nothing.
+    pub fn monitor(&mut self, parent: &mut Gd<Node>) -> Option<f32> {
+        if !self.capturing {
+            self.ensure_device(parent);
+            self.capturing = true;
+            self.monitoring = true;
+            self.buf.clear();
+            self.resample_pos = 0.0;
+            if let Some(fx) = self.capture_fx.as_mut() {
+                fx.clear_buffer();
+            }
+            if let Some(t) = self.test_tone.as_mut() {
+                t.2 = 0;
+                t.3 = godot::classes::Time::singleton().get_ticks_msec();
+            } else if let Some(m) = self.mic.as_mut() {
+                m.play();
+            }
+        }
+        self.pump();
+        let n = self.buf.len();
+        if n == 0 {
+            return None;
+        }
+        let sum: f32 = self.buf.drain(..).map(|s| s as f32 * s as f32).sum();
+        Some(sum / (32768.0 * 32768.0 * n as f32) * 100.0)
+    }
+
+    /// The microphone test ends.
+    pub fn stop_monitor(&mut self) {
+        if std::mem::take(&mut self.monitoring) {
+            self.stop();
+        }
+    }
+
+    pub fn monitoring(&self) -> bool {
+        self.monitoring
     }
 
     /// The microphone's capture effect was found (tests, logs).
@@ -195,7 +237,7 @@ impl VoipSound {
     /// `S_StopCapture` when the session went away without the kernel's
     /// clean-up pass (no network host any more).
     pub fn idle(&mut self, s_volume: f32) {
-        if self.capturing {
+        if self.capturing && !self.monitoring {
             self.stop();
             self.master_gain = 1.0;
             AudioServer::singleton().set_bus_volume_db(0, crate::vidsnd::volume_db(s_volume));
@@ -319,6 +361,7 @@ impl VoipHost for Host<'_> {
         let mut parent = self.parent.clone();
         self.snd.ensure_device(&mut parent);
         self.snd.capturing = true;
+        self.snd.monitoring = false;
         self.snd.buf.clear();
         self.snd.resample_pos = 0.0;
         if let Some(fx) = self.snd.capture_fx.as_mut() {

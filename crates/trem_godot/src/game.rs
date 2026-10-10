@@ -5466,6 +5466,8 @@ pub(crate) struct WtB {
     voip_check_at: u64,
     /// the loudest power since the microphone went on
     voip_peak_power: f32,
+    /// the microphone test's power (outside an online game)
+    voip_local_power: f32,
 }
 
 impl TremGame {
@@ -5512,14 +5514,6 @@ impl TremGame {
             let dev = self.client.cvars.string("s_voipInputDevice");
             self.wtb.voip.set_input_device(&dev);
         }
-        if self.client.voip_toggle && self.nethost.is_none() {
-            self.client.voip_toggle = false;
-            self.client.cvars.set("cl_voipSend", "0");
-            self.wtb_print("VoIP: microphone off (voice chat works in online games: Play, then join or create a server)\n");
-            self.wtb_voip_note("Voice chat works in online games only", true);
-            self.wtb.voip_prev_toggle = false;
-            return;
-        }
         let t = self.client.voip_toggle;
         if t != std::mem::replace(&mut self.wtb.voip_prev_toggle, t) {
             let now = godot::classes::Time::singleton().get_ticks_msec();
@@ -5540,9 +5534,35 @@ impl TremGame {
                 self.wtb.voip_check_at = 0;
             }
         }
+        // outside an online game the toggle runs the microphone test: the
+        // voice HUD shows the microphone, nothing is sent
+        if !self.net_active() {
+            if t {
+                if !self.wtb.voip.monitoring() {
+                    self.client.cvars.set("cl_voipSend", "0");
+                    self.wtb_print("VoIP: microphone test (not in an online game, so nothing is sent: Create Server or join one to talk)\n");
+                    self.wtb_voip_note("Mic test: voice is sent in online games", false);
+                }
+                let mut parent: Gd<godot::classes::Node> = self.base().clone().upcast();
+                if let Some(p) = self.wtb.voip.monitor(&mut parent) {
+                    self.wtb.voip_local_power = p;
+                }
+            } else if self.wtb.voip.monitoring() {
+                self.wtb.voip.stop_monitor();
+                self.wtb.voip_local_power = 0.0;
+            }
+        } else if self.wtb.voip.monitoring() {
+            // an online game began with the microphone on: CL_CaptureVoip takes over
+            self.wtb.voip.stop_monitor();
+            self.wtb.voip_local_power = 0.0;
+            if t {
+                self.client.cvars.set("cl_voipSend", "1");
+            }
+        }
         // the local player's talking state, held like a heard talker's
-        let capturing = self.nethost.as_ref().is_some_and(|n| n.cl.voip.capturing) && self.client.cvars.integer("cl_voipSend") != 0;
-        let power = self.nethost.as_ref().map(|n| n.cl.voip.power).unwrap_or(0.0);
+        let monitoring = self.wtb.voip.monitoring();
+        let capturing = monitoring || self.nethost.as_ref().is_some_and(|n| n.cl.voip.capturing) && self.client.cvars.integer("cl_voipSend") != 0;
+        let power = if monitoring { self.wtb.voip_local_power } else { self.nethost.as_ref().map(|n| n.cl.voip.power).unwrap_or(0.0) };
         let use_vad = self.client.cvars.integer("cl_voipUseVAD") != 0;
         self.wtb.voip_peak_power = self.wtb.voip_peak_power.max(power);
         let now = godot::classes::Time::singleton().get_ticks_msec();
@@ -5603,9 +5623,10 @@ impl TremGame {
         }
         let now = godot::classes::Time::singleton().get_ticks_msec();
         let nh = self.nethost.as_ref();
-        let mic_on = nh.is_some_and(|n| n.cl.voip.capturing) && self.client.cvars.integer("cl_voipSend") != 0;
-        let power = nh.map(|n| n.cl.voip.power).unwrap_or(0.0);
-        let me = nh.and_then(|n| n.client_num());
+        let monitoring = self.wtb.voip.monitoring();
+        let mic_on = monitoring || nh.is_some_and(|n| n.cl.voip.capturing) && self.client.cvars.integer("cl_voipSend") != 0;
+        let power = if monitoring { self.wtb.voip_local_power } else { nh.map(|n| n.cl.voip.power).unwrap_or(0.0) };
+        let me = nh.and_then(|n| n.client_num()).or(self.me);
         // the local player: from the capture (their voice never comes back
         // from the server), held TALKER_HOLD_MS between packets
         let talking = mic_on && self.wtb.voip_self_talk > 0 && now.saturating_sub(self.wtb.voip_self_talk) < crate::voiphud::TALKER_HOLD_MS;
@@ -5727,7 +5748,7 @@ impl TremGame {
         }
         self.wtb_print(&out);
         // the microphone toggle: CL_CaptureVoip would not capture
-        if self.client.voip_toggle && self.client.cvars.integer("cl_voipSend") == 0 {
+        if self.client.voip_toggle && self.net_active() && self.client.cvars.integer("cl_voipSend") == 0 {
             self.client.voip_toggle = false;
             self.wtb.voip_prev_toggle = false;
             let why = refused.unwrap_or("not in a game");
