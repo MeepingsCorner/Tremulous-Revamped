@@ -179,6 +179,23 @@ pub struct ServerStatus {
     pub time: i32,
 }
 
+/// `serverStatus_t` of `cl_serverStatusList`: one `getstatus` the ui asked for
+/// (`CL_ServerStatus`); `string` is the answer: `\key\value...` of the info
+/// line, then `\score ping "name"` per player, each part closed by `\`.
+#[derive(Clone, Debug, Default)]
+pub struct StatusReq {
+    pub adr: NetAdr,
+    pub string: String,
+    pub pending: bool,
+    pub retrieved: bool,
+    pub start_time: i32,
+}
+
+/// `MAX_SERVERSTATUSREQUESTS`
+pub const MAX_SERVERSTATUSREQUESTS: usize = 16;
+/// `cl_serverStatusResendTime`'s default
+pub const SERVERSTATUS_RESEND_MS: i32 = 750;
+
 /// The `AS_*` server list sources of the ui.
 // q_shared.h: the client and the ui share these numbers (`trap_LAN_*`)
 pub const AS_GLOBAL: i32 = 0;
@@ -297,6 +314,8 @@ pub struct NetClient {
     pub timeout: i32,
     pub nodelta: bool,
     pub max_ping: i32,
+    /// `cl_serverStatusResendTime` (ms between the ui's getstatus resends)
+    pub server_status_resend: i32,
     /// `cl_lanForcePackets`
     pub lan_force_packets: bool,
     /// Com_Printf output for the host's console
@@ -319,6 +338,8 @@ pub struct NetClient {
     pub ping_update_source: i32,
     pub pinglist: Vec<Ping>,
     pub server_status: Option<ServerStatus>,
+    /// `cl_serverStatusList` (the ui's server info popup)
+    pub status_list: Vec<StatusReq>,
     pub master_names: Vec<String>,
     master_rx: Option<std::sync::mpsc::Receiver<(String, Option<NetAdr>)>>,
     // ---- rcon
@@ -464,6 +485,7 @@ impl NetClient {
             timeout: 200,
             nodelta: false,
             max_ping: 800,
+            server_status_resend: SERVERSTATUS_RESEND_MS,
             lan_force_packets: true,
             print_out: String::new(),
             local_servers: Vec::new(),
@@ -477,7 +499,17 @@ impl NetClient {
             ping_update_source: AS_LOCAL,
             pinglist: vec![Ping::default(); MAX_PINGREQUESTS],
             server_status: None,
-            master_names: vec![super::sv::MASTER_SERVER_NAME.into(), "master.ioquake3.org".into()],
+            status_list: vec![
+                StatusReq {
+                    retrieved: true,
+                    ..Default::default()
+                };
+                MAX_SERVERSTATUSREQUESTS
+            ],
+            master_names: vec![
+                super::sv::MASTER_SERVER_NAME.into(),
+                "master.ioquake3.org".into(),
+            ],
             master_rx: None,
             rcon_password: String::new(),
             rcon_address: String::new(),
@@ -2366,6 +2398,7 @@ impl NetClient {
     fn server_status_response(&mut self, from: &NetAdr, m: &mut Msg) {
         let info = m.read_string_line();
         let mut players = Vec::new();
+        let mut raw = Vec::new();
         loop {
             let l = m.read_string_line();
             if l.is_empty() {
@@ -2375,8 +2408,84 @@ impl NetClient {
             if a.len() >= 3 {
                 players.push((super::spawn::c_atoi(&a[0]), super::spawn::c_atoi(&a[1]), a[2].clone()));
             }
+            raw.push(l);
+        }
+        // the ui's request for this address (an unasked answer is dropped)
+        if let Some(r) = self
+            .status_list
+            .iter_mut()
+            .find(|r| netchan::compare_adr(from, &r.adr))
+        {
+            let mut s = info.clone();
+            s.push('\\');
+            for l in &raw {
+                s.push('\\');
+                s.push_str(l);
+            }
+            s.push('\\');
+            r.string = s;
+            r.pending = false;
         }
         self.server_status = Some(ServerStatus { adr: *from, info, players, time: self.realtime });
+    }
+
+    /// `CL_ServerStatus` as the ui calls it: `None` address resets every
+    /// request; with an address, the answer once it came (the request is then
+    /// retrieved), else sends `getstatus` (again every `cl_serverStatusResendTime`)
+    /// and returns `None`.
+    pub fn ui_server_status(&mut self, net: &mut Net, address: Option<&str>) -> Option<String> {
+        let Some(address) = address else {
+            for r in self.status_list.iter_mut() {
+                r.adr.port = 0;
+                r.retrieved = true;
+            }
+            return None;
+        };
+        let (rc, mut to) = netchan::string_to_adr(address, NetAdrType::Unspec);
+        if rc == 0 {
+            return None;
+        }
+        if rc == 2 {
+            to.port = netchan::PORT_SERVER;
+        }
+        let now = sys_milliseconds();
+        // CL_GetServerStatus: same address, else a retrieved slot, else the oldest
+        let i = self
+            .status_list
+            .iter()
+            .position(|r| netchan::compare_adr(&to, &r.adr))
+            .or_else(|| self.status_list.iter().position(|r| r.retrieved))
+            .unwrap_or_else(|| {
+                (0..self.status_list.len())
+                    .min_by_key(|&i| self.status_list[i].start_time)
+                    .unwrap_or(0)
+            });
+        let r = &mut self.status_list[i];
+        if netchan::compare_adr(&to, &r.adr) {
+            if !r.pending {
+                r.retrieved = true;
+                r.start_time = 0;
+                return Some(r.string.clone());
+            }
+            if r.start_time < now.wrapping_sub(self.server_status_resend) {
+                r.pending = true;
+                r.retrieved = false;
+                r.start_time = now;
+                net.open_client();
+                net.out_of_band_print(NetSrc::Client, &to, "getstatus");
+            }
+        } else if r.retrieved {
+            *r = StatusReq {
+                adr: to,
+                string: String::new(),
+                pending: true,
+                retrieved: false,
+                start_time: now,
+            };
+            net.open_client();
+            net.out_of_band_print(NetSrc::Client, &to, "getstatus");
+        }
+        None
     }
 
     /// `CL_ServerStatus`: "getstatus" to an address.

@@ -279,6 +279,119 @@ fn connectionless_queries_and_refusals() {
     assert_ne!(peer.cl.state, ConnState::Active);
 }
 
+/// dec058: the ui's `CL_ServerStatus`: the first call sends `getstatus`, a
+/// later one returns the answer (`\\key\\value..\\` then a `\\score ping "name"`
+/// per player) and the reset forgets it.
+#[test]
+fn ui_server_status_asks_then_returns_the_answer() {
+    let mut port = 0;
+    let (mut sv, mut snet) = server(&mut port);
+    let addr = format!("127.0.0.1:{port}");
+    let mut peers = [Peer::new("Alpha", GUID_A, &addr, None)];
+    for _ in 0..400 {
+        step(&mut sv, &mut snet, &mut peers, 16);
+        if sv.active_clients() == 1 {
+            break;
+        }
+    }
+    assert_eq!(sv.active_clients(), 1);
+    let mut qnet = Net::new();
+    qnet.open(NetSrc::Client, "127.0.0.1", 0).unwrap();
+    let mut q = NetClient::new(0);
+    assert!(
+        q.ui_server_status(&mut qnet, Some(&addr)).is_none(),
+        "the first call only sends getstatus"
+    );
+    let mut text = None;
+    for _ in 0..300 {
+        sv.frame(&mut snet, 16);
+        peers[0].frame(16);
+        q.frame(&mut qnet, 16);
+        text = q.ui_server_status(&mut qnet, Some(&addr));
+        if text.is_some() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let text = text.expect("the statusResponse");
+    assert!(text.starts_with('\\') && text.ends_with('\\'), "{text}");
+    assert!(text.contains("\\sv_hostname\\test server"), "{text}");
+    assert!(text.contains("\\mapname\\arena"), "{text}");
+    assert!(text.contains("\"Alpha\""), "the player line: {text}");
+    // asked again: the same answer; after a reset a new request goes out
+    assert_eq!(
+        q.ui_server_status(&mut qnet, Some(&addr)).as_deref(),
+        Some(text.as_str())
+    );
+    assert!(q.ui_server_status(&mut qnet, None).is_none());
+    assert!(q.ui_server_status(&mut qnet, Some(&addr)).is_none());
+}
+
+/// the ui's getstatus resend uses
+/// `cl_serverStatusResendTime` and recovers from a lost first packet. A plain
+/// UDP socket plays the server: it swallows the first getstatus, the resend
+/// arrives after the interval, and its answer reaches the ui call.
+#[test]
+fn ui_server_status_resends_after_a_lost_first_packet() {
+    use std::net::UdpSocket;
+    use std::time::{Duration, Instant};
+    let srv = UdpSocket::bind("127.0.0.1:0").unwrap();
+    srv.set_read_timeout(Some(Duration::from_millis(5)))
+        .unwrap();
+    let addr = format!("127.0.0.1:{}", srv.local_addr().unwrap().port());
+    let mut qnet = Net::new();
+    qnet.open(NetSrc::Client, "127.0.0.1", 0).unwrap();
+    let mut q = NetClient::new(0);
+    q.server_status_resend = 120;
+    let mut buf = [0u8; 512];
+    assert!(q.ui_server_status(&mut qnet, Some(&addr)).is_none());
+    let (n, _client) = srv.recv_from(&mut buf).expect("the first getstatus");
+    assert!(buf[..n].ends_with(b"getstatus"), "dropped on purpose");
+    // inside the interval: no second packet
+    std::thread::sleep(Duration::from_millis(40));
+    q.frame(&mut qnet, 16);
+    assert!(q.ui_server_status(&mut qnet, Some(&addr)).is_none());
+    assert!(
+        srv.recv_from(&mut buf).is_err(),
+        "no resend before cl_serverStatusResendTime"
+    );
+    // after it: the resend, answered this time
+    let t0 = Instant::now();
+    let mut client = None;
+    while client.is_none() && t0.elapsed() < Duration::from_secs(2) {
+        q.frame(&mut qnet, 16);
+        q.ui_server_status(&mut qnet, Some(&addr));
+        if let Ok((n, from)) = srv.recv_from(&mut buf) {
+            assert!(buf[..n].ends_with(b"getstatus"));
+            client = Some(from);
+        }
+    }
+    let from = client.expect("the resent getstatus");
+    assert!(
+        t0.elapsed() >= Duration::from_millis(40),
+        "not before the interval ran out"
+    );
+    srv.send_to(
+        b"\xff\xff\xff\xffstatusResponse\n\\mapname\\atcs\\sv_hostname\\lossy\n5 40 \"Bob\"\n",
+        from,
+    )
+    .unwrap();
+    let mut text = None;
+    for _ in 0..300 {
+        std::thread::sleep(Duration::from_millis(2));
+        q.frame(&mut qnet, 16);
+        text = q.ui_server_status(&mut qnet, Some(&addr));
+        if text.is_some() {
+            break;
+        }
+    }
+    let text = text.expect("the answer to the resend");
+    assert!(
+        text.contains("\\sv_hostname\\lossy") && text.contains("\"Bob\""),
+        "{text}"
+    );
+}
+
 /// One frame on a simulated clock: every Net holds its packets
 /// `cl_packetdelay` / `sv_packetdelay` ms (NET_QueuePacket) before sending.
 fn step_lagged(sv: &mut Server, snet: &mut Net, peers: &mut [Peer], clock: &mut i32, ms: i32) {
