@@ -7814,7 +7814,7 @@ impl TremMenus {
         // Server or the console) closes the ui (cls.keyCatchers = 0) so the
         // loading screen shows instead of the menu it was started from
         let loading = self.game().is_some_and(|g| g.bind().is_loading());
-        if loading && !now && self.ui.as_ref().unwrap().is_open() {
+        if closes_ui_for_loading(loading, now, self.ui.as_ref().unwrap().top_menu()) {
             self.ui.as_mut().unwrap().set_active_menu(UiMenuCommand::None);
             self.flush();
         }
@@ -8320,9 +8320,29 @@ impl TremMenus {
 // tests (legacy data: /tmp/claude-0/datalegacy)
 // =====================================================================
 
+/// CL_MapLoading closes the ui when a map (or the connect screen) shows, except
+/// the download prompt: it opens at CA_CONNECTED, while the connect screen is
+/// already up, and the connection waits for its answer (dec063).
+fn closes_ui_for_loading(loading: bool, in_game: bool, top_menu: Option<&str>) -> bool {
+    loading && !in_game && top_menu.is_some() && top_menu != Some("download_popmenu")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_prompt_survives_the_loading_close() {
+        assert!(!closes_ui_for_loading(
+            true,
+            false,
+            Some("download_popmenu")
+        ));
+        assert!(closes_ui_for_loading(true, false, Some("main")));
+        assert!(!closes_ui_for_loading(true, false, None));
+        assert!(!closes_ui_for_loading(false, false, Some("main")));
+        assert!(!closes_ui_for_loading(true, true, Some("main")));
+    }
 
     const DATA: &str = "/tmp/claude-0/datalegacy";
 
