@@ -337,7 +337,7 @@ fn the_lan_scan_takes_vanilla_servers() {
     let mut cnet = Net::new();
     let cport = cnet.open(NetSrc::Client, "127.0.0.1", 0).unwrap();
     let mut cl = NetClient::new(0);
-    cl.local_servers(&mut cnet);
+    cl.local_servers(&mut cnet, false);
     vanilla.sock.send_to(&Vanilla::info("xxx"), ("127.0.0.1", cport)).unwrap();
     let odd = UdpSocket::bind("127.0.0.1:0").unwrap();
     let mut m = OOB.to_vec();

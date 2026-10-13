@@ -120,7 +120,7 @@ fn lan_scan_finds_a_server_through_the_multicast_group() {
     let mut sv = Server::spawn(World::new(MapId::Arena), "arena", ServerCvars { hostname: "mcast".into(), ..Default::default() });
     let mut net = Net::new();
     let mut cl = NetClient::new(0);
-    cl.local_servers(&mut net);
+    cl.local_servers(&mut net, false);
     for _ in 0..100 {
         sv.frame(&mut snet, 16);
         cl.frame(&mut net, 16);

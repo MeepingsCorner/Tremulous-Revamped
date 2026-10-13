@@ -4516,7 +4516,21 @@ impl TremGame {
             let visible = old.iter().find(|u| u.addr == addr).map(|u| u.visible).unwrap_or(slot.unwrap_or(c.visible));
             UiServer { addr, host_name: c.host_name.clone(), map_name: c.map_name.clone(), game: c.game.clone(), clients: c.clients, max_clients: c.max_clients, ping: c.ping, visible, protocol: c.protocol }
         };
-        lan.local = nh.cl.local_servers.iter().map(|c| to_ui(c, &lan.local, vis_local)).collect();
+        let local: Vec<UiServer> = nh
+            .cl
+            .local_servers
+            .iter()
+            .map(|c| to_ui(c, &lan.local, vis_local))
+            .collect();
+        // an idle rescan aged a server out: the ui indexes its display list into this one
+        if lan
+            .local
+            .iter()
+            .any(|o| !local.iter().any(|n| n.addr == o.addr))
+        {
+            lan.local_dropped = true;
+        }
+        lan.local = local;
         lan.global = nh.cl.global_servers.iter().map(|c| to_ui(c, &lan.global, vis_global)).collect();
         lan.global_count = if nh.cl.num_global_servers < 0 { -1 } else { lan.global.len() as i32 };
         for (u, c) in lan.favorites.iter_mut().zip(nh.cl.favorite_servers.iter()) {

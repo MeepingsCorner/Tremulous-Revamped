@@ -159,6 +159,8 @@ pub struct ServerInfo {
     /// the infoResponse's `protocol`: 71 legacy, 69 vanilla 1.1.0, 0 not
     /// known yet (dec040)
     pub protocol: i32,
+    /// LAN list only: the `local_scan` number in which it last answered
+    pub seen_scan: u32,
 }
 
 /// `ping_t`.
@@ -308,11 +310,18 @@ pub struct NetClient {
     pub favorite_servers: Vec<ServerInfo>,
     /// the visible flags of the local slots across a rescan
     local_visible: Vec<bool>,
+    /// number of the current LAN scan (counts the idle rescans; a full scan
+    /// restarts it)
+    local_scan: u32,
     /// each local server's infoResponse without its challenge (the
     /// loopback / broadcast duplicate check, dec040)
     local_info_keys: Vec<String>,
     /// -1 while waiting for a master's answer
     pub num_global_servers: i32,
+    /// Master answers still expected / seen, and when they were asked for (dec060).
+    pub master_expect: u32,
+    pub master_answers: u32,
+    pub master_t0: i32,
     /// `cls.numMasterPackets` / `cls.receivedMasterPackets`
     pub num_master_packets: i32,
     pub received_master_packets: u32,
@@ -393,6 +402,11 @@ pub const MAX_FEATLABEL_CHARS: usize = 32;
 pub const QKEY_SIZE: usize = 2048;
 
 /// `Sys_Milliseconds`.
+/// How long the browser's internet list waits for the master's second answer (dec060).
+pub const MASTER_WAIT_MS: i32 = 5000;
+/// An idle LAN rescan drops the servers that missed this many rescans in a row.
+pub const LAN_AGE_OUT_SCANS: u32 = 3;
+
 pub fn sys_milliseconds() -> i32 {
     use std::sync::OnceLock;
     static T0: OnceLock<std::time::Instant> = OnceLock::new();
@@ -469,9 +483,13 @@ impl NetClient {
             local_servers: Vec::new(),
             favorite_servers: Vec::new(),
             local_visible: Vec::new(),
+            local_scan: 0,
             local_info_keys: Vec::new(),
             global_servers: Vec::new(),
             num_global_servers: 0,
+            master_expect: 0,
+            master_answers: 0,
+            master_t0: 0,
             num_master_packets: 0,
             received_master_packets: 0,
             ping_update_source: AS_LOCAL,
@@ -2057,12 +2075,42 @@ impl NetClient {
     /// `CL_LocalServers_f`: "getinfo xxx" broadcast on the four server ports,
     /// twice; the loopback-interface copies make same-machine servers show
     /// up where broadcasts are not looped back (dec033).
-    pub fn local_servers(&mut self, net: &mut Net) {
-        self.printf("Scanning for servers on the local network...\n");
-        // reset the list, waiting for response
+    ///
+    /// `rescan` (dec060, the browser's idle rescan): the list is kept and
+    /// only servers that answer and are not in it yet are added.
+    pub fn local_servers(&mut self, net: &mut Net, rescan: bool) {
         self.ping_update_source = AS_LOCAL;
-        self.local_visible = self.local_servers.iter().map(|s| s.visible).collect();
-        self.local_servers.clear();
+        if rescan {
+            // a server that has not answered for LAN_AGE_OUT_SCANS idle
+            // rescans in a row is gone (the list only ever grew before)
+            self.local_scan += 1;
+            let now = self.local_scan;
+            let keep: Vec<bool> = self
+                .local_servers
+                .iter()
+                .map(|s| now.saturating_sub(s.seen_scan) <= LAN_AGE_OUT_SCANS)
+                .collect();
+            if keep.iter().any(|k| !k) {
+                let mut i = 0;
+                self.local_servers.retain(|_| {
+                    i += 1;
+                    keep[i - 1]
+                });
+                let mut i = 0;
+                self.local_info_keys.retain(|_| {
+                    i += 1;
+                    keep.get(i - 1).copied().unwrap_or(true)
+                });
+            }
+        } else {
+            self.local_scan = 0;
+        }
+        if !rescan {
+            self.printf("Scanning for servers on the local network...\n");
+            // reset the list, waiting for response
+            self.local_visible = self.local_servers.iter().map(|s| s.visible).collect();
+            self.local_servers.clear();
+        }
         net.open_client();
         let message = b"\xff\xff\xff\xffgetinfo xxx";
         // each network's own broadcast too (dec045: Windows sends the
@@ -2099,6 +2147,8 @@ impl NetClient {
         };
         self.printf(&format!("Requesting servers from master {name}...\n"));
         self.num_global_servers = -1;
+        self.master_expect = 0;
+        self.master_answers = 0;
         self.global_servers.clear();
         self.ping_update_source = AS_GLOBAL;
         net.open_client();
@@ -2116,6 +2166,15 @@ impl NetClient {
     }
 
     fn receive_masters(&mut self, net: &mut Net) {
+        // dec060: the count stays -1 until both protocols' answers are in or
+        // 5 s have passed, so the first (empty) answer does not look like
+        // "no servers" to the browser; an answer WITH servers sets it at once
+        if self.master_expect > 0
+            && self.num_global_servers < 0
+            && sys_milliseconds().wrapping_sub(self.master_t0) >= MASTER_WAIT_MS
+        {
+            self.num_global_servers = self.global_servers.len() as i32;
+        }
         let Some(rx) = self.master_rx.as_ref() else { return };
         if let Ok((kw, a)) = rx.try_recv() {
             self.master_rx = None;
@@ -2133,6 +2192,8 @@ impl NetClient {
                     // 1.1.0's, and the answers merged; each server's own
                     // infoResponse tells which it is (dec040).
                     self.master_merge = true;
+                    self.master_expect = 2;
+                    self.master_t0 = sys_milliseconds();
                     for protocol in [PROTOCOL_VERSION, PROTOCOL_VANILLA] {
                         let cmd = if matches!(a.kind, NetAdrType::Ip6 | NetAdrType::Multicast6) {
                             let v6only = if net.enabled & netchan::NET_ENABLEV4 == 0 { " ipv6" } else { "" };
@@ -2183,9 +2244,8 @@ impl NetClient {
 
     /// `CL_ServersResponsePacket`.
     fn servers_response_packet(&mut self, _from: &NetAdr, m: &Msg, extended: bool) {
-        if self.num_global_servers == -1 {
+        if self.master_answers == 0 {
             // state to detect lack of servers or lack of response
-            self.num_global_servers = 0;
             self.num_master_packets = 0;
             self.received_master_packets = 0;
         }
@@ -2264,8 +2324,21 @@ impl NetClient {
             }
             self.global_servers.push(ServerInfo { adr: *a, ping: -1, visible: true, label: label.clone(), ..Default::default() });
         }
-        self.num_global_servers = self.global_servers.len() as i32;
-        self.printf(&format!("{} servers parsed (total {})\n", found.len(), self.num_global_servers));
+        self.master_answers += 1;
+        // the count is set as soon as an answer holds servers (a master that
+        // answers only one protocol with servers must not stall the browser
+        // for MASTER_WAIT_MS); while every answer so far is empty it stays -1
+        if self.master_answers >= self.master_expect
+            || self.num_global_servers >= 0
+            || !self.global_servers.is_empty()
+        {
+            self.num_global_servers = self.global_servers.len() as i32;
+        }
+        self.printf(&format!(
+            "{} servers parsed (total {})\n",
+            found.len(),
+            self.global_servers.len()
+        ));
     }
 
     /// `CL_SetServerInfo` for every list holding `from`.
@@ -2321,6 +2394,7 @@ impl NetClient {
                 svgame::info_set(&mut inf, "nettype", &ty.to_string());
                 self.pinglist[i].time = t;
                 self.pinglist[i].info = inf;
+                self.mark_local_seen(from);
                 self.set_server_info_by_address(from, Some(&info), t);
                 return;
             }
@@ -2330,7 +2404,12 @@ impl NetClient {
             return;
         }
         // avoid duplicate
-        if self.local_servers.iter().any(|s| netchan::compare_adr(from, &s.adr)) {
+        if self
+            .local_servers
+            .iter()
+            .any(|s| netchan::compare_adr(from, &s.adr))
+        {
+            self.mark_local_seen(from);
             return;
         }
         // the port's scan also asks the loopback (dec033), and a server on
@@ -2348,6 +2427,7 @@ impl NetClient {
             if is_lo(&self.local_servers[j].adr) && !is_lo(from) {
                 self.local_servers[j].adr = *from;
             }
+            self.local_servers[j].seen_scan = self.local_scan;
             return;
         }
         if self.local_servers.len() >= MAX_OTHER_SERVERS {
@@ -2357,9 +2437,28 @@ impl NetClient {
         // the slot keeps the visible flag CL_LocalServers_f preserved
         let n = self.local_servers.len();
         let visible = self.local_visible.get(n).copied().unwrap_or(false);
-        self.local_servers.push(ServerInfo { adr: *from, ping: -1, visible, protocol, ..Default::default() });
+        self.local_servers.push(ServerInfo {
+            adr: *from,
+            ping: -1,
+            visible,
+            protocol,
+            seen_scan: self.local_scan,
+            ..Default::default()
+        });
         self.local_info_keys.truncate(n);
         self.local_info_keys.push(me);
+    }
+
+    /// An answer from `from` in the current LAN scan (idle rescan ageing).
+    fn mark_local_seen(&mut self, from: &NetAdr) {
+        let now = self.local_scan;
+        for s in self
+            .local_servers
+            .iter_mut()
+            .filter(|s| netchan::compare_adr(from, &s.adr))
+        {
+            s.seen_scan = now;
+        }
     }
 
     /// `CL_ServerStatusResponse`.
@@ -2501,5 +2600,143 @@ impl NetClient {
         if let Some(p) = self.pinglist.get_mut(n) {
             p.adr.port = 0;
         }
+    }
+}
+
+#[cfg(test)]
+mod master_wait_tests {
+    use super::*;
+
+    fn answer(servers: &[([u8; 4], u16)]) -> Msg {
+        let mut b = b"\xff\xff\xff\xffgetserversResponse".to_vec();
+        for (ip, port) in servers {
+            b.push(b'\\');
+            b.extend_from_slice(ip);
+            b.extend_from_slice(&port.to_be_bytes());
+        }
+        b.push(b'\\');
+        Msg::from_bytes(&b)
+    }
+
+    /// dec060: the empty answer to the first protocol must not look like
+    /// "the master has no servers" while the second protocol's answer is out.
+    #[test]
+    fn empty_first_master_answer_keeps_the_count_at_minus_one() {
+        let from = NetAdr::default();
+        let mut cl = NetClient::new(0);
+        cl.num_global_servers = -1;
+        cl.master_expect = 2;
+        cl.master_t0 = sys_milliseconds();
+        cl.master_merge = true;
+        cl.servers_response_packet(&from, &answer(&[]), false);
+        assert_eq!(cl.num_global_servers, -1, "one of two answers in");
+        cl.servers_response_packet(&from, &answer(&[([1, 2, 3, 4], 30720)]), false);
+        assert_eq!(cl.num_global_servers, 1);
+        assert_eq!(cl.global_servers.len(), 1);
+    }
+
+    /// a master that answers only one
+    /// protocol, with servers, must not hold the browser for 5 s.
+    #[test]
+    fn first_master_answer_with_servers_sets_the_count_at_once() {
+        let mut cl = NetClient::new(0);
+        let mut net = Net::default();
+        cl.num_global_servers = -1;
+        cl.master_expect = 2;
+        cl.master_merge = true;
+        cl.master_t0 = sys_milliseconds();
+        cl.servers_response_packet(&NetAdr::default(), &answer(&[([1, 2, 3, 4], 30720)]), false);
+        assert_eq!(
+            cl.num_global_servers, 1,
+            "no wait for the silent second answer"
+        );
+        // a late second list is still counted
+        cl.servers_response_packet(&NetAdr::default(), &answer(&[([5, 6, 7, 8], 30720)]), false);
+        assert_eq!(cl.num_global_servers, 2);
+        cl.receive_masters(&mut net);
+        assert_eq!(cl.num_global_servers, 2);
+    }
+
+    #[test]
+    fn only_empty_answers_so_far_keep_waiting_up_to_the_deadline() {
+        let mut cl = NetClient::new(0);
+        let mut net = Net::default();
+        cl.num_global_servers = -1;
+        cl.master_expect = 2;
+        cl.master_merge = true;
+        cl.master_t0 = sys_milliseconds();
+        cl.servers_response_packet(&NetAdr::default(), &answer(&[]), false);
+        assert_eq!(cl.num_global_servers, -1);
+        cl.receive_masters(&mut net);
+        assert_eq!(cl.num_global_servers, -1, "not before 5 s");
+        cl.master_t0 = sys_milliseconds() - MASTER_WAIT_MS - 1;
+        cl.receive_masters(&mut net);
+        assert_eq!(cl.num_global_servers, 0);
+    }
+}
+
+#[cfg(test)]
+mod lan_ageing_tests {
+    use super::*;
+
+    fn server(port: u16, seen: u32) -> ServerInfo {
+        ServerInfo {
+            adr: NetAdr {
+                kind: NetAdrType::Ip,
+                ip: [192, 168, 1, 5],
+                port,
+                ..Default::default()
+            },
+            ping: 20,
+            visible: true,
+            seen_scan: seen,
+            ..Default::default()
+        }
+    }
+
+    /// the idle rescan drops a LAN server that
+    /// missed three rescans in a row; a manual refresh behaves as before.
+    #[test]
+    fn idle_rescans_age_out_servers_unseen_for_three_scans() {
+        let mut cl = NetClient::new(0);
+        let mut net = Net::default();
+        cl.local_servers = vec![server(30720, 0), server(30721, 0)];
+        cl.local_info_keys = vec!["a".into(), "b".into()];
+        for n in 1..=3 {
+            // 30720 answers every scan, 30721 never does
+            cl.local_servers[0].seen_scan = cl.local_scan;
+            cl.local_servers(&mut net, true);
+            assert_eq!(cl.local_scan, n);
+            assert_eq!(cl.local_servers.len(), 2, "missed {} scans only", n - 1);
+        }
+        cl.local_servers[0].seen_scan = cl.local_scan;
+        cl.local_servers(&mut net, true);
+        assert_eq!(cl.local_servers.len(), 1, "three missed scans in a row");
+        assert_eq!(cl.local_servers[0].adr.port, 30720);
+        assert_eq!(cl.local_info_keys, vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn an_answer_in_a_scan_resets_the_count_and_a_manual_refresh_does_not_age() {
+        let mut cl = NetClient::new(0);
+        let mut net = Net::default();
+        cl.local_servers = vec![server(30720, 0)];
+        for _ in 0..2 {
+            cl.local_servers(&mut net, true);
+        }
+        // it answers in scan 2 (the packet path)
+        let a = cl.local_servers[0].adr;
+        cl.mark_local_seen(&a);
+        for _ in 0..3 {
+            cl.local_servers(&mut net, true);
+        }
+        assert_eq!(cl.local_servers.len(), 1);
+        cl.local_servers(&mut net, true);
+        assert_eq!(cl.local_servers.len(), 0);
+        // manual refresh: clears as vanilla, no ageing involved
+        cl.local_servers = vec![server(30720, 0)];
+        cl.local_servers(&mut net, false);
+        assert!(cl.local_servers.is_empty());
+        assert_eq!(cl.local_scan, 0);
     }
 }
