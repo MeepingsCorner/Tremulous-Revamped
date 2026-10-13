@@ -28,6 +28,7 @@ mod devcmds;
 mod joystick;
 mod misc;
 mod userinfo;
+mod randname; // the random default player name (dec064)
 mod view;
 mod effects;
 mod particles;
