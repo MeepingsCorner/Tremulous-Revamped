@@ -2067,7 +2067,11 @@ impl NetClient {
         let message = b"\xff\xff\xff\xffgetinfo xxx";
         // each network's own broadcast too (dec045: Windows sends the
         // all-ones broadcast out of one adapter only)
-        let nets = if net.capture.is_some() { Vec::new() } else { netchan::lan_broadcasts(&netchan::local_ipv4()) };
+        let nets = if net.capture.is_some() {
+            Vec::new()
+        } else {
+            netchan::lan_broadcasts(&netchan::local_ipv4_nets())
+        };
         for _ in 0..2 {
             for j in 0..netchan::NUM_SERVER_PORTS {
                 let port = netchan::PORT_SERVER + j;

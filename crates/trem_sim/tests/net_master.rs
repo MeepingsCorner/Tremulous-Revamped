@@ -357,17 +357,28 @@ fn the_lan_scan_finds_a_server_by_its_network_broadcast() {
     // dec045: the scan also broadcasts on each network by its own address
     // (Windows sends 255.255.255.255 out of one adapter only); a server
     // bound to every address answers it from its network address
-    let locals = trem_sim::kernel::netchan::local_ipv4();
-    let Some(me) = locals.first().copied() else { return };
+    // every network that is up gets its own broadcast; the one the server
+    // is on delivers it (a down or virtual adapter must not be the only try)
+    let broadcasts =
+        trem_sim::kernel::netchan::lan_broadcasts(&trem_sim::kernel::netchan::local_ipv4_nets());
+    if broadcasts.is_empty() {
+        return;
+    }
     let srv = UdpSocket::bind(("0.0.0.0", 0)).unwrap();
     srv.set_nonblocking(true).unwrap();
     let sport = srv.local_addr().unwrap().port();
     let mut cnet = Net::new();
     cnet.open(NetSrc::Client, "", 0).unwrap();
-    // the scan's message to this network's broadcast on the server's port
-    let b = trem_sim::kernel::netchan::lan_broadcasts(&[me])[0];
-    let to = trem_sim::kernel::netchan::NetAdr { kind: trem_sim::kernel::netchan::NetAdrType::Ip, ip: b, port: sport, ..Default::default() };
-    cnet.send_packet(NetSrc::Client, b"\xff\xff\xff\xffgetinfo xxx", &to);
+    // the scan's message to each network's broadcast on the server's port
+    for b in &broadcasts {
+        let to = trem_sim::kernel::netchan::NetAdr {
+            kind: trem_sim::kernel::netchan::NetAdrType::Ip,
+            ip: *b,
+            port: sport,
+            ..Default::default()
+        };
+        cnet.send_packet(NetSrc::Client, b"\xff\xff\xff\xffgetinfo xxx", &to);
+    }
     let mut buf = [0u8; 256];
     let mut got = None;
     for _ in 0..200 {
@@ -377,5 +388,8 @@ fn the_lan_scan_finds_a_server_by_its_network_broadcast() {
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
-    assert_eq!(&got.expect("no broadcast arrived")[4..], b"getinfo xxx");
+    assert_eq!(
+        &got.unwrap_or_else(|| panic!("no broadcast arrived on {broadcasts:?}"))[4..],
+        b"getinfo xxx"
+    );
 }
