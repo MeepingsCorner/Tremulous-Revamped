@@ -304,7 +304,11 @@ impl NetHost {
             }
             // cl_main.c
             "localservers" => {
-                self.cl.local_servers(&mut self.net);
+                self.cl.local_servers(
+                    &mut self.net,
+                    argv.get(1)
+                        .is_some_and(|x| x.eq_ignore_ascii_case("rescan")),
+                );
                 String::new()
             }
             "globalservers" => {

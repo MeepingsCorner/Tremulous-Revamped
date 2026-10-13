@@ -877,6 +877,8 @@ const CVAR_DEFAULTS: &[(&str, &str)] = &[
     ("ui_bigFont", "0.5"),
     ("ui_browserProtocol", "0"),
     ("ui_browserShowEmpty", "1"),
+    // dec060: rescan the LAN every few seconds while the browser is open
+    ("ui_browserAutoRefresh", "1"),
     ("ui_browserShowFull", "1"),
     ("ui_carriage", ""),
     ("ui_chatCommands", "1"),
@@ -2103,6 +2105,9 @@ pub struct Lan {
     /// the C's fixed arrays, the ones not filled yet too: the visible flag a
     /// server arriving later gets, per source (local, global, favorites)
     pub slot_visible: [Option<bool>; 3],
+    /// a LAN server left the local list (idle rescan age-out): the display list
+    /// holds indices into it and must be rebuilt (dec060)
+    pub local_dropped: bool,
 }
 
 impl Lan {
@@ -2205,12 +2210,37 @@ impl Lan {
     }
 }
 
+/// Idle LAN rescan period (dec060).
+const AUTO_RESCAN_MS: i32 = 5000;
+
+/// `UI_DoServerRefresh`'s `wait`, with the end the C lacks (dec060): until
+/// `deadline` the refresh waits for the first servers (LAN: the whole scan
+/// window; internet: while the master has not answered or answered empty,
+/// since the second protocol's answer may follow); after it never, so a LAN
+/// with no server or a silent master ends instead of showing "Getting info"
+/// forever.
+fn refresh_wait(src: i32, count: i32, now: i32, deadline: i32) -> bool {
+    if now >= deadline || src == AS_FAVORITES {
+        return false;
+    }
+    src == AS_LOCAL || count <= 0
+}
+
 /// `uiInfo.serverStatus` (the browser's display list) and the news /
 /// find-player / server-status state of `uiInfo`.
 #[derive(Clone, Debug, Default)]
 pub struct BrowserState {
     pub refresh_active: bool,
     pub refresh_time: i32,
+    /// When the refresh stops waiting for the first servers (dec060). The C
+    /// reused `refresh_time` for this, but `UI_BuildServerDisplayList`
+    /// overwrites that, so the wait had no end.
+    pub refresh_deadline: i32,
+    /// A background rescan (dec060): no console line, no status text, ESC
+    /// is not swallowed.
+    pub refresh_quiet: bool,
+    /// Next idle LAN rescan, 0 = not scheduled (`ui_browserAutoRefresh`).
+    pub next_auto_rescan: i32,
     pub next_display_refresh: i32,
     pub display_servers: Vec<usize>,
     pub num_players_on_servers: i32,
@@ -2940,7 +2970,7 @@ impl Ui {
                 self.exec("vid_restart;");
             }
             "closejoin" => {
-                if self.browser.refresh_active {
+                if self.browser.refresh_active && !self.browser.refresh_quiet {
                     self.stop_server_refresh();
                     self.browser.next_display_refresh = 0;
                     self.browser.next_server_status_refresh = 0;
@@ -3626,19 +3656,32 @@ impl Ui {
     fn owner_draw_text(&self, id: i32) -> Option<String> {
         match self.ods.get(&id) {
             Some(Od::NetSource) => Some(NET_SOURCES[self.net_source() as usize].to_string()),
-            Some(Od::KeyBindStatus) => Some(if self.key_bind_pending() { "Waiting for new key... Press ESCAPE to cancel" } else { "Press ENTER or CLICK to change, Press BACKSPACE to clear" }.into()),
-            Some(Od::ServerRefreshDate) => Some(if self.browser.refresh_active {
-                const MAX_DOTS: i32 = 5;
-                let num_servers = self.lan.server_count(self.net_source());
-                let dots = ".".repeat(((self.real_time / 500) % (MAX_DOTS + 1)).max(0) as usize);
-                if num_servers < 0 {
-                    format!("Waiting for response{dots}")
+            Some(Od::KeyBindStatus) => Some(
+                if self.key_bind_pending() {
+                    "Waiting for new key... Press ESCAPE to cancel"
                 } else {
-                    format!("Getting info for {num_servers} servers (ESC to cancel){dots}")
+                    "Press ENTER or CLICK to change, Press BACKSPACE to clear"
                 }
-            } else {
-                format!("Refresh Time: {}", self.cvar(&format!("ui_lastServerRefresh_{}", self.net_source())))
-            }),
+                .into(),
+            ),
+            Some(Od::ServerRefreshDate) => Some(
+                if self.browser.refresh_active && !self.browser.refresh_quiet {
+                    const MAX_DOTS: i32 = 5;
+                    let num_servers = self.lan.server_count(self.net_source());
+                    let dots =
+                        ".".repeat(((self.real_time / 500) % (MAX_DOTS + 1)).max(0) as usize);
+                    if num_servers < 0 {
+                        format!("Waiting for response{dots}")
+                    } else {
+                        format!("Getting info for {num_servers} servers (ESC to cancel){dots}")
+                    }
+                } else {
+                    format!(
+                        "Refresh Time: {}",
+                        self.cvar(&format!("ui_lastServerRefresh_{}", self.net_source()))
+                    )
+                },
+            ),
             Some(Od::ServerMotd) => Some(self.browser.motd.clone()),
             _ => None,
         }
@@ -3758,6 +3801,13 @@ impl Ui {
     /// `UI_StartServerRefresh`.
     fn start_server_refresh(&mut self, full: bool) {
         let src = self.net_source();
+        self.browser.refresh_quiet = false;
+        self.browser.refresh_deadline = self.real_time + if src == AS_LOCAL { 1000 } else { 5000 };
+        self.browser.next_auto_rescan = if src == AS_LOCAL {
+            self.real_time + AUTO_RESCAN_MS
+        } else {
+            0
+        };
         let [mon, mday, year, hour, min] = self.local_time;
         let t = self.unix_time;
         self.set_cvar(&format!("ui_lastServerRefresh_{src}_time"), &t.to_string());
@@ -3796,6 +3846,9 @@ impl Ui {
             return;
         }
         self.browser.refresh_active = false;
+        if std::mem::take(&mut self.browser.refresh_quiet) {
+            return;
+        }
         let n = self.browser.display_servers.len() as i32;
         self.out.push(Out::Print(format!("{} servers listed in browser with {} players.\n", n, self.browser.num_players_on_servers)));
         let count = self.lan.server_count(self.net_source());
@@ -3805,31 +3858,67 @@ impl Ui {
         }
     }
 
-    /// `UI_DoServerRefresh`.
-    fn do_server_refresh(&mut self) {
-        if !self.browser.refresh_active {
+    /// Background upkeep of the open browser (dec060): ping servers that
+    /// arrived after the refresh ended (the master's second answer), and
+    /// with `ui_browserAutoRefresh` rescan the LAN every few seconds, so a
+    /// server started while the browser is open shows up unasked.
+    fn browser_idle_upkeep(&mut self) {
+        if self.browser.refresh_active || self.top_menu() != Some("joinserver") {
             return;
         }
         let src = self.net_source();
-        let mut wait = false;
-        if src != AS_FAVORITES {
-            if src == AS_LOCAL {
-                // the C waits only while nobody answered; the port's servers
-                // answer at their next frame (up to 50 ms after a tremded
-                // would), so the first answer would end the scan before the
-                // others arrive: the LAN scan keeps its whole second (dec040)
-                wait = self.lan.server_count(src) == 0 || self.real_time < self.browser.refresh_time;
-            } else if self.lan.server_count(src) < 0 {
-                wait = true;
-            }
+        if matches!(src, AS_GLOBAL | AS_MPLAYER | AS_LOCAL)
+            && self.lan.net
+            && self.lan.server_count(src) > 0
+            && self.lan.list(src).iter().any(|s| s.visible && s.ping == -1)
+        {
+            self.browser.refresh_active = true;
+            self.browser.refresh_quiet = true;
+            self.browser.refresh_deadline = self.real_time;
+            self.browser.refresh_time = self.real_time + 1000;
+            return;
         }
-        if self.real_time < self.browser.refresh_time && wait {
+        if src != AS_LOCAL || !self.lan.net || self.cvar_value("ui_browserAutoRefresh") == 0.0 {
+            self.browser.next_auto_rescan = 0;
+            return;
+        }
+        if self.browser.next_auto_rescan == 0 {
+            self.browser.next_auto_rescan = self.real_time + AUTO_RESCAN_MS;
+        } else if self.real_time >= self.browser.next_auto_rescan {
+            self.browser.next_auto_rescan = self.real_time + AUTO_RESCAN_MS;
+            self.exec("localservers rescan\n");
+            self.browser.refresh_active = true;
+            self.browser.refresh_quiet = true;
+            self.browser.refresh_deadline = self.real_time + 1000;
+            self.browser.refresh_time = self.real_time + 1000;
+        }
+    }
+
+    /// `UI_DoServerRefresh`.
+    fn do_server_refresh(&mut self) {
+        // indices of the display list point into the LAN list; a dropped server
+        // shifts or removes them (a blank row), so rebuild from the list
+        if std::mem::take(&mut self.lan.local_dropped) && self.net_source() == AS_LOCAL {
+            self.build_server_display_list(1);
+        }
+        if !self.browser.refresh_active {
+            self.browser_idle_upkeep();
+            return;
+        }
+        let src = self.net_source();
+        let wait = refresh_wait(
+            src,
+            self.lan.server_count(src),
+            self.real_time,
+            self.browser.refresh_deadline,
+        );
+        if wait {
             return;
         }
         // if still trying to retrieve pings
         if self.lan.update_visible_pings(src) {
             self.browser.refresh_time = self.real_time + 1000;
-        } else if !wait {
+        } else {
             // get the last servers in the list
             self.build_server_display_list(2);
             // stop the refresh
@@ -5389,6 +5478,10 @@ impl Ui {
             self.menus_handle_oob_click(mi, key, down);
             return;
         }
+        if down && self.editing.is_none() && self.combo.is_none() && self.browser_list_key(mi, key)
+        {
+            return;
+        }
         let item = match self.combo {
             None => self.sets[0][mi].items.iter().rposition(|i| i.flags & WINDOW_HASFOCUS != 0).map(|ii| Self::iref(0, mi, ii)),
             Some(c) => Some(c),
@@ -5446,6 +5539,67 @@ impl Ui {
             }
             _ => {}
         }
+    }
+
+    /// The server browser's keys (dec060). The C hands Up/Down to
+    /// `Menu_SetPrevCursorItem` / `Menu_SetNextCursorItem`, and a focused
+    /// MULTI item (`Item_Multi_HandleKey`, ui_shared.c:3176 / 3182) takes
+    /// them to cycle its value, so with the keyboard alone focus walked
+    /// through the selectors and stuck on the Version field, and nothing
+    /// ever moved the list (`Item_ListBox_HandleKey` has no arrow keys).
+    /// Here Up/Down/Home/End/PgUp/PgDn move the selection of the server list
+    /// and scroll it; Enter joins when nothing but the list has the focus;
+    /// Tab still walks the selectors, Left/Right still change a focused one.
+    fn browser_list_key(&mut self, mi: usize, key: K) -> bool {
+        if self.sets[0][mi].name() != "joinserver"
+            || !matches!(
+                key,
+                K::Up | K::Down | K::PgUp | K::PgDn | K::Home | K::End | K::Enter | K::KpEnter
+            )
+        {
+            return false;
+        }
+        let Some(ii) = self.sets[0][mi].items.iter().position(|i| {
+            i.ty == IT_LISTBOX && self.feeders.get(&i.feeder) == Some(&Feeder::Servers)
+        }) else {
+            return false;
+        };
+        let fid = self.sets[0][mi].items[ii].feeder;
+        let r = Self::iref(0, mi, ii);
+        if matches!(key, K::Enter | K::KpEnter) {
+            let other_focus = self.sets[0][mi]
+                .items
+                .iter()
+                .enumerate()
+                .any(|(i, it)| i != ii && it.flags & WINDOW_HASFOCUS != 0);
+            if other_focus {
+                return false;
+            }
+            return self.list_handle_key(r, K::Enter, true, true);
+        }
+        let count = self.feeder_count(fid);
+        if count <= 0 {
+            return true;
+        }
+        let viewmax = self.list_num_items(r).max(1);
+        let cur = self.browser.current_server.clamp(-1, count - 1);
+        let c = match key {
+            K::Up => (cur - 1).max(0),
+            K::Down => (cur + 1).min(count - 1),
+            K::PgUp => (cur - viewmax).max(0),
+            K::PgDn => (cur + viewmax).min(count - 1),
+            K::Home => 0,
+            _ => count - 1,
+        };
+        let start = self.it(r).list.start;
+        if c < start {
+            self.list_set_start_pos(r, c);
+        } else if c >= start + viewmax {
+            self.list_set_start_pos(r, c - viewmax + 1);
+        }
+        self.it_mut(r).cursor_pos = c;
+        self.feeder_selection(fid, c);
+        true
     }
 
     /// The edit-field activation of `Menu_HandleKey` (cursor at the end).
@@ -9408,5 +9562,187 @@ mod tests {
         let d1 = ((rc[0] + 15.0 - 320.0).powi(2) + (rc[1] + 10.0 - 240.0).powi(2)).sqrt();
         assert!((d0 - d1).abs() < 0.01 && rc[0] != 200.0, "orbited: {rc:?}");
         assert_ne!(u.it(c).flags & WINDOW_ORBITING, 0);
+    }
+    /// dec060: the refresh's wait has an end, and the internet list keeps
+    /// waiting through an empty first answer.
+    #[test]
+    fn refresh_wait_ends_at_the_deadline() {
+        // LAN: the whole scan window, empty or not
+        assert!(refresh_wait(AS_LOCAL, 0, 100, 1000));
+        assert!(refresh_wait(AS_LOCAL, 3, 100, 1000));
+        assert!(
+            !refresh_wait(AS_LOCAL, 0, 1000, 1000),
+            "0 LAN servers must end (was: forever)"
+        );
+        // internet: not answered (-1) or answered empty (0) waits, servers do not
+        assert!(refresh_wait(AS_GLOBAL, -1, 100, 5000));
+        assert!(
+            refresh_wait(AS_GLOBAL, 0, 100, 5000),
+            "the 69 answer may follow an empty 71 answer"
+        );
+        assert!(!refresh_wait(AS_GLOBAL, 12, 100, 5000));
+        assert!(
+            !refresh_wait(AS_GLOBAL, -1, 5000, 5000),
+            "a silent master ends too"
+        );
+        assert!(!refresh_wait(AS_FAVORITES, 0, 0, 5000));
+    }
+
+    #[test]
+    fn menus_lan_refresh_with_no_server_ends() {
+        if !have_data() {
+            return;
+        }
+        let mut u = ui(Team::None);
+        u.set_active_menu(UiMenuCommand::Main);
+        let r_ = by_text(&u, "main", "Play");
+        click(&mut u, r_);
+        u.set_cvar("ui_netSource", "2");
+        u.run_menu_script("refreshServers", None);
+        assert!(u.browser.refresh_active);
+        let od = u
+            .ods
+            .iter()
+            .find(|(_, o)| **o == Od::ServerRefreshDate)
+            .map(|(i, _)| *i)
+            .unwrap();
+        let t = u.real_time;
+        let v = u.view.clone();
+        u.frame(t + 500, v.clone());
+        assert!(u
+            .owner_draw_text(od)
+            .unwrap()
+            .starts_with("Getting info for 0 servers"));
+        u.frame(t + 1500, v.clone());
+        assert!(
+            !u.browser.refresh_active,
+            "0 LAN servers: the refresh must end"
+        );
+        assert!(u.owner_draw_text(od).unwrap().starts_with("Refresh Time:"));
+        // idle: no rescan without a network host; with one, every 5 s and quietly
+        u.lan.net = true;
+        u.frame(t + 1600, v.clone());
+        u.out.clear();
+        u.frame(t + 1600 + AUTO_RESCAN_MS + 10, v.clone());
+        assert!(execs(&mut u)
+            .iter()
+            .any(|x| x.starts_with("localservers rescan")));
+        assert!(u.browser.refresh_active && u.browser.refresh_quiet);
+        assert!(
+            u.owner_draw_text(od).unwrap().starts_with("Refresh Time:"),
+            "a background rescan shows no status"
+        );
+        u.frame(t + 1600 + AUTO_RESCAN_MS + 1500, v.clone());
+        assert!(!u.browser.refresh_active);
+        // the cvar turns it off
+        u.set_cvar("ui_browserAutoRefresh", "0");
+        u.out.clear();
+        u.frame(t + 30000, v.clone());
+        u.frame(t + 60000, v);
+        assert!(!execs(&mut u).iter().any(|x| x.starts_with("localservers")));
+    }
+    /// dec060: a LAN server that the idle rescan aged out leaves no blank
+    /// row: the display list is rebuilt, its count equals the live servers.
+    #[test]
+    fn menus_lan_dropped_server_leaves_no_blank_row() {
+        if !have_data() {
+            return;
+        }
+        let mut u = ui(Team::None);
+        u.set_active_menu(UiMenuCommand::Main);
+        let r_ = by_text(&u, "main", "Play");
+        click(&mut u, r_);
+        u.set_cvar("ui_netSource", "2");
+        let srv = |port: u16| ServerInfo {
+            addr: format!("192.168.1.5:{port}"),
+            host_name: format!("s{port}"),
+            map_name: "atcs".into(),
+            game: "base".into(),
+            clients: 1,
+            max_clients: 8,
+            ping: 20,
+            visible: true,
+            protocol: 71,
+        };
+        u.lan.local = vec![srv(30721), srv(30722), srv(30723)];
+        u.build_server_display_list(1);
+        assert_eq!(u.browser.display_servers.len(), 3);
+        // the middle one ages out: the client list shrinks, lan_sync flags it
+        u.lan.local = vec![srv(30721), srv(30723)];
+        u.lan.local_dropped = true;
+        let t = u.real_time;
+        let v = u.view.clone();
+        u.frame(t + 100, v);
+        let live = u.lan.server_count(AS_LOCAL) as usize;
+        assert_eq!(
+            u.browser.display_servers.len(),
+            live,
+            "list count equals live servers"
+        );
+        assert!(
+            u.browser.display_servers.iter().all(|&i| i < live),
+            "no index past the list (blank row)"
+        );
+        let mut rows: Vec<usize> = u.browser.display_servers.clone();
+        rows.sort();
+        assert_eq!(rows, vec![0, 1]);
+        // the last one goes too: nothing left, nothing listed
+        u.lan.local.clear();
+        u.lan.local_dropped = true;
+        let v = u.view.clone();
+        u.frame(t + 200, v);
+        assert!(u.browser.display_servers.is_empty());
+    }
+    /// dec060: Up/Down in the server browser move the list's selection, also
+    /// while a selector (here Version, a MULTI item that cycles on Down, the
+    /// trap of ui_shared.c:3176) has the focus.
+    #[test]
+    fn menus_server_browser_arrow_keys_move_the_list() {
+        if !have_data() {
+            return;
+        }
+        let mut u = ui(Team::None);
+        u.set_active_menu(UiMenuCommand::Main);
+        let r_ = by_text(&u, "main", "Play");
+        click(&mut u, r_);
+        assert_eq!(u.top_menu(), Some("joinserver"));
+        u.browser.display_servers = vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+        u.browser.current_server = 0;
+        let vp = mref(&u, "joinserver", "viewProtocol");
+        // The harness cause (2026-10-13): opening the page leaves another item
+        // focused (item 8 here), and Menu_HandleKey hands keys to the LAST
+        // focused item (`rposition`), so a flag set on the Version field (item
+        // 6) never received Right. Take the focus off the others first.
+        let mi = u.stack.last().copied().unwrap();
+        for it in u.sets[0][mi].items.iter_mut() {
+            it.flags &= !WINDOW_HASFOCUS;
+        }
+        u.it_mut(vp).flags |= WINDOW_HASFOCUS;
+        let before = u.cvar("ui_browserProtocol");
+        for _ in 0..4 {
+            u.key_event(K::Down, true);
+            u.key_event(K::Down, false);
+        }
+        assert_eq!(u.browser.current_server, 4);
+        assert_eq!(
+            u.cvar("ui_browserProtocol"),
+            before,
+            "Down must not cycle the Version field"
+        );
+        u.key_event(K::Up, true);
+        assert_eq!(u.browser.current_server, 3);
+        for _ in 0..30 {
+            u.key_event(K::Down, true);
+        }
+        assert_eq!(u.browser.current_server, 11, "stops at the last server");
+        u.key_event(K::Home, true);
+        assert_eq!(u.browser.current_server, 0);
+        // Left/Right still cycle the focused selector, so the harness does reach it
+        u.key_event(K::Right, true);
+        assert_ne!(
+            u.cvar("ui_browserProtocol"),
+            before,
+            "Right cycles the focused Version field"
+        );
     }
 }

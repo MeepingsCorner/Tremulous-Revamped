@@ -52,7 +52,7 @@ fn main() {
     cl.userinfo = "\\name\\netprobe\\rate\\25000\\snaps\\20\\cl_guid\\5E1F0A2B3C4D5E6F708192A3B4C5D6E7".into();
     match args.first().map(String::as_str) {
         Some("lan") => {
-            cl.local_servers(&mut net);
+            cl.local_servers(&mut net, false);
             pump(&mut cl, &mut net, 1500);
             ping_all(&mut cl, &mut net, AS_LOCAL);
         }

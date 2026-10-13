@@ -73,6 +73,8 @@ pub const UI_CVARS: &[(&str, &str)] = &[
     // the join server menu's protocol filter (dec040): 0 all, 71, 69
     ("ui_browserProtocol", "0"),
     ("ui_browserShowEmpty", "1"),
+    // dec060: rescan the LAN every few seconds while the browser is open
+    ("ui_browserAutoRefresh", "1"),
     ("ui_dedicated", "0"),
     ("ui_netSource", "0"),
     ("ui_selectedMap", "0"),
