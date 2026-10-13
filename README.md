@@ -112,7 +112,9 @@ original does. Enhanced adds PBR lighting, the 4K texture pack and HD
 interface art (when the `hd` folder is present), HD sounds, FMOD + Steam
 Audio sound (Windows), ray-traced ambient occlusion / indirect light /
 reflections, ragdolls, the flashlight / night vision and world-fixed dynamic
-shadows (dec044).
+shadows (dec044; `r_dynamicShadows` -1 auto, the default: off on the
+Compatibility renderer and integrated GPUs, on elsewhere; 1 on, 0 off,
+dec068).
 
 F8 opens the map menu. More pk3s can go in `user://base`, `base/` next to the
 executable, or `--base=DIR`. Without any data pk3 the game falls back to the
