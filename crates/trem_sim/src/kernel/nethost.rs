@@ -494,6 +494,7 @@ pub fn apply_client_cvars(cl: &mut NetClient, get: &dyn Fn(&str) -> Option<Strin
     cl.rcon_password = get("rconPassword").unwrap_or_default();
     // downloads and demos (dec037)
     cl.allow_download = int("cl_allowDownload", 0);
+    cl.download_max_mb = int("cl_downloadMaxSize", super::cl::DOWNLOAD_MAX_MB_DEFAULT).max(0);
     cl.demo.auto_record = int("cl_autoRecordDemo", 0) != 0;
     cl.demo.timedemo = int("timedemo", 0) != 0;
     cl.demo.freeze = int("cl_freezeDemo", 0) != 0;

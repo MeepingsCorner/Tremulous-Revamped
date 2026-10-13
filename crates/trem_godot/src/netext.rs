@@ -58,6 +58,7 @@ impl TremGame {
         const CVAR_TEMP: i32 = 0x0100; // q_shared.h (not kept by the port's store)
         for (n, v, f) in [
             ("cl_allowDownload", "0", CVAR_ARCHIVE),
+            ("cl_downloadMaxSize", "1024", CVAR_ARCHIVE), // MiB per pak, 0 = no limit (dec062)
             // the network mode (dec040): 0 Auto, 71 legacy 1.3, 69 vanilla 1.1.0
             ("cl_netProtocol", "0", CVAR_ARCHIVE),
             ("cl_autoRecordDemo", "0", CVAR_ARCHIVE),

@@ -33,6 +33,11 @@ const V11_MAX_RELIABLE_COMMANDS: usize = 64;
 /// How far ahead of the expected block a download block is kept (a
 /// server's window is MAX_DOWNLOAD_WINDOW, 48).
 const MAX_DOWNLOAD_AHEAD: i32 = 64;
+
+/// Default of `cl_downloadMaxSize` (MiB): about 10 times the largest pk3 found in a public
+/// archive of Tremulous maps and mods (106 MB; the largest map is 69 MB, the game's own
+/// data pak 45 MB). The size a server announces is a signed 32-bit number (at most 2047 MiB).
+pub const DOWNLOAD_MAX_MB_DEFAULT: i32 = 1024;
 use super::sv::{clc, svc, MAX_RELIABLE_COMMANDS, MAX_SNAPSHOT_ENTITIES, PACKET_BACKUP, PACKET_MASK, PROTOCOL_VERSION, GAMENAME, SNAPFLAG_NOT_ACTIVE, MAX_MAP_AREA_BYTES, MAX_PACKET_USERCMDS};
 use super::svgame::{self, cs};
 use super::types::*;
@@ -338,6 +343,8 @@ pub struct NetClient {
     pub donedl_time: Option<i32>,
     /// `cl_allowDownload` (DLF_* flags, default 0)
     pub allow_download: i32,
+    /// `cl_downloadMaxSize` in MiB: the most one downloaded pak may be (0 = no limit)
+    pub download_max_mb: i32,
     /// `com_downloadPrompt` / `com_downloadPromptText` (the ui's download_popmenu)
     pub download_prompt: i32,
     pub download_prompt_text: String,
@@ -712,6 +719,113 @@ mod download_name_tests {
         assert!(r.cl.error.is_some());
         assert_eq!(files_under(&r.root.join("home")), Vec::<String>::new());
     }
+
+    // ---- size limits (dec062)
+
+    /// A started download of `name`; `announce` is the size block 0 will carry.
+    fn started(tag: &str, name: &str, max_mb: i32) -> (NetClient, PathBuf) {
+        let root = scratch(tag);
+        let mut fs = PakSet::default();
+        fs.pure_server_set_referenced_paks("12345", name);
+        let list = fs.compare_paks(true, &|_| false).unwrap();
+        let mut cl = NetClient::new(1);
+        cl.home_path = Some(root.join("home"));
+        cl.allow_download = super::super::sv::DLF_ENABLE;
+        cl.download_max_mb = max_mb;
+        cl.fs = Some(fs);
+        cl.download_list = list;
+        cl.next_download();
+        assert!(cl.download.is_some());
+        (cl, root)
+    }
+
+    /// Feeds one download block; returns the bytes of the message left unread.
+    fn block(cl: &mut NetClient, n: i32, announce: Option<i32>, data: &[u8]) -> i32 {
+        let mut net = Net::new();
+        let mut m = Msg::new(MAX_MSGLEN);
+        m.write_short(n);
+        if let Some(a) = announce {
+            m.write_long(a);
+        }
+        m.write_short(data.len() as i32);
+        m.write_data(data);
+        m.begin_reading();
+        cl.parse_download(&mut net, &mut m);
+        (m.cursize - m.readcount) as i32
+    }
+
+    #[test]
+    fn default_limit_is_one_gib() {
+        assert_eq!(NetClient::new(1).download_max_mb, 1024);
+    }
+
+    #[test]
+    fn more_data_than_announced_stops_and_leaves_nothing() {
+        let (mut cl, root) = started("cap_over", "slacker/over-1", 1024);
+        block(&mut cl, 0, Some(10), &[1u8; 8]);
+        assert!(cl.error.is_none());
+        assert_eq!(
+            files_under(&root.join("home")),
+            vec!["slacker/over-1.pk3.tmp"]
+        );
+        block(&mut cl, 1, None, &[1u8; 8]);
+        assert!(
+            cl.error
+                .as_deref()
+                .unwrap()
+                .contains("larger than the 10 bytes the server announced"),
+            "{:?}",
+            cl.error
+        );
+        assert!(files_under(&root.join("home")).is_empty());
+        assert!(cl.download.is_none() && cl.download_list.is_empty());
+    }
+
+    #[test]
+    fn announced_size_over_the_limit_is_refused_before_any_data() {
+        let (mut cl, root) = started("cap_announce", "slacker/big-1", 1);
+        let left = block(&mut cl, 0, Some(2 * 1024 * 1024), &[1u8; 8]);
+        assert_eq!(left, 0, "the refused block must be read whole");
+        assert!(
+            cl.error
+                .as_deref()
+                .unwrap()
+                .contains("cl_downloadMaxSize (1 MB)"),
+            "{:?}",
+            cl.error
+        );
+        assert!(files_under(&root.join("home")).is_empty());
+    }
+
+    #[test]
+    fn limit_zero_means_no_limit() {
+        let root0 = scratch("cap_zero_src");
+        let (zipbytes, sum) = make_pk3(&root0, b"hello");
+        let (mut cl, root) = started("cap_zero", "slacker/zero-1", 0);
+        cl.fs
+            .as_mut()
+            .unwrap()
+            .pure_server_set_referenced_paks(&sum.to_string(), "slacker/zero-1");
+        block(&mut cl, 0, Some(zipbytes.len() as i32), &zipbytes);
+        block(&mut cl, 1, None, &[]);
+        assert!(cl.error.is_none(), "{:?}", cl.error);
+        assert_eq!(files_under(&root.join("home")), vec!["slacker/zero-1.pk3"]);
+    }
+
+    #[test]
+    fn a_download_within_both_limits_still_completes() {
+        let root0 = scratch("cap_ok_src");
+        let (zipbytes, sum) = make_pk3(&root0, b"hello");
+        let (mut cl, root) = started("cap_ok", "slacker/ok-1", 1);
+        cl.fs
+            .as_mut()
+            .unwrap()
+            .pure_server_set_referenced_paks(&sum.to_string(), "slacker/ok-1");
+        block(&mut cl, 0, Some(zipbytes.len() as i32), &zipbytes);
+        block(&mut cl, 1, None, &[]);
+        assert!(cl.error.is_none(), "{:?}", cl.error);
+        assert_eq!(files_under(&root.join("home")), vec!["slacker/ok-1.pk3"]);
+    }
 }
 
 impl Default for NetClient {
@@ -802,6 +916,7 @@ impl NetClient {
             download_restart: false,
             donedl_time: None,
             allow_download: 0,
+            download_max_mb: DOWNLOAD_MAX_MB_DEFAULT,
             download_prompt: 0,
             download_prompt_text: String::new(),
             sv_allow_download: 0,
@@ -1765,6 +1880,13 @@ impl NetClient {
                 return;
             }
         }
+        // the announced size is judged after the rest of this block is read, so the message
+        // is consumed whole
+        let over_limit = if block == 0 {
+            self.download_limit_message(&d, 0)
+        } else {
+            None
+        };
         let size = m.read_short();
         if size < 0 || size as usize > MAX_MSGLEN {
             self.abort_download(
@@ -1774,6 +1896,10 @@ impl NetClient {
             return;
         }
         let data = m.read_data(size as usize);
+        if let Some(msg) = over_limit {
+            self.abort_download(d, &msg);
+            return;
+        }
         if (d.block & 0xffff) != block {
             // CL_ParseDownload: Expected block d.block, got block. The C
             // client drops it; keep one within the server's window instead,
@@ -1812,6 +1938,11 @@ impl NetClient {
     fn take_download_block(&mut self, net: &mut Net, data: Vec<u8>) {
         let Some(mut d) = self.download.take() else { return };
         let size = data.len() as i32;
+        // never more than the server announced, and never more than cl_downloadMaxSize
+        if let Some(msg) = self.download_limit_message(&d, size) {
+            self.abort_download(d, &msg);
+            return;
+        }
         // the data goes to "<home>/<local>.tmp"; the name was checked when the list was
         // built, and again here, at the one place a path is made from it
         let dest = match self.home_path.as_deref() {
@@ -1910,6 +2041,26 @@ impl NetClient {
             return;
         }
         self.download = Some(d);
+    }
+
+    /// The reason to stop `d` when `add` more bytes arrive: more data than the size the
+    /// server announced for the file, or an announced size over
+    /// `cl_downloadMaxSize` (received data can never exceed the announced size, so that is the one to compare). None while the download is within both.
+    fn download_limit_message(&self, d: &ClDownload, add: i32) -> Option<String> {
+        let total = d.count as i64 + add as i64;
+        if add > 0 && total > d.size as i64 {
+            return Some(format!(
+                "Download of {} stopped: it is larger than the {} bytes the server announced",
+                d.local_name, d.size
+            ));
+        }
+        if self.download_max_mb > 0 {
+            let limit = self.download_max_mb as i64 * 1024 * 1024;
+            if d.size as i64 > limit {
+                return Some(format!("Download of {} stopped: it is larger than cl_downloadMaxSize ({} MB). Raise it, or set it to 0 for no limit.", d.local_name, self.download_max_mb));
+            }
+        }
+        None
     }
 
     /// Deletes the partial file of a download in progress ("<local>.tmp").
