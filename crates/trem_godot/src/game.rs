@@ -4324,7 +4324,7 @@ impl TremGame {
         self.wtb_register_cvars(); // wt-b: cl_voip* and cl_voipProtocol (userinfo)
         // cl_main.c / cg_main.c CVAR_USERINFO cvars
         let ui: &[(&str, &str, i32)] = &[
-            ("name", "Player", CVAR_USERINFO | CVAR_ARCHIVE),
+            ("name", "UnnamedPlayer", CVAR_USERINFO | CVAR_ARCHIVE),
             ("rate", "90000", CVAR_USERINFO | CVAR_ARCHIVE),
             ("snaps", "40", CVAR_USERINFO | CVAR_ARCHIVE),
             ("color1", "4", CVAR_USERINFO | CVAR_ARCHIVE),

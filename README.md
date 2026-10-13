@@ -71,7 +71,8 @@ own additions (`port_default.cfg`, on keys `default.cfg` leaves free), then
   commands, cvars, keys and cfg files; `/bind`, `/bindlist`, `/exec`, cvars,
   `/callvote map nexus6`, `/give all` with cheats… Text without a slash is
   chat in a game, as in the original. `name` (or Options → player name) is
-  your name. The cgame's `testmodel`, `testgun`, `testPS`, `testTS`,
+  your name; a profile that has not chosen one gets a random funny name
+  (dec064), never the OS login name. The cgame's `testmodel`, `testgun`, `testPS`, `testTS`,
   `cg_drawBBOX` and `cg_drawSurfNormal` debugging tools work.
 * A gamepad works like the original's SDL joystick after
   `seta in_joystick 1; in_restart`: buttons and the d-pad are JOY1…32 keys
@@ -348,7 +349,7 @@ What the evidence covers:
 * **Mode A** — `re/source` (original), `re/harness` (oracle),
   `sheets/re/symbols.tsv` (every original function with its status),
   `re/harness/statuses.py` recomputes it.
-* **Decisions** — `sheets/decisions.tsv` dec001–dec056 (Godot instead of
+* **Decisions** — `sheets/decisions.tsv` dec001–dec056, dec064 (Godot instead of
   Bevy, bundled CC BY-SA media, deterministic RNG, behavioural verification
   of g_*.c, bots, networking, protocol 69, the enhanced mode, voice chat,
   firewall and UPnP, …).

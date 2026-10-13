@@ -284,6 +284,10 @@ impl Client {
             self.cbuf.add_text(&format!("exec {f}\n"));
             self.execute(host);
         }
+        // dec064: no OS-derived default; a profile without a chosen name
+        // gets a random one (saved), `+set name` on the command line still wins
+        let renamed =
+            crate::randname::assign_if_unchosen(&mut self.cvars, crate::randname::fresh_seed());
         // the later port binds an older config lacks, on keys it left free
         let have = self.cvars.integer("port_bindsVersion");
         let mut migrated = false;
@@ -297,6 +301,9 @@ impl Client {
         }
         self.keys.modified = migrated;
         self.cvars.modified_flags &= !CVAR_ARCHIVE;
+        if renamed {
+            self.cvars.modified_flags |= CVAR_ARCHIVE; // write the new name to autogen.cfg
+        }
     }
 
     /// `Com_WriteConfiguration`'s check: binds or archived cvars changed.
@@ -708,7 +715,7 @@ mod tests {
 
     #[test]
     fn startup_binds_default_cfg_and_port_keys() {
-        let (c, h) = started();
+        let (mut c, h) = started();
         let k = |s: &str| c.keys.get_binding(key_string_to_keynum(s)).to_string();
         assert_eq!(k("MOUSE1"), "+attack");
         assert_eq!(k("MOUSE2"), "+button5");
@@ -721,7 +728,13 @@ mod tests {
         assert_eq!(k("F1"), "vote yes");
         assert_eq!(k("F7"), "port_restart");
         assert_eq!(k("g"), "port_vision");
-        assert!(!c.config_modified(), "Com_Init clears the archive flag");
+        // Com_Init clears the archive flag; the one thing a fresh profile
+        // saves is its random name (dec064)
+        assert!(c.config_modified(), "a fresh profile saves its random name");
+        assert_ne!(c.cvars.string("name"), "UnnamedPlayer");
+        let w = c.write_config();
+        assert!(w.contains("seta name "), "{w}");
+        assert!(!c.config_modified());
         assert!(h.forwarded.is_empty());
     }
 
@@ -835,11 +848,35 @@ mod tests {
     }
 
     #[test]
+    fn a_chosen_name_is_kept_and_the_os_default_is_replaced() {
+        let start = |autogen: &str| {
+            let mut c = Client::new();
+            let mut h = Host {
+                files: vec![(CONFIG_CFG.into(), autogen.into())],
+                ..Default::default()
+            };
+            c.startup(&mut h);
+            c
+        };
+        let c = start("seta name \"Zed\"\n");
+        assert_eq!(c.cvars.string("name"), "Zed");
+        assert_eq!(
+            c.cvars.modified_flags & CVAR_ARCHIVE,
+            0,
+            "a chosen name is not rewritten"
+        );
+        let c = start("");
+        assert_ne!(c.cvars.string("name"), "UnnamedPlayer");
+        assert!(c.config_modified());
+    }
+
+    #[test]
     fn voip_toggle_on_k() {
         let k = crate::keys::key_string_to_keynum("k");
         // a first start binds it from port_default.cfg
         let (mut c, mut h) = started();
         assert_eq!(c.keys.get_binding(k), "voip_toggle");
+        c.write_config(); // the fresh profile's random name (dec064)
         assert!(!c.config_modified());
         // each press flips the microphone
         c.add_text("voip_toggle\n");
@@ -871,7 +908,9 @@ mod tests {
         let c = start("unbindall\nbind k \"say hi\"\n");
         assert_eq!(c.keys.get_binding(k), "say hi");
         // and a k unbound after the bind came stays unbound
-        let c = start("unbindall\nbind w \"+forward\"\nseta port_bindsVersion \"1\"\n");
+        let c = start(
+            "unbindall\nbind w \"+forward\"\nseta port_bindsVersion \"1\"\nseta name \"Kept\"\n",
+        );
         assert_eq!(c.keys.get_binding(k), "");
         assert!(!c.config_modified());
     }

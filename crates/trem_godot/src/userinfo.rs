@@ -1,6 +1,5 @@
 //! The client's userinfo for the local player: the `name` cvar
-//! (cl_main.c `CL_Init`: `Cvar_Get( "name", Sys_GetCurrentUser( ),
-//! CVAR_USERINFO | CVAR_ARCHIVE )`), `CL_CheckUserinfo` (a changed
+//! (cl_main.c `CL_Init`; the port's default is not the OS user, dec064), `CL_CheckUserinfo` (a changed
 //! CVAR_USERINFO cvar sends a new userinfo; the listen server runs the
 //! game's `ClientUserinfoChanged`, trem_sim `client::userinfo_changed`,
 //! with its rename rules: g_minNameChangePeriod, g_maxNameChanges, mute,
@@ -11,21 +10,13 @@
 
 use crate::cmd::{Cvars, CVAR_ARCHIVE, CVAR_USERINFO};
 
-/// sys_unix.c / sys_win32.c `Sys_GetCurrentUser`: the login name, else "player".
-pub fn sys_get_current_user() -> String {
-    for k in ["USER", "LOGNAME", "USERNAME"] {
-        if let Ok(v) = std::env::var(k) {
-            if !v.is_empty() {
-                return v;
-            }
-        }
-    }
-    "player".into()
-}
-
+/// The 1.1 client took the default from `Sys_GetCurrentUser` (the OS login
+/// name); the port does not (dec064): the default is "UnnamedPlayer" until
+/// `randname::assign_if_unchosen` gives a profile without a chosen name a
+/// random one, after autogen.cfg has run.
 /// `CL_Init`'s userinfo cvars that the game reads (`name`; `rate` is the ui's).
 pub fn register_cvars(c: &mut Cvars) {
-    c.get("name", &sys_get_current_user(), CVAR_USERINFO | CVAR_ARCHIVE);
+    c.get("name", "UnnamedPlayer", CVAR_USERINFO | CVAR_ARCHIVE);
 }
 
 /// `CL_CheckUserinfo`: true (and the flag taken) when a CVAR_USERINFO cvar
