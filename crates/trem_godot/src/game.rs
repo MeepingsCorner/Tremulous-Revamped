@@ -447,6 +447,25 @@ impl INode3D for TremGame {
         // additions, autogen.cfg, autoexec.cfg
         self.client_fs = Some(crate::hostfs::HostFs::new(&self.pk3_paths));
         self.with_client(|c, g| c.startup(g));
+        // the graphics dialog never replaces a mode the player chose: the
+        // archived r_enhanced counts once ui_gfxChosen is 1 (the game saves
+        // r_enhanced after every first run), the command line's for this run
+        let config = self
+            .client
+            .cvars
+            .find("r_enhanced")
+            .is_some()
+            .then(|| self.client.cvars.integer("r_enhanced"));
+        let chosen = self
+            .client
+            .cvars
+            .find("ui_gfxChosen")
+            .is_some_and(|v| v.string.trim().parse::<f32>().unwrap_or(0.0) as i32 != 0);
+        self.gfx.player_enhanced = crate::gfx::player_choice(
+            config,
+            chosen,
+            crate::gfx::cmdline_enhanced(&startup_commands()),
+        );
         crate::gfx::register_cvars(&mut self.client.cvars);
         crate::fmodaudio::register_cvars(&mut self.client.cvars);
         // the 4K pack is needed before the first map's textures load
@@ -1369,6 +1388,20 @@ impl TremGame {
     }
     pub(crate) fn hud_view_client(&self) -> Option<usize> {
         self.view_ent()
+    }
+    /// The graphics dialog's inputs (menus.rs): the adapter (`+set ui_gfxGpuName` names another, to try the recommendation) and what the player's config set.
+    pub(crate) fn gfx_setup(&self) -> crate::gfx::GfxSetup {
+        let named = self.client.cvars.string("ui_gfxGpuName");
+        let device = if named.is_empty() {
+            self.gfx
+                .caps
+                .as_ref()
+                .map(|c| c.device.clone())
+                .unwrap_or_default()
+        } else {
+            named
+        };
+        crate::gfx::GfxSetup::new(&device, self.gfx.player_enhanced)
     }
     pub(crate) fn hud_library(&mut self) -> Option<&mut Library> {
         self.lib.as_mut()
@@ -2347,7 +2380,25 @@ impl TremGame {
 
     /// `port_gfx [vanilla|enhanced|rt|pt|auto|off|info]` (F10: toggle).
     fn port_gfx(&mut self, arg: &str) {
-        match arg.to_ascii_lowercase().as_str() {
+        let arg = arg.to_ascii_lowercase();
+        // a mode picked here is the player's own choice (the graphics dialog keeps it)
+        if matches!(
+            arg.as_str(),
+            "" | "toggle"
+                | "vanilla"
+                | "0"
+                | "enhanced"
+                | "1"
+                | "rt"
+                | "raytrace"
+                | "raytracing"
+                | "pt"
+                | "pathtrace"
+                | "pathtracing"
+        ) {
+            self.client.cvars.set("ui_gfxChosen", "1");
+        }
+        match arg.as_str() {
             "" | "toggle" => {
                 let on = self.client.cvars.integer("r_enhanced") != 0;
                 self.client.cvars.set("r_enhanced", if on { "0" } else { "1" });

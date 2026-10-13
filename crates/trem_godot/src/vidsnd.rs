@@ -69,6 +69,10 @@ pub const SOUND_CVARS: &[(&str, &str)] = &[("s_volume", "0.8"), ("s_musicvolume"
 pub const CLIENT_CVARS: &[(&str, &str)] = &[("com_maxfps", "85"), ("cl_allowDownload", "0"), ("cg_shadows", "1"), ("cg_bounceParticles", "0"), ("cl_netProtocol", "0")];
 /// ui_main.c `cvarTable` (the CVAR_ARCHIVE ones)
 pub const UI_CVARS: &[(&str, &str)] = &[
+    // the first-run graphics dialog: 1 shows it each launch, 0 never (its box)
+    ("ui_gfxSetup", "1"),
+    // 1 once the player picked a graphics mode themselves (the dialog's Play, F10): only then is the saved r_enhanced their choice, not what the game archived
+    ("ui_gfxChosen", "0"),
     ("ui_browserShowFull", "1"),
     // the join server menu's protocol filter (dec040): 0 all, 71, 69
     ("ui_browserProtocol", "0"),
