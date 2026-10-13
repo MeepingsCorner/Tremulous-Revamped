@@ -154,14 +154,18 @@ process; Create Server and `net_enabled 1` start a network server.
   broadcast, on every network adapter's own broadcast address too. LAN
   games need no router forwarding, and the host's console prints the
   address friends can also join directly (`connect 192.168.x.y:30720`).
-* **Windows Firewall** (dec047, dec054): other PCs only reach the game if
-  Windows lets it in (Private networks for LAN, with the network itself
-  set to Private; Public for the internet). At startup and when hosting,
-  the game checks; when other PCs cannot reach it, it asks in a Windows
-  dialog: Allow (then approve the administrator prompt; a block rule
-  Windows made for the game is replaced), Not now, or Don't ask again
-  (`net_firewallPrompt 0`). The console command `firewall_allow` asks again
-  at any time.
+* **Windows Firewall** (dec047, dec054, dec076): other PCs
+  only reach a hosted game if Windows lets it in (step 1) and, for friends on
+  the internet, the router forwards the port (step 2, UPnP). When you start
+  a network game the console prints one status, and a Windows dialog shows
+  it too if step 1 is missing: LAN friends need step 1, internet friends
+  need steps 1 and 2, with the join addresses and, if the router did not
+  forward the port, what to forward where. Allow friends in adds one
+  inbound UDP rule for the exe (then the UAC prompt, and a background
+  administrator PowerShell adds it; a block rule Windows made for the game
+  is replaced), Host without it, or Don't ask when I host
+  (`net_firewallPrompt 0`). Joining and the LAN list normally need no rule.
+  The console command `firewall_allow` asks again at any time.
 * **Check from a terminal**:
   `cargo run --release -p trem_sim --example server_list -- lan` or
   `-- master` (both print each server's ping, players, map and name).

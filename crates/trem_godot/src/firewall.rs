@@ -200,34 +200,49 @@ pub fn request_allow(profiles: &[String]) -> Result<(), String> {
     }
 }
 
-/// The question the game asks (Windows' own dialog) for a verdict:
-/// (title, text), None when nothing needs allowing.
-pub fn prompt_text(v: &Verdict) -> Option<(String, String)> {
-    let title = "Tremulous: network access".to_string();
+/// The ids of the answers (what `Prompt::buttons` pairs with its labels).
+pub const ANSWER_ALLOW: i64 = 0;
+/// Host without the rule (the default: closing the dialog means this).
+pub const ANSWER_HOST: i64 = 1;
+/// Host without it and never ask when hosting (net_firewallPrompt 0).
+pub const ANSWER_NEVER: i64 = 2;
+/// The question at host time (dec076): Windows' TaskDialog layout, WHY as
+/// the main instruction, the consequence as content, the details as footer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Prompt {
+    pub title: String,
+    pub main: String,
+    pub content: String,
+    pub footer: String,
+    /// (answer id, label) in display order
+    pub buttons: Vec<(i64, String)>,
+}
+
+impl Prompt {
+    /// The whole question as plain text, for Godot's own dialog (the fallback).
+    pub fn plain(&self) -> String {
+        let content = self
+            .content
+            .replace(&format!("<a href=\"{}\">", crate::hoststatus::HELP_URL), "")
+            .replace("</a>", "");
+        format!("{}\n\n{}\n\n{}", self.main, content, self.footer)
+    }
+}
+
+fn lacking(v: &Verdict) -> Option<&Vec<String>> {
     match v {
-        Verdict::NoRule(n) => Some((title, format!(
-            "Windows Firewall is stopping other PCs on your {} network from reaching Tremulous, so LAN games cannot be found, joined or hosted for friends.\n\nAllow Tremulous through Windows Firewall? Windows will ask for administrator approval.",
-            n.join(" / ")
-        ))),
-        Verdict::Blocked(n) => Some((title, format!(
-            "Windows Firewall has a rule that BLOCKS Tremulous on your {} network, so LAN games cannot be found, joined or hosted for friends.\n\nReplace it with a rule that allows Tremulous? Windows will ask for administrator approval.",
-            n.join(" / ")
-        ))),
+        Verdict::NoRule(n) | Verdict::Blocked(n) => Some(n),
         _ => None,
     }
 }
 
-/// The dialog's buttons, in the order their index comes back.
-pub const PROMPT_BUTTONS: [&str; 3] = ["Allow", "Not now", "Don't ask again"];
-
-/// The host's line for a verdict on `port`.
-pub fn message(v: &Verdict, port: u16) -> String {
-    match v {
-        Verdict::Allowed(n) => format!("Windows Firewall: other PCs can reach this game ({} network)", n.join(", ")),
-        Verdict::Blocked(n) => format!("Windows Firewall BLOCKS this game on the {} network: other PCs cannot join or see it. Remove the block rule for this program in Windows Security > Firewall > Allow an app, or type firewall_allow (after removing it)", n.join(", ")),
-        Verdict::NoRule(n) => format!("Windows Firewall has no rule letting other PCs reach this game on the {} network, so they cannot join or see it (UDP {port}). Type firewall_allow in the console (Windows asks for administrator approval), or tick it in Windows Security > Firewall > Allow an app", n.join(", ")),
-        Verdict::Unknown(_) => String::new(),
-    }
+/// Whether the host-time question is asked (dec076): only when the host
+/// starts a network game (`host_time`, not the startup check), the firewall
+/// lacks a rule, the player did not say never (net_firewallPrompt 0, which
+/// also keeps what the startup prompt's old "Don't ask again" saved), it was
+/// not asked already this run, and no administrator prompt is pending.
+pub fn should_ask(v: &Verdict, setting: i64, asked: bool, fixing: bool, host_time: bool) -> bool {
+    host_time && setting != 0 && !asked && !fixing && lacking(v).is_some()
 }
 
 #[cfg(test)]
@@ -238,7 +253,6 @@ mod tests {
     fn no_rule_on_private_network() {
         let (r, n) = parse("N|Private\r\n");
         assert_eq!(judge(&r, &n), Verdict::NoRule(vec!["Private".into()]));
-        assert!(message(&judge(&r, &n), 30720).contains("firewall_allow"));
     }
 
     #[test]
@@ -265,7 +279,6 @@ mod tests {
         let (r, n) = parse("R|Allow|True|Private, Public\nN|Public\n");
         assert_eq!(judge(&r, &n), Verdict::Allowed(vec!["Public".into()]));
         assert!(matches!(judge(&[], &[]), Verdict::Unknown(_)));
-        assert_eq!(message(&Verdict::Unknown("x".into()), 1), "");
     }
 
     #[test]
@@ -290,12 +303,33 @@ mod tests {
     }
 
     #[test]
-    fn prompts() {
-        assert!(prompt_text(&Verdict::Allowed(vec!["Private".into()])).is_none());
-        assert!(prompt_text(&Verdict::Unknown("x".into())).is_none());
-        let (_, t) = prompt_text(&Verdict::NoRule(vec!["Public".into()])).unwrap();
-        assert!(t.contains("Public network") && t.contains("administrator"));
-        let (_, t) = prompt_text(&Verdict::Blocked(vec!["Private".into()])).unwrap();
-        assert!(t.contains("BLOCKS"));
+    fn host_time_decision() {
+        let lack = Verdict::NoRule(vec!["Private".into()]);
+        let blocked = Verdict::Blocked(vec!["Public".into()]);
+        // asks at host time, when lacking a rule
+        assert!(should_ask(&lack, 1, false, false, true));
+        assert!(should_ask(&blocked, 1, false, false, true));
+        // never at startup (the silent check)
+        assert!(!should_ask(&lack, 1, false, false, false));
+        // "Don't ask when I host" (and the old startup opt-out: net_firewallPrompt 0)
+        assert!(!should_ask(&lack, 0, false, false, true));
+        // once per run, and not while the administrator prompt is pending
+        assert!(!should_ask(&lack, 1, true, false, true));
+        assert!(!should_ask(&lack, 1, false, true, true));
+        // nothing to ask when allowed or unknown
+        assert!(!should_ask(
+            &Verdict::Allowed(vec!["Private".into()]),
+            1,
+            false,
+            false,
+            true
+        ));
+        assert!(!should_ask(
+            &Verdict::Unknown("x".into()),
+            1,
+            false,
+            false,
+            true
+        ));
     }
 }
