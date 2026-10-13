@@ -513,6 +513,7 @@ impl INode3D for TremGame {
             return;
         }
         self.fmod_frame();
+        crate::gfx::set_dynamic_lights(self.client.cvars.integer("r_dynamiclight"));
         if let Some(cam) = self.camera.as_ref().filter(|c| c.is_inside_tree()).map(|c| c.get_global_position()) {
             let mut tree = self.base().get_tree();
             self.gfx.shadow_budget(&mut tree, cam);
@@ -2815,6 +2816,7 @@ impl TremGame {
         // decides whether it casts shadows
         l.set_shadow(false);
         l.add_to_group(crate::gfx::DLIGHT_GROUP);
+        l.set_visible(crate::gfx::dlight_visible(true));
         l.set_position(q2g(&p));
         self.base_mut().add_child(&l);
         self.flashes.push((l, 0.06));
@@ -2930,6 +2932,10 @@ impl TremGame {
     fn update_fx(&mut self, delta: f64) {
         for f in self.flashes.iter_mut() {
             f.1 -= delta;
+            let on = crate::gfx::dlight_visible(true);
+            if f.0.is_visible() != on {
+                f.0.set_visible(on);
+            }
         }
         self.flashes.retain_mut(|f| {
             if f.1 <= 0.0 {

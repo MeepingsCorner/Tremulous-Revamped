@@ -2181,7 +2181,7 @@ mod render {
             }
             for (i, l) in self.lights.iter_mut().enumerate() {
                 match lights.get(i) {
-                    Some(d) if d.radius > 0.0 => {
+                    Some(d) if crate::gfx::dlight_visible(d.radius > 0.0) => {
                         l.set_position(q2g(&d.origin));
                         l.set_param(LightParam::RANGE, d.radius * SCALE);
                         l.set_param(LightParam::ENERGY, 1.0);
