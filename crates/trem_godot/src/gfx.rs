@@ -46,8 +46,10 @@ pub const GFX_CVARS: &[(&str, &str)] = &[
     // r_ragdolls: corpses fall as ragdolls in the enhanced mode (ragdoll.rs)
     ("r_ragdolls", "1"),
     // r_dynamicShadows: players, structures and corpses throw shadows on the
-    // map (the shadow sun, enhanced only)
-    ("r_dynamicShadows", "1"),
+    // map (the shadow sun, enhanced only): -1 auto (the default,
+    // GpuCaps::shadow_sun: off on the Compatibility renderer and
+    // integrated GPUs), 1 on, 0 off
+    ("r_dynamicShadows", "-1"),
     ("r_modelDebug", "0"),
 ];
 
@@ -161,13 +163,24 @@ pub struct GpuCaps {
     pub hw_rt: bool,
     /// a RenderingDevice (compute shaders): Forward+ / Mobile on Vulkan, D3D12, Metal
     pub compute: bool,
+    /// the adapter is an integrated GPU (RenderingDevice DEVICE_TYPE_INTEGRATED_GPU)
+    pub integrated: bool,
 }
 
 impl GpuCaps {
     pub fn detect() -> Self {
         let rs = RenderingServer::singleton();
         let driver = rs.get_current_rendering_driver_name().to_string();
-        let mut c = GpuCaps { vendor: rs.get_video_adapter_vendor().to_string(), device: rs.get_video_adapter_name().to_string(), driver, hw_rt: false, compute: false };
+        let mut c = GpuCaps {
+            vendor: rs.get_video_adapter_vendor().to_string(),
+            device: rs.get_video_adapter_name().to_string(),
+            driver,
+            hw_rt: false,
+            compute: false,
+            integrated: false,
+        };
+        c.integrated = rs.get_video_adapter_type()
+            == godot::classes::rendering_device::DeviceType::INTEGRATED_GPU;
         if let Some(rd) = rs.get_rendering_device() {
             c.compute = true;
             c.hw_rt = c.driver.eq_ignore_ascii_case("vulkan") && rd.has_feature(Features::RAYTRACING_PIPELINE);
@@ -214,8 +227,20 @@ impl GpuCaps {
             _ => self.auto_rt(),
         }
     }
+    /// `r_dynamicShadows` (default -1): the shadow sun on? -1 auto: off on the
+    /// Compatibility renderer (no RenderingDevice) and on integrated GPUs,
+    /// where its directional shadow maps are the enhanced mode's whole cost
+    /// (an Intel HD 4600 laptop, Compatibility: 16.3 fps with it, 42.1
+    /// without, dec068); on elsewhere. 0 off, 1 on.
+    pub fn shadow_sun(&self, cvar: i32) -> bool {
+        match cvar {
+            0 => false,
+            c if c > 0 => true,
+            _ => self.compute && !self.integrated,
+        }
+    }
     pub fn describe(&self) -> String {
-        format!("GPU: {} ({}), driver {}, ray tracing backend: {}, default mode: {}", self.device, self.vendor, self.driver, self.backend().name(), self.auto_rt().name())
+        format!("GPU: {} ({}{}), driver {}, ray tracing backend: {}, default mode: {}, auto dynamic shadows: {}", self.device, self.vendor, if self.integrated { ", integrated" } else { "" }, self.driver, self.backend().name(), self.auto_rt().name(), if self.shadow_sun(-1) { "on" } else { "off" })
     }
 }
 
@@ -636,13 +661,54 @@ mod tests {
 
     #[test]
     fn rt_mode_follows_the_gpu() {
-        let nv = GpuCaps { vendor: "NVIDIA".into(), device: "NVIDIA GeForce RTX 4060".into(), driver: "vulkan".into(), hw_rt: true, compute: true };
-        let amd = GpuCaps { vendor: "AMD".into(), device: "AMD Radeon RX 7800 XT".into(), driver: "vulkan".into(), hw_rt: true, compute: true };
-        let old_amd = GpuCaps { vendor: "AMD".into(), device: "Radeon RX 580".into(), driver: "vulkan".into(), hw_rt: false, compute: true };
-        let gtx = GpuCaps { vendor: "NVIDIA".into(), device: "GeForce GTX 1060".into(), driver: "d3d12".into(), hw_rt: false, compute: true };
-        let gl = GpuCaps { vendor: "Intel".into(), device: "HD 4000".into(), driver: "opengl3".into(), hw_rt: false, compute: false };
-        assert_eq!((nv.backend(), nv.rt_mode(-1)), (RtBackend::Hardware, RtMode::Raytrace));
-        assert_eq!((amd.backend(), amd.rt_mode(-1)), (RtBackend::Hardware, RtMode::Pathtrace));
+        let nv = GpuCaps {
+            vendor: "NVIDIA".into(),
+            device: "NVIDIA GeForce RTX 4060".into(),
+            driver: "vulkan".into(),
+            hw_rt: true,
+            compute: true,
+            integrated: false,
+        };
+        let amd = GpuCaps {
+            vendor: "AMD".into(),
+            device: "AMD Radeon RX 7800 XT".into(),
+            driver: "vulkan".into(),
+            hw_rt: true,
+            compute: true,
+            integrated: false,
+        };
+        let old_amd = GpuCaps {
+            vendor: "AMD".into(),
+            device: "Radeon RX 580".into(),
+            driver: "vulkan".into(),
+            hw_rt: false,
+            compute: true,
+            integrated: false,
+        };
+        let gtx = GpuCaps {
+            vendor: "NVIDIA".into(),
+            device: "GeForce GTX 1060".into(),
+            driver: "d3d12".into(),
+            hw_rt: false,
+            compute: true,
+            integrated: false,
+        };
+        let gl = GpuCaps {
+            vendor: "Intel".into(),
+            device: "HD 4000".into(),
+            driver: "opengl3".into(),
+            hw_rt: false,
+            compute: false,
+            integrated: false,
+        };
+        assert_eq!(
+            (nv.backend(), nv.rt_mode(-1)),
+            (RtBackend::Hardware, RtMode::Raytrace)
+        );
+        assert_eq!(
+            (amd.backend(), amd.rt_mode(-1)),
+            (RtBackend::Hardware, RtMode::Pathtrace)
+        );
         // Radeons without ray accelerators path trace in software
         assert_eq!((old_amd.backend(), old_amd.rt_mode(-1)), (RtBackend::Software, RtMode::Pathtrace));
         assert_eq!((gtx.backend(), gtx.rt_mode(-1)), (RtBackend::Software, RtMode::Raytrace));
@@ -650,6 +716,52 @@ mod tests {
         assert_eq!(gl.rt_mode(2), RtMode::Off);
         assert_eq!(nv.rt_mode(2), RtMode::Pathtrace);
         assert_eq!(amd.rt_mode(0), RtMode::Off);
+    }
+
+    #[test]
+    fn shadow_sun_follows_the_gpu() {
+        let nv = GpuCaps {
+            vendor: "NVIDIA".into(),
+            device: "NVIDIA GeForce RTX 4070 Ti".into(),
+            driver: "vulkan".into(),
+            hw_rt: true,
+            compute: true,
+            integrated: false,
+        };
+        let igpu = GpuCaps {
+            vendor: "Intel".into(),
+            device: "Intel(R) HD Graphics 520".into(),
+            driver: "vulkan".into(),
+            hw_rt: false,
+            compute: true,
+            integrated: true,
+        };
+        let gl = GpuCaps {
+            vendor: "Intel".into(),
+            device: "HD 4600".into(),
+            driver: "opengl3".into(),
+            hw_rt: false,
+            compute: false,
+            integrated: false,
+        };
+        // auto: a discrete GPU on Forward+ keeps it, the weak ones go without
+        assert!(nv.shadow_sun(-1));
+        assert!(!igpu.shadow_sun(-1));
+        assert!(!gl.shadow_sun(-1));
+        // the owner's choice wins either way
+        assert!(gl.shadow_sun(1));
+        assert!(!nv.shadow_sun(0));
+        // the default is auto; 1 keeps the shadow sun on everywhere
+        let default: i32 = super::GFX_CVARS
+            .iter()
+            .find(|(n, _)| *n == "r_dynamicShadows")
+            .unwrap()
+            .1
+            .parse()
+            .unwrap();
+        assert_eq!(default, -1);
+        assert!(nv.shadow_sun(default) && !igpu.shadow_sun(default) && !gl.shadow_sun(default));
+        assert!(nv.shadow_sun(1) && igpu.shadow_sun(1) && gl.shadow_sun(1));
     }
 
     #[test]

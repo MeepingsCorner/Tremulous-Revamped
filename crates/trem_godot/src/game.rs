@@ -3235,11 +3235,21 @@ impl TremGame {
         }
     }
 
-    /// Enhanced mode, a BSP map, r_dynamicShadows: the world-fixed shadow
-    /// lights (gfx.rs, lamps.rs). Otherwise none (vanilla draws no dynamic
-    /// shadows).
+    /// Enhanced mode, a BSP map, r_dynamicShadows (-1 auto: from the GPU,
+    /// GpuCaps::shadow_sun): the world-fixed shadow lights (gfx.rs,
+    /// lamps.rs). Otherwise none (vanilla draws no dynamic shadows).
     fn shadow_sun_on(&self) -> bool {
-        self.client.cvars.integer("r_enhanced") != 0 && self.client.cvars.integer("r_dynamicShadows") != 0 && self.gfx.is_bsp && self.world.is_some() && self.lightgrid.is_some() && self.shadow_dirs.is_some()
+        let cvar = self.client.cvars.integer("r_dynamicShadows");
+        self.client.cvars.integer("r_enhanced") != 0
+            && self
+                .gfx
+                .caps
+                .as_ref()
+                .map_or(cvar != 0, |c| c.shadow_sun(cvar))
+            && self.gfx.is_bsp
+            && self.world.is_some()
+            && self.lightgrid.is_some()
+            && self.shadow_dirs.is_some()
     }
 
     /// The shadow lights: one along each of the map's light directions that
