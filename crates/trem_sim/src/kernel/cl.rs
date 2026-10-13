@@ -33,6 +33,11 @@ const V11_MAX_RELIABLE_COMMANDS: usize = 64;
 /// How far ahead of the expected block a download block is kept (a
 /// server's window is MAX_DOWNLOAD_WINDOW, 48).
 const MAX_DOWNLOAD_AHEAD: i32 = 64;
+
+/// Default of `cl_downloadMaxSize` (MiB): about 10 times the largest pk3 found in a public
+/// archive of Tremulous maps and mods (106 MB; the largest map is 69 MB, the game's own
+/// data pak 45 MB). The size a server announces is a signed 32-bit number (at most 2047 MiB).
+pub const DOWNLOAD_MAX_MB_DEFAULT: i32 = 1024;
 use super::sv::{clc, svc, MAX_RELIABLE_COMMANDS, MAX_SNAPSHOT_ENTITIES, PACKET_BACKUP, PACKET_MASK, PROTOCOL_VERSION, GAMENAME, SNAPFLAG_NOT_ACTIVE, MAX_MAP_AREA_BYTES, MAX_PACKET_USERCMDS};
 use super::svgame::{self, cs};
 use super::types::*;
@@ -338,6 +343,8 @@ pub struct NetClient {
     pub donedl_time: Option<i32>,
     /// `cl_allowDownload` (DLF_* flags, default 0)
     pub allow_download: i32,
+    /// `cl_downloadMaxSize` in MiB: the most one downloaded pak may be (0 = no limit)
+    pub download_max_mb: i32,
     /// `com_downloadPrompt` / `com_downloadPromptText` (the ui's download_popmenu)
     pub download_prompt: i32,
     pub download_prompt_text: String,
@@ -397,6 +404,428 @@ pub fn sys_milliseconds() -> i32 {
     use std::sync::OnceLock;
     static T0: OnceLock<std::time::Instant> = OnceLock::new();
     T0.get_or_init(std::time::Instant::now).elapsed().as_millis() as i32
+}
+
+/// "<dest>.tmp", the file a download is written to until it is verified.
+fn download_tmp(dest: &std::path::Path) -> std::path::PathBuf {
+    let mut t = dest.as_os_str().to_owned();
+    t.push(".tmp");
+    t.into()
+}
+
+#[cfg(test)]
+mod download_name_tests {
+    use super::*;
+    use crate::kernel::files::PakSet;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+
+    fn scratch(tag: &str) -> PathBuf {
+        let d = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/dlsec")
+            .join(format!("{}_{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("home")).unwrap();
+        d.canonicalize().unwrap()
+    }
+
+    /// Every file below `root`, relative, with / separators.
+    fn files_under(root: &Path) -> Vec<String> {
+        fn walk(d: &Path, root: &Path, out: &mut Vec<String>) {
+            let Ok(rd) = std::fs::read_dir(d) else { return };
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    walk(&p, root, out);
+                } else {
+                    out.push(
+                        p.strip_prefix(root)
+                            .unwrap()
+                            .to_string_lossy()
+                            .replace('\\', "/"),
+                    );
+                }
+            }
+        }
+        let mut v = Vec::new();
+        walk(root, root, &mut v);
+        v.sort();
+        v
+    }
+
+    /// A stored pk3 and its checksum (what the server would reference).
+    fn make_pk3(dir: &Path, payload: &[u8]) -> (Vec<u8>, i32) {
+        let p = dir.join("src.zip");
+        let f = std::fs::File::create(&p).unwrap();
+        let mut z = zip::ZipWriter::new(f);
+        z.start_file(
+            "a.txt",
+            zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored),
+        )
+        .unwrap();
+        z.write_all(payload).unwrap();
+        z.finish().unwrap();
+        let sum = files::Pak::load(&p, "base").unwrap().checksum;
+        (std::fs::read(&p).unwrap(), sum)
+    }
+
+    struct Run {
+        cl: NetClient,
+        list: Option<String>,
+        root: PathBuf,
+    }
+
+    /// The server references `name` with checksum `sum`; the client (downloads
+    /// on) runs the real path and the server answers the request with `body`
+    /// (declared size `size`, then the zero-length end block).
+    fn run(tag: &str, name: &str, sum: i32, size: i32, body: &[u8]) -> Run {
+        let root = scratch(tag);
+        let mut fs = PakSet::default();
+        fs.pure_server_set_referenced_paks(&sum.to_string(), name);
+        let list = fs.compare_paks(true, &|_| false);
+        let mut cl = NetClient::new(1);
+        cl.home_path = Some(root.join("home"));
+        cl.allow_download = super::super::sv::DLF_ENABLE;
+        cl.fs = Some(fs);
+        let mut net = Net::new();
+        if let Some(l) = list.clone() {
+            cl.download = None;
+            cl.download_list = l;
+            cl.next_download();
+            if cl.download.is_some() {
+                let mut m = Msg::new(MAX_MSGLEN);
+                m.write_short(0);
+                m.write_long(size);
+                m.write_short(body.len() as i32);
+                m.write_data(body);
+                m.begin_reading();
+                cl.parse_download(&mut net, &mut m);
+                let mut m = Msg::new(MAX_MSGLEN);
+                m.write_short(1);
+                m.write_short(0);
+                m.begin_reading();
+                cl.parse_download(&mut net, &mut m);
+            }
+        }
+        Run { cl, list, root }
+    }
+
+    fn short(s: &str) -> String {
+        let t: String = s.chars().take(70).collect();
+        format!("{t:?}")
+    }
+
+    /// An invalid name must start nothing: no download list, no file anywhere.
+    fn rejected(tag: &str, name: &str) -> Result<(), String> {
+        let (body, sum) = (b"not-a-zip".to_vec(), 12345);
+        let r = run(tag, name, sum, body.len() as i32, &body);
+        let files = files_under(&r.root);
+        if !files.is_empty() || r.list.is_some() {
+            let l = r.list.as_deref().map(short);
+            return Err(format!(
+                "{tag}: name {} wrote {:?}, list {:?}, error {:?}",
+                short(name),
+                files.iter().map(|f| short(f)).collect::<Vec<_>>(),
+                l,
+                r.cl.error.as_deref().map(short)
+            ));
+        }
+        Ok(())
+    }
+
+    fn assert_all_rejected(cases: &[(&str, &str)]) {
+        let bad: Vec<String> = cases
+            .iter()
+            .filter_map(|(t, n)| rejected(t, n).err())
+            .collect();
+        assert!(
+            bad.is_empty(),
+            "{} of {} invalid names were accepted:\n{}",
+            bad.len(),
+            cases.len(),
+            bad.join("\n")
+        );
+    }
+
+    #[test]
+    fn invalid_names_in_the_list_are_refused_at_use() {
+        // a list handed straight to next_download, not built by compare_paks
+        for (tag, list) in [
+            ("fl1", "@a@b.txt"),
+            ("fl2", "@/abs/x.pk3@/abs/x.pk3"),
+            ("fl3", "@a.pk3@C:\\x.pk3"),
+            ("fl4", "@x.pk3@../y.pk3"),
+        ] {
+            let root = scratch(tag);
+            let mut cl = NetClient::new(1);
+            cl.home_path = Some(root.join("home"));
+            cl.allow_download = super::super::sv::DLF_ENABLE;
+            cl.fs = Some(PakSet::default());
+            cl.download_list = list.to_string();
+            cl.next_download();
+            assert!(cl.error.is_some(), "{list}: accepted");
+            assert!(
+                cl.download.is_none() && cl.download_list.is_empty(),
+                "{list}: download started"
+            );
+            assert!(files_under(&root).is_empty());
+        }
+    }
+
+    #[test]
+    fn interrupted_download_is_deleted_on_disconnect() {
+        let root = scratch("interrupt");
+        let (zipbytes, sum) = make_pk3(&root, b"hello");
+        let mut fs = PakSet::default();
+        fs.pure_server_set_referenced_paks(&sum.to_string(), "slacker/part-1");
+        let list = fs.compare_paks(true, &|_| false).unwrap();
+        let mut cl = NetClient::new(1);
+        cl.home_path = Some(root.join("home"));
+        cl.allow_download = super::super::sv::DLF_ENABLE;
+        cl.fs = Some(fs);
+        cl.download_list = list;
+        cl.next_download();
+        let mut net = Net::new();
+        let mut m = Msg::new(MAX_MSGLEN);
+        m.write_short(0);
+        m.write_long(zipbytes.len() as i32);
+        m.write_short(10);
+        m.write_data(&zipbytes[..10]);
+        m.begin_reading();
+        cl.parse_download(&mut net, &mut m);
+        assert_eq!(
+            files_under(&root.join("home")),
+            vec!["slacker/part-1.pk3.tmp"]
+        );
+        cl.disconnect(&mut net);
+        assert_eq!(files_under(&root.join("home")), Vec::<String>::new());
+    }
+
+    #[test]
+    fn legit_names_still_download() {
+        for (tag, name) in [
+            ("legit1", "slacker/vms-1.1.0-bunker_220207-144309"),
+            ("legit2", "gpp/map-arachnid2-1"),
+            ("legit3", "base/data-x"),
+        ] {
+            let root0 = scratch(&format!("{tag}src"));
+            let (zipbytes, sum) = make_pk3(&root0, b"hello");
+            let r = run(tag, name, sum, zipbytes.len() as i32, &zipbytes);
+            assert!(r.cl.error.is_none(), "{name}: {:?}", r.cl.error);
+            assert_eq!(
+                files_under(&r.root.join("home")),
+                vec![format!("{name}.pk3")],
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn absolute_path_is_rejected() {
+        // the target lies in the test root but outside <root>/home
+        let root = scratch("abs_target");
+        let outside = root.join("outside").join("x");
+        let name = outside.to_string_lossy().to_string();
+        assert_all_rejected(&[("abs_target", &name)]);
+        assert!(
+            !outside.with_extension("pk3").exists(),
+            "a file was written outside the download folder"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn absolute_path_example_is_rejected() {
+        let r = rejected("abs_tmp", "/tmp/x");
+        let written = Path::new("/tmp/x.pk3").exists();
+        let _ = std::fs::remove_file("/tmp/x.pk3");
+        assert!(!written, "wrote /tmp/x.pk3");
+        r.unwrap();
+    }
+
+    #[test]
+    fn windows_paths_are_rejected() {
+        assert_all_rejected(&[
+            ("win_drive", "C:\\x"),
+            ("win_driverel", "C:x"),
+            ("win_unc", "\\\\host\\share\\x"),
+            ("win_lead_backslash", "\\x"),
+            ("win_fwd_unc", "//host/share/x"),
+            ("win_ads", "x:stream"),
+            ("win_device", "con"),
+        ]);
+    }
+
+    #[test]
+    fn at_sign_is_rejected() {
+        assert_all_rejected(&[("at1", "a@b.txt@c"), ("at2", "@b.txt@"), ("at3", "a@b")]);
+    }
+
+    #[test]
+    fn traversal_forms_are_rejected() {
+        assert_all_rejected(&[
+            ("dd1", "../x"),
+            ("dd2", "a/../../x"),
+            ("dd3", "..\\x"),
+            ("dd4", "a//b"),
+            ("dd5", "./x"),
+            ("dd6", "a/./b"),
+            ("dd7", ".."),
+            ("dd8", "a/.."),
+            ("dd9", "a/"),
+        ]);
+    }
+
+    #[test]
+    fn only_pk3_names_are_accepted() {
+        assert_all_rejected(&[("ext1", "a@b.txt@b"), ("ext2", "x@y.txt@z")]);
+    }
+
+    #[test]
+    fn nul_and_control_characters_are_rejected() {
+        assert_all_rejected(&[("nul", "a\0b"), ("ctl", "a\x07b"), ("del", "a\x7fb")]);
+    }
+
+    #[test]
+    fn overlong_name_is_rejected() {
+        assert_all_rejected(&[
+            ("long", &"a".repeat(5000)),
+            ("long2", &format!("{}/x", "d".repeat(300))),
+        ]);
+    }
+
+    #[test]
+    fn checksum_mismatch_leaves_nothing() {
+        let root0 = scratch("mismatch_src");
+        let (zipbytes, sum) = make_pk3(&root0, b"hello");
+        let r = run(
+            "mismatch",
+            "slacker/pak-1",
+            sum ^ 1,
+            zipbytes.len() as i32,
+            &zipbytes,
+        );
+        assert!(
+            r.cl.error.is_some(),
+            "a wrong checksum must drop the connection"
+        );
+        assert_eq!(files_under(&r.root.join("home")), Vec::<String>::new());
+    }
+
+    #[test]
+    fn garbage_that_is_no_zip_leaves_nothing() {
+        let r = run("garbage", "slacker/pak-2", 77, 7, b"not-a-zip");
+        assert!(r.cl.error.is_some());
+        assert_eq!(files_under(&r.root.join("home")), Vec::<String>::new());
+    }
+
+    // ---- size limits (dec062)
+
+    /// A started download of `name`; `announce` is the size block 0 will carry.
+    fn started(tag: &str, name: &str, max_mb: i32) -> (NetClient, PathBuf) {
+        let root = scratch(tag);
+        let mut fs = PakSet::default();
+        fs.pure_server_set_referenced_paks("12345", name);
+        let list = fs.compare_paks(true, &|_| false).unwrap();
+        let mut cl = NetClient::new(1);
+        cl.home_path = Some(root.join("home"));
+        cl.allow_download = super::super::sv::DLF_ENABLE;
+        cl.download_max_mb = max_mb;
+        cl.fs = Some(fs);
+        cl.download_list = list;
+        cl.next_download();
+        assert!(cl.download.is_some());
+        (cl, root)
+    }
+
+    /// Feeds one download block; returns the bytes of the message left unread.
+    fn block(cl: &mut NetClient, n: i32, announce: Option<i32>, data: &[u8]) -> i32 {
+        let mut net = Net::new();
+        let mut m = Msg::new(MAX_MSGLEN);
+        m.write_short(n);
+        if let Some(a) = announce {
+            m.write_long(a);
+        }
+        m.write_short(data.len() as i32);
+        m.write_data(data);
+        m.begin_reading();
+        cl.parse_download(&mut net, &mut m);
+        (m.cursize - m.readcount) as i32
+    }
+
+    #[test]
+    fn default_limit_is_one_gib() {
+        assert_eq!(NetClient::new(1).download_max_mb, 1024);
+    }
+
+    #[test]
+    fn more_data_than_announced_stops_and_leaves_nothing() {
+        let (mut cl, root) = started("cap_over", "slacker/over-1", 1024);
+        block(&mut cl, 0, Some(10), &[1u8; 8]);
+        assert!(cl.error.is_none());
+        assert_eq!(
+            files_under(&root.join("home")),
+            vec!["slacker/over-1.pk3.tmp"]
+        );
+        block(&mut cl, 1, None, &[1u8; 8]);
+        assert!(
+            cl.error
+                .as_deref()
+                .unwrap()
+                .contains("larger than the 10 bytes the server announced"),
+            "{:?}",
+            cl.error
+        );
+        assert!(files_under(&root.join("home")).is_empty());
+        assert!(cl.download.is_none() && cl.download_list.is_empty());
+    }
+
+    #[test]
+    fn announced_size_over_the_limit_is_refused_before_any_data() {
+        let (mut cl, root) = started("cap_announce", "slacker/big-1", 1);
+        let left = block(&mut cl, 0, Some(2 * 1024 * 1024), &[1u8; 8]);
+        assert_eq!(left, 0, "the refused block must be read whole");
+        assert!(
+            cl.error
+                .as_deref()
+                .unwrap()
+                .contains("cl_downloadMaxSize (1 MB)"),
+            "{:?}",
+            cl.error
+        );
+        assert!(files_under(&root.join("home")).is_empty());
+    }
+
+    #[test]
+    fn limit_zero_means_no_limit() {
+        let root0 = scratch("cap_zero_src");
+        let (zipbytes, sum) = make_pk3(&root0, b"hello");
+        let (mut cl, root) = started("cap_zero", "slacker/zero-1", 0);
+        cl.fs
+            .as_mut()
+            .unwrap()
+            .pure_server_set_referenced_paks(&sum.to_string(), "slacker/zero-1");
+        block(&mut cl, 0, Some(zipbytes.len() as i32), &zipbytes);
+        block(&mut cl, 1, None, &[]);
+        assert!(cl.error.is_none(), "{:?}", cl.error);
+        assert_eq!(files_under(&root.join("home")), vec!["slacker/zero-1.pk3"]);
+    }
+
+    #[test]
+    fn a_download_within_both_limits_still_completes() {
+        let root0 = scratch("cap_ok_src");
+        let (zipbytes, sum) = make_pk3(&root0, b"hello");
+        let (mut cl, root) = started("cap_ok", "slacker/ok-1", 1);
+        cl.fs
+            .as_mut()
+            .unwrap()
+            .pure_server_set_referenced_paks(&sum.to_string(), "slacker/ok-1");
+        block(&mut cl, 0, Some(zipbytes.len() as i32), &zipbytes);
+        block(&mut cl, 1, None, &[]);
+        assert!(cl.error.is_none(), "{:?}", cl.error);
+        assert_eq!(files_under(&root.join("home")), vec!["slacker/ok-1.pk3"]);
+    }
 }
 
 impl Default for NetClient {
@@ -487,6 +916,7 @@ impl NetClient {
             download_restart: false,
             donedl_time: None,
             allow_download: 0,
+            download_max_mb: DOWNLOAD_MAX_MB_DEFAULT,
             download_prompt: 0,
             download_prompt_text: String::new(),
             sv_allow_download: 0,
@@ -684,8 +1114,8 @@ impl NetClient {
                 self.fs_restarted = true;
             }
         }
-        // the download's temp file is closed (and left)
-        self.download = None;
+        // the download's temp file is closed and deleted
+        self.discard_download();
         self.download_list.clear();
         self.download_restart = false;
         let playing = self.demo.playing;
@@ -1199,7 +1629,7 @@ impl NetClient {
             if !list.is_empty() {
                 // if autodownloading is not enabled on the server
                 self.state = ConnState::Connected;
-                self.download = None;
+                self.discard_download();
                 self.download_list = list;
                 self.next_download();
                 return;
@@ -1446,16 +1876,30 @@ impl NetClient {
             d.size = m.read_long();
             if d.size < 0 {
                 let e = m.read_string();
-                self.drop_error(&e);
+                self.abort_download(d, &e);
                 return;
             }
         }
+        // the announced size is judged after the rest of this block is read, so the message
+        // is consumed whole
+        let over_limit = if block == 0 {
+            self.download_limit_message(&d, 0)
+        } else {
+            None
+        };
         let size = m.read_short();
         if size < 0 || size as usize > MAX_MSGLEN {
-            self.drop_error(&format!("CL_ParseDownload: Invalid size {size} for download chunk"));
+            self.abort_download(
+                d,
+                &format!("CL_ParseDownload: Invalid size {size} for download chunk"),
+            );
             return;
         }
         let data = m.read_data(size as usize);
+        if let Some(msg) = over_limit {
+            self.abort_download(d, &msg);
+            return;
+        }
         if (d.block & 0xffff) != block {
             // CL_ParseDownload: Expected block d.block, got block. The C
             // client drops it; keep one within the server's window instead,
@@ -1494,8 +1938,29 @@ impl NetClient {
     fn take_download_block(&mut self, net: &mut Net, data: Vec<u8>) {
         let Some(mut d) = self.download.take() else { return };
         let size = data.len() as i32;
+        // never more than the server announced, and never more than cl_downloadMaxSize
+        if let Some(msg) = self.download_limit_message(&d, size) {
+            self.abort_download(d, &msg);
+            return;
+        }
+        // the data goes to "<home>/<local>.tmp"; the name was checked when the list was
+        // built, and again here, at the one place a path is made from it
+        let dest = match self.home_path.as_deref() {
+            Some(h) => match files::download_dest(h, &d.local_name) {
+                Some(p) => Some(p),
+                None => {
+                    let msg = format!(
+                        "Refusing to download to an unsafe name ({} bytes of name)",
+                        d.local_name.len()
+                    );
+                    self.abort_download(d, &msg);
+                    return;
+                }
+            },
+            None => None,
+        };
+        let tmp = dest.as_ref().map(|p| download_tmp(p));
         // open the file if not opened yet
-        let tmp = self.home_path.as_ref().map(|h| h.join(format!("{}.tmp", d.local_name)));
         if d.file.is_none() {
             if let Some(t) = tmp.as_ref() {
                 if let Some(dir) = t.parent() {
@@ -1505,6 +1970,7 @@ impl NetClient {
                     Ok(f) => d.file = Some(f),
                     Err(_) => {
                         self.printf(&format!("Could not create {}.tmp\n", d.local_name));
+                        self.discard_partial(&d);
                         let _ = self.add_reliable_command("stopdl", false);
                         self.next_download();
                         return;
@@ -1516,7 +1982,14 @@ impl NetClient {
             match d.file.as_mut() {
                 Some(f) => {
                     use std::io::Write;
-                    let _ = f.write_all(&data);
+                    if f.write_all(&data).is_err() {
+                        let msg = format!(
+                            "Download of {} failed: could not write the file",
+                            d.local_name
+                        );
+                        self.abort_download(d, &msg);
+                        return;
+                    }
                 }
                 None => d.data.extend_from_slice(&data),
             }
@@ -1527,9 +2000,27 @@ impl NetClient {
         if size == 0 {
             // A zero length block means EOF
             if d.file.take().is_some() {
-                // rename the file
-                if let (Some(t), Some(h)) = (tmp, self.home_path.as_ref()) {
-                    let _ = std::fs::rename(t, h.join(&d.local_name));
+                if let (Some(t), Some(dest)) = (tmp, dest) {
+                    // the pak must be one the server referenced, checked BEFORE it takes its
+                    // place under the final name
+                    if let Some(fs) = self.fs.as_ref() {
+                        if !fs.compare_zip_checksum(&t) {
+                            let msg = format!("Incorrect checksum for file: {}", d.local_name);
+                            let _ = std::fs::remove_file(&t);
+                            self.abort_download(d, &msg);
+                            return;
+                        }
+                    }
+                    // rename the file
+                    if std::fs::rename(&t, &dest).is_err() {
+                        let _ = std::fs::remove_file(&t);
+                        let msg = format!(
+                            "Download of {} failed: could not move the file into place",
+                            d.local_name
+                        );
+                        self.abort_download(d, &msg);
+                        return;
+                    }
                 }
             } else {
                 self.completed_downloads.push((d.local_name.clone(), std::mem::take(&mut d.data)));
@@ -1552,6 +2043,57 @@ impl NetClient {
         self.download = Some(d);
     }
 
+    /// The reason to stop `d` when `add` more bytes arrive: more data than the size the
+    /// server announced for the file, or an announced size over
+    /// `cl_downloadMaxSize` (received data can never exceed the announced size, so that is the one to compare). None while the download is within both.
+    fn download_limit_message(&self, d: &ClDownload, add: i32) -> Option<String> {
+        let total = d.count as i64 + add as i64;
+        if add > 0 && total > d.size as i64 {
+            return Some(format!(
+                "Download of {} stopped: it is larger than the {} bytes the server announced",
+                d.local_name, d.size
+            ));
+        }
+        if self.download_max_mb > 0 {
+            let limit = self.download_max_mb as i64 * 1024 * 1024;
+            if d.size as i64 > limit {
+                return Some(format!("Download of {} stopped: it is larger than cl_downloadMaxSize ({} MB). Raise it, or set it to 0 for no limit.", d.local_name, self.download_max_mb));
+            }
+        }
+        None
+    }
+
+    /// Deletes the partial file of a download in progress ("<local>.tmp").
+    fn discard_partial(&mut self, d: &ClDownload) {
+        if d.local_name.is_empty() || d.block < 0 {
+            return;
+        }
+        if let Some(dest) = self
+            .home_path
+            .as_deref()
+            .and_then(|h| files::download_dest(h, &d.local_name))
+        {
+            let _ = std::fs::remove_file(download_tmp(&dest));
+        }
+    }
+
+    /// The download in progress is abandoned: its partial file is deleted.
+    fn discard_download(&mut self) {
+        if let Some(mut d) = self.download.take() {
+            d.file = None;
+            self.discard_partial(&d);
+        }
+    }
+
+    /// A download failed or was refused: close and delete the partial file,
+    /// forget the rest of the list and drop the connection with `msg`.
+    fn abort_download(&mut self, mut d: ClDownload, msg: &str) {
+        d.file = None;
+        self.discard_partial(&d);
+        self.download_list.clear();
+        self.drop_error(msg);
+    }
+
     /// `CL_BeginDownload`: requests a file to download from the server.
     pub fn begin_download(&mut self, local_name: &str, remote_name: &str) {
         self.download = Some(ClDownload { local_name: local_name.to_string(), remote_name: remote_name.to_string(), time: self.realtime, ..Default::default() });
@@ -1566,9 +2108,16 @@ impl NetClient {
         if let Some(d) = self.download.take() {
             if !d.local_name.is_empty() && d.block == -1 {
                 if let (Some(fs), Some(h)) = (self.fs.as_ref(), self.home_path.as_ref()) {
-                    if !fs.compare_zip_checksum(&h.join(&d.local_name)) {
-                        self.drop_error(&format!("Incorrect checksum for file: {}", d.local_name));
-                        return;
+                    if let Some(p) = files::download_dest(h, &d.local_name) {
+                        if !fs.compare_zip_checksum(&p) {
+                            let _ = std::fs::remove_file(&p);
+                            self.download_list.clear();
+                            self.drop_error(&format!(
+                                "Incorrect checksum for file: {}",
+                                d.local_name
+                            ));
+                            return;
+                        }
                     }
                 }
             }
@@ -1616,6 +2165,13 @@ impl NetClient {
                 None => (rest.to_string(), String::new()),
             };
             let remote = remote.to_string();
+            // both names must be plain "<dir>/<name>.pk3" (the list is built from the
+            // server's names)
+            if !files::safe_download_name(&local) || !files::safe_download_name(&remote) {
+                self.download_list.clear();
+                self.drop_error("Refusing to download a file with an unsafe name");
+                return;
+            }
             self.printf(&format!("Trying UDP download: {local}; {remote}\n"));
             if (self.allow_download & super::sv::DLF_ENABLE == 0 || self.allow_download & super::sv::DLF_NO_UDP != 0) && prompt != DLP_UDP {
                 if self.connected_to_pure {
