@@ -81,6 +81,28 @@ pub fn upscale_on(r_upscale: i32, enhanced: bool, rt: RtMode) -> bool {
     enhanced && (r_upscale > 0 || (r_upscale < 0 && rt != RtMode::Off))
 }
 
+/// r_dynamiclight, read once per frame (game.rs process): tr_scene.c
+/// RE_RenderScene sets the scene's num_dlights to 0 when it is 0, so no
+/// dynamic light (missiles, muzzle flashes, particle lights) lights it.
+static DYNAMIC_LIGHTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+pub fn set_dynamic_lights(r_dynamiclight: i32) {
+    DYNAMIC_LIGHTS.store(
+        dynamic_lights_on(r_dynamiclight),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// Is a dynamic light drawn this frame? (the light's own wish and r_dynamiclight)
+pub fn dlight_visible(wanted: bool) -> bool {
+    wanted && DYNAMIC_LIGHTS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// tr_scene.c: `if ( r_dynamiclight->integer == 0 || ...) num_dlights = 0`
+pub fn dynamic_lights_on(r_dynamiclight: i32) -> bool {
+    r_dynamiclight != 0
+}
+
 /// The dynamic lights that get shadows: the `max` with the largest
 /// range / (1 + distance to the view), so near and big lights win.
 pub fn shadow_casters(lights: &[(f32, f32)], max: usize) -> Vec<usize> {
@@ -624,6 +646,18 @@ mod tests {
         let l = [(50.0, 6.0), (2.0, 9.0), (10.0, 6.0), (1.0, 2.0)];
         assert_eq!(super::shadow_casters(&l, 2), vec![1, 3]);
         assert!(super::shadow_casters(&l, 0).is_empty());
+    }
+
+    #[test]
+    fn r_dynamiclight_0_clears_the_dlights() {
+        assert!(super::dynamic_lights_on(1));
+        assert!(super::dynamic_lights_on(2));
+        assert!(!super::dynamic_lights_on(0));
+        super::set_dynamic_lights(0);
+        assert!(!super::dlight_visible(true));
+        super::set_dynamic_lights(1);
+        assert!(super::dlight_visible(true));
+        assert!(!super::dlight_visible(false));
     }
 
     #[test]
