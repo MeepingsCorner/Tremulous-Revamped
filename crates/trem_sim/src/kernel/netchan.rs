@@ -213,12 +213,44 @@ fn host_name() -> String {
     }
 }
 
-/// This machine's IPv4 addresses on its networks, loopback and link-local
-/// left out: every adapter's (`getifaddrs`; on Windows the host name's
-/// addresses, which are every adapter's). Port addition (dec045): the LAN
-/// scan and the server's "join me at" line.
-pub fn local_ipv4() -> Vec<Ipv4Addr> {
-    let mut out: Vec<Ipv4Addr> = Vec::new();
+/// One IPv4 network this machine is on: an adapter's address, its netmask
+/// and whether the adapter broadcasts (not a point-to-point VPN tunnel).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct LocalNet {
+    pub addr: Ipv4Addr,
+    pub mask: Ipv4Addr,
+    pub broadcast: bool,
+}
+
+impl LocalNet {
+    /// A network known only by its address: taken as a /24, the
+    /// home-network size.
+    pub fn assume_24(addr: Ipv4Addr) -> LocalNet {
+        LocalNet {
+            addr,
+            mask: Ipv4Addr::new(255, 255, 255, 0),
+            broadcast: true,
+        }
+    }
+    /// The subnet-directed broadcast (`addr | !mask`); none for a
+    /// point-to-point adapter or a /31 or /32, which have no broadcast address.
+    pub fn broadcast_addr(&self) -> Option<[u8; 4]> {
+        let mask = u32::from(self.mask);
+        if !self.broadcast || mask.leading_ones() > 30 {
+            return None;
+        }
+        Some((u32::from(self.addr) | !mask).to_be_bytes())
+    }
+}
+
+/// This machine's IPv4 networks, loopback and link-local left out: every
+/// adapter that is up with its address and netmask (`getifaddrs` on unix,
+/// interfaces up and running; `GetIpAddrTable` on Windows, disconnected and
+/// deleted addresses left out). When the system lists none, the host name's
+/// addresses, as /24s. Port addition (dec045, dec057): the LAN scan and the
+/// server's "join me at" line.
+pub fn local_ipv4_nets() -> Vec<LocalNet> {
+    let mut out: Vec<LocalNet> = Vec::new();
     #[cfg(unix)]
     // SAFETY: getifaddrs' list, walked and freed here
     unsafe {
@@ -227,36 +259,131 @@ pub fn local_ipv4() -> Vec<Ipv4Addr> {
             let mut p = ifs;
             while !p.is_null() {
                 let a = (*p).ifa_addr;
-                if !a.is_null() && (*a).sa_family as i32 == libc::AF_INET {
+                let m = (*p).ifa_netmask;
+                let flags = (*p).ifa_flags as i32;
+                let up = flags & libc::IFF_UP != 0 && flags & libc::IFF_RUNNING != 0;
+                if up && !a.is_null() && (*a).sa_family as i32 == libc::AF_INET {
                     let sin = &*(a as *const libc::sockaddr_in);
-                    out.push(Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr)));
+                    let addr = Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
+                    // a missing netmask, or one that reads as 0.0.0.0 (a trimmed
+                    // sockaddr length on macOS/BSD), is a /24
+                    let mask = if m.is_null() {
+                        Ipv4Addr::new(255, 255, 255, 0)
+                    } else {
+                        Ipv4Addr::from(u32::from_be(
+                            (*(m as *const libc::sockaddr_in)).sin_addr.s_addr,
+                        ))
+                    };
+                    let mask = if mask.is_unspecified() {
+                        Ipv4Addr::new(255, 255, 255, 0)
+                    } else {
+                        mask
+                    };
+                    let broadcast = flags & libc::IFF_BROADCAST != 0;
+                    out.push(LocalNet {
+                        addr,
+                        mask,
+                        broadcast,
+                    });
                 }
                 p = (*p).ifa_next;
             }
             libc::freeifaddrs(ifs);
         }
     }
-    let host = host_name();
-    if !host.is_empty() {
-        if let Ok(it) = (host.as_str(), 0u16).to_socket_addrs() {
-            out.extend(it.filter_map(|a| match a.ip() {
-                IpAddr::V4(v) => Some(v),
-                _ => None,
-            }));
+    #[cfg(windows)]
+    {
+        #[repr(C)]
+        struct MibIpAddrRow {
+            addr: u32,
+            index: u32,
+            mask: u32,
+            bcast: u32,
+            reasm_size: u32,
+            unused1: u16,
+            wtype: u16,
+        }
+        #[link(name = "iphlpapi")]
+        extern "system" {
+            fn GetIpAddrTable(table: *mut u8, size: *mut u32, order: i32) -> u32;
+        }
+        const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+        const MIB_IPADDR_DISCONNECTED: u16 = 0x0008;
+        const MIB_IPADDR_DELETED: u16 = 0x0040;
+        // SAFETY: GetIpAddrTable fills a MIB_IPADDRTABLE (a u32 count, then
+        // the rows) into a u32-aligned buffer of the size it asked for
+        unsafe {
+            // the table can grow between the size call and the fill call
+            // (ERROR_INSUFFICIENT_BUFFER again): ask again, up to 3 times
+            for _ in 0..3 {
+                let mut size: u32 = 0;
+                if GetIpAddrTable(std::ptr::null_mut(), &mut size, 0) != ERROR_INSUFFICIENT_BUFFER
+                    || size < 4
+                {
+                    break;
+                }
+                let mut buf = vec![0u32; (size as usize + 3) / 4];
+                let res = GetIpAddrTable(buf.as_mut_ptr() as *mut u8, &mut size, 0);
+                if res == ERROR_INSUFFICIENT_BUFFER {
+                    continue;
+                }
+                if res == 0 {
+                    let n = buf[0] as usize;
+                    let rows = buf.as_ptr().add(1) as *const MibIpAddrRow;
+                    let fits = 4 + n * std::mem::size_of::<MibIpAddrRow>() <= buf.len() * 4;
+                    for i in 0..if fits { n } else { 0 } {
+                        let r = &*rows.add(i);
+                        if r.wtype & (MIB_IPADDR_DISCONNECTED | MIB_IPADDR_DELETED) != 0 {
+                            continue;
+                        }
+                        // in_addr values: the bytes in memory are the octets
+                        let addr = Ipv4Addr::from(r.addr.to_ne_bytes());
+                        let mask = Ipv4Addr::from(r.mask.to_ne_bytes());
+                        out.push(LocalNet {
+                            addr,
+                            mask,
+                            broadcast: true,
+                        });
+                    }
+                }
+                break;
+            }
         }
     }
-    out.retain(|v| !v.is_loopback() && !v.is_link_local() && !v.is_unspecified());
+    out.retain(|n| !n.addr.is_loopback() && !n.addr.is_link_local() && !n.addr.is_unspecified());
+    if out.is_empty() {
+        let host = host_name();
+        if !host.is_empty() {
+            if let Ok(it) = (host.as_str(), 0u16).to_socket_addrs() {
+                out.extend(it.filter_map(|a| match a.ip() {
+                    IpAddr::V4(v)
+                        if !v.is_loopback() && !v.is_link_local() && !v.is_unspecified() =>
+                    {
+                        Some(LocalNet::assume_24(v))
+                    }
+                    _ => None,
+                }));
+            }
+        }
+    }
     out.sort();
     out.dedup();
     out
 }
 
-/// The subnet-directed broadcast of each local address (as a /24, the
-/// home-network size). Windows sends 255.255.255.255 out of one adapter
-/// only (the best route: a VPN's or a virtual machine's adapter can take
-/// it), so the LAN scan also broadcasts on each network by its own address.
-pub fn lan_broadcasts(locals: &[Ipv4Addr]) -> Vec<[u8; 4]> {
-    let mut out: Vec<[u8; 4]> = locals.iter().map(|a| { let o = a.octets(); [o[0], o[1], o[2], 255] }).collect();
+/// This machine's IPv4 addresses on its networks (`local_ipv4_nets`).
+pub fn local_ipv4() -> Vec<Ipv4Addr> {
+    let mut out: Vec<Ipv4Addr> = local_ipv4_nets().iter().map(|n| n.addr).collect();
+    out.dedup();
+    out
+}
+
+/// The subnet-directed broadcast of each local network, by its own netmask.
+/// Windows sends 255.255.255.255 out of one adapter only (the best route: a
+/// VPN's or a virtual machine's adapter can take it), so the LAN scan also
+/// broadcasts on each network by its own address.
+pub fn lan_broadcasts(nets: &[LocalNet]) -> Vec<[u8; 4]> {
+    let mut out: Vec<[u8; 4]> = nets.iter().filter_map(LocalNet::broadcast_addr).collect();
     out.sort();
     out.dedup();
     out
@@ -1017,10 +1144,43 @@ impl Netchan {
 mod lan_tests {
     #[test]
     fn each_network_gets_its_own_broadcast() {
+        use super::LocalNet;
         use std::net::Ipv4Addr;
-        let b = super::lan_broadcasts(&[Ipv4Addr::new(192, 168, 1, 23), Ipv4Addr::new(10, 0, 5, 7), Ipv4Addr::new(192, 168, 1, 40)]);
+        let net = |a: [u8; 4], m: [u8; 4], broadcast: bool| LocalNet {
+            addr: Ipv4Addr::from(a),
+            mask: Ipv4Addr::from(m),
+            broadcast,
+        };
+        let b = super::lan_broadcasts(&[
+            net([192, 168, 1, 23], [255, 255, 255, 0], true),
+            net([10, 0, 5, 7], [255, 255, 255, 0], true),
+            net([192, 168, 1, 40], [255, 255, 255, 0], true),
+        ]);
         assert_eq!(b, vec![[10, 0, 5, 255], [192, 168, 1, 255]]);
-        // this machine's addresses: never loopback
-        assert!(super::local_ipv4().iter().all(|a| !a.is_loopback()));
+        // the netmask decides, not a /24: a /16, a /23 and a /22
+        let b = super::lan_broadcasts(&[
+            net([172, 17, 0, 1], [255, 255, 0, 0], true),
+            net([192, 168, 2, 9], [255, 255, 254, 0], true),
+            net([10, 1, 4, 20], [255, 255, 252, 0], true),
+        ]);
+        assert_eq!(
+            b,
+            vec![[10, 1, 7, 255], [172, 17, 255, 255], [192, 168, 3, 255]]
+        );
+        // no broadcast on a point-to-point tunnel or a /32
+        assert!(super::lan_broadcasts(&[
+            net([10, 8, 0, 6], [255, 255, 255, 0], false),
+            net([100, 64, 1, 2], [255, 255, 255, 255], true)
+        ])
+        .is_empty());
+        // a network known only by its address is a /24
+        assert_eq!(
+            LocalNet::assume_24(Ipv4Addr::new(192, 168, 7, 3)).broadcast_addr(),
+            Some([192, 168, 7, 255])
+        );
+        // this machine's networks: never loopback
+        assert!(super::local_ipv4_nets()
+            .iter()
+            .all(|n| !n.addr.is_loopback()));
     }
 }
