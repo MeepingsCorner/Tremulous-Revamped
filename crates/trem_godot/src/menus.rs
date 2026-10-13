@@ -2103,6 +2103,13 @@ pub struct Lan {
     /// the C's fixed arrays, the ones not filled yet too: the visible flag a
     /// server arriving later gets, per source (local, global, favorites)
     pub slot_visible: [Option<bool>; 3],
+    /// `trap_LAN_ServerStatus( NULL )`: the host forgets every status request
+    pub status_reset: bool,
+    /// `trap_LAN_ServerStatus( addr, .. )`: the address the host keeps asking
+    /// (`getstatus`) until it answers (`TremGame::lan_sync`)
+    pub status_poll: Option<String>,
+    /// the answer: (address, `\key\value..\\\score ping "name"..\` text)
+    pub status_answer: Option<(String, String)>,
 }
 
 impl Lan {
@@ -2233,6 +2240,105 @@ pub struct BrowserState {
     pub status_lines: Vec<[String; 4]>,
     pub status_address: String,
     pub next_server_status_refresh: i32,
+}
+
+/// `UI_GetServerStatusInfo` + `UI_SortServerStatusInfo`: the lines (4
+/// columns) of the server info popup from `CL_ServerStatus`' text, the
+/// `\\key\\value` cvars of the info line, then `\\score ping name` per player.
+fn parse_server_status(address: &str, text: &str) -> Vec<[String; 4]> {
+    const MAX_SERVERSTATUS_LINES: usize = 128;
+    let b = text.as_bytes();
+    let find = |from: usize, c: u8| {
+        b[from.min(b.len())..]
+            .iter()
+            .position(|&x| x == c)
+            .map(|i| i + from)
+    };
+    let line = |a: &str, b_: &str, c: &str, d: &str| {
+        [a.to_string(), b_.to_string(), c.to_string(), d.to_string()]
+    };
+    let mut lines = vec![line("Address", "", "", address)];
+    let mut p = 0usize;
+    // get the cvars
+    while p < b.len() {
+        let Some(q) = find(p, b'\\') else { break };
+        p = q + 1;
+        if b.get(p) == Some(&b'\\') {
+            break;
+        }
+        let ks = p;
+        let Some(q) = find(p, b'\\') else { break };
+        let key = &text[ks..q];
+        p = q + 1;
+        let ve = find(p, b'\\').unwrap_or(b.len());
+        lines.push(line(key, "", "", &text[p..ve]));
+        p = ve;
+        if lines.len() >= MAX_SERVERSTATUS_LINES {
+            break;
+        }
+    }
+    // get the player list
+    if lines.len() < MAX_SERVERSTATUS_LINES - 3 {
+        lines.push(line("", "", "", ""));
+        lines.push(line("num", "score", "ping", "name"));
+        let mut i = 0;
+        while p < b.len() {
+            if b[p] == b'\\' {
+                p += 1;
+            }
+            let score_s = p;
+            let Some(q1) = find(p, b' ') else { break };
+            let ping_s = q1 + 1;
+            let Some(q2) = find(ping_s, b' ') else { break };
+            let name_s = q2 + 1;
+            let name_e = find(name_s, b'\\').unwrap_or(b.len());
+            lines.push(line(
+                &i.to_string(),
+                &text[score_s..q1],
+                &text[ping_s..q2],
+                &text[name_s..name_e],
+            ));
+            if lines.len() >= MAX_SERVERSTATUS_LINES {
+                break;
+            }
+            p = name_e;
+            if p >= b.len() {
+                break;
+            }
+            p += 1;
+            i += 1;
+        }
+    }
+    // UI_SortServerStatusInfo: the cvars worth reading first
+    const FIRST: [(&str, &str); 9] = [
+        ("sv_hostname", "Name"),
+        ("Address", ""),
+        ("gamename", "Game name"),
+        ("g_gametype", "Game type"),
+        ("mapname", "Map"),
+        ("version", ""),
+        ("protocol", ""),
+        ("timelimit", ""),
+        ("fraglimit", ""),
+    ];
+    let mut index = 0;
+    for (name, alt) in FIRST {
+        for j in 0..lines.len() {
+            if !lines[j][1].is_empty() {
+                continue;
+            }
+            if name.eq_ignore_ascii_case(&lines[j][0]) {
+                let (t0, t3) = (lines[index][0].clone(), lines[index][3].clone());
+                lines[index][0] = std::mem::replace(&mut lines[j][0], t0);
+                lines[index][3] = std::mem::replace(&mut lines[j][3], t3);
+                if !alt.is_empty() {
+                    lines[index][0] = alt.to_string();
+                }
+                index += 1;
+            }
+        }
+    }
+    lines
 }
 
 /// `Q_CleanStr`: colour codes and non-printable characters removed.
@@ -4077,7 +4183,10 @@ impl Ui {
         self.feeder_selection_f(Feeder::FindPlayer, c);
     }
 
-    /// `UI_BuildServerStatus`: no server can answer a status request here.
+    /// `UI_BuildServerStatus`: asks the selected server for its status
+    /// (`trap_LAN_ServerStatus` -> `CL_ServerStatus`, through `Lan`) and
+    /// builds the popup's lines once the answer is in; until then it asks
+    /// again every 500 ms.
     fn build_server_status(&mut self, force: bool) {
         if self.browser.next_find_player_refresh != 0 {
             return;
@@ -4089,13 +4198,33 @@ impl Ui {
         } else {
             self.menu_set_feeder_selection(None, Feeder::ServerStatus, 0, None);
             self.browser.status_lines.clear();
+            // reset all server status requests
+            self.lan.status_reset = true;
+            self.lan.status_poll = None;
+            self.lan.status_answer = None;
         }
         let c = self.browser.current_server;
         if c < 0 || c as usize > self.browser.display_servers.len() || self.browser.display_servers.is_empty() {
             return;
         }
-        // UI_GetServerStatusInfo fails: try again in 500 ms
-        self.browser.next_server_status_refresh = self.real_time + 500;
+        let addr = self.browser.status_address.clone();
+        if let Some(text) = self
+            .lan
+            .status_answer
+            .take()
+            .filter(|(a, _)| *a == addr)
+            .map(|(_, t)| t)
+        {
+            self.browser.status_lines = parse_server_status(&addr, &text);
+            self.browser.next_server_status_refresh = 0;
+            self.lan.status_poll = None;
+        } else {
+            // UI_GetServerStatusInfo fails: try again in 500 ms
+            if !addr.is_empty() {
+                self.lan.status_poll = Some(addr);
+            }
+            self.browser.next_server_status_refresh = self.real_time + 500;
+        }
     }
 
     /// `trap_FS_GetFileList( dir, ext )` over the pk3s and user files.
@@ -6960,6 +7089,21 @@ fn patch_sound_options(text: &str) -> String {
     format!("{}{}{}", &text[..start], b, &text[end..])
 }
 
+/// The Server Info popup (dec059): the legacy menu centres a 400x300 box
+/// on the screen (y 90..390), which cuts the browser's "[featured]" legend
+/// (ends at y 94) and the labels of the bottom buttons (top at y 375).
+/// Same width, 262 high and placed at y 108..370 between the two. A menu
+/// that is not the legacy one is left as it is.
+fn patch_serverinfo_popup(text: &str) -> String {
+    const H_OLD: &str = "#define H       300";
+    const RECT_OLD: &str = "rect (320-(W/2)) (240-(H/2)) W H";
+    if !text.contains(H_OLD) || !text.contains(RECT_OLD) {
+        return text.to_string();
+    }
+    text.replacen(H_OLD, "#define H       262", 1)
+        .replacen(RECT_OLD, "rect (320-(W/2)) 108 W H", 1)
+}
+
 /// `UI_Init`'s loading: menus (ui + cgame scoreboard), fonts, help,
 /// arenas, weapon icons.
 fn load_ui(lib: &mut Library) -> Result<Ui, String> {
@@ -6973,7 +7117,10 @@ fn load_ui(lib: &mut Library) -> Result<Ui, String> {
     let port = load_menu_files(&with_port, &mut |p: &str| match p {
         PORT_AUDIO_MENU_FILE => Some(port_audio_menu()),
         PORT_VOICE_MENU_FILE => Some(port_voice_menu(&devices)),
-        "ui/ingame_options.menu" => lib.text(p).map(|t| patch_voice_button(&patch_voip_bind(&patch_sound_options(&t)))),
+        "ui/ingame_options.menu" => lib
+            .text(p)
+            .map(|t| patch_voice_button(&patch_voip_bind(&patch_sound_options(&t)))),
+        "ui/serverinfo.menu" => lib.text(p).map(|t| patch_serverinfo_popup(&t)),
         _ => lib.text(p),
     });
     let (ui, defines) = match port {
@@ -6983,7 +7130,13 @@ fn load_ui(lib: &mut Library) -> Result<Ui, String> {
         }
         Err(e) => {
             godot_warn!("TremMenus: the enhanced-audio page did not load ({e}); the options keep their original Sound panel");
-            load_menu_files(&files, &mut |p: &str| lib.text(p))?
+            load_menu_files(&files, &mut |p: &str| {
+                if p == "ui/serverinfo.menu" {
+                    lib.text(p).map(|t| patch_serverinfo_popup(&t))
+                } else {
+                    lib.text(p)
+                }
+            })?
         }
     };
     let _ = &files;
@@ -8897,6 +9050,136 @@ mod tests {
         let up = load_alien_upgrades(&dretch);
         let l1 = up.iter().find(|e| e.cmd == "class level1").expect("level1");
         assert!(info_pane_text(l1, &dretch).ends_with("Frags: 1"), "{}", info_pane_text(l1, &dretch));
+    }
+
+    /// dec058: the server info popup's lines: the cvars (the useful ones
+    /// first, renamed), a blank line, the player header, the players.
+    #[test]
+    fn server_status_text_becomes_popup_lines() {
+        let text = "\\g_gametype\\0\\mapname\\atcs\\sv_hostname\\My ^1Server\\timelimit\\20\\\\0 5 \"Alpha\"\\\\12 40 \"Bravo\"\\";
+        let l = parse_server_status("10.0.0.2:30720", text);
+        let row = |i: usize| l[i].clone().map(|c| c.to_string());
+        assert_eq!(row(0), ["Name", "", "", "My ^1Server"].map(String::from));
+        assert_eq!(
+            row(1),
+            ["Address", "", "", "10.0.0.2:30720"].map(String::from)
+        );
+        assert_eq!(row(2), ["Game type", "", "", "0"].map(String::from));
+        assert_eq!(row(3), ["Map", "", "", "atcs"].map(String::from));
+        assert_eq!(row(4), ["timelimit", "", "", "20"].map(String::from));
+        assert_eq!(row(5), ["", "", "", ""].map(String::from));
+        assert_eq!(row(6), ["num", "score", "ping", "name"].map(String::from));
+        assert_eq!(row(7), ["0", "0", "5", "\"Alpha\""].map(String::from));
+        assert_eq!(row(8), ["1", "12", "40", "\"Bravo\""].map(String::from));
+        assert_eq!(l.len(), 9);
+        // no players: the cvars and the header only
+        let l = parse_server_status("a", "\\mapname\\atcs\\\\");
+        assert_eq!(l.len(), 4);
+        assert_eq!((l[0][0].as_str(), l[1][0].as_str()), ("Address", "Map"));
+        // nothing at all still has the address
+        assert_eq!(parse_server_status("a", "")[0][3], "a");
+    }
+
+    /// dec059: the Server Info popup sits between the browser's legend and
+    /// its bottom buttons instead of covering the end of one and the top of
+    /// the other.
+    #[test]
+    fn server_info_popup_clears_the_legend_and_the_bottom_buttons() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../re/source/assets");
+        let read = |p: &str| std::fs::read_to_string(repo.join(p)).ok();
+        let menu = read("ui/serverinfo.menu").expect("legacy serverinfo.menu");
+        let patched = patch_serverinfo_popup(&menu);
+        assert!(
+            patched.contains("#define H       262") && patched.contains("rect (320-(W/2)) 108 W H")
+        );
+        assert!(!patched.contains("(240-(H/2))"));
+        // joinserver.menu: legend rect ends at TOP_Y+2*TOPBUTT_H = 10+84 = 94, bottom buttons start at BOT_Y = 480-(50+10)-45 = 375
+        let join = read("ui/joinserver.menu").expect("legacy joinserver.menu");
+        assert!(
+            join.contains("#define TOP_Y       BORDER")
+                && join.contains("#define PREVIEW_H   84")
+                && join.contains("#define BOT_H       45")
+                && join.contains("#define BCJ_H       50")
+        );
+        let (top, bottom) = (108, 108 + 262);
+        assert!(
+            top >= 10 + 84 && bottom <= 480 - (50 + 10) - 45,
+            "popup {top}..{bottom}"
+        );
+        // still a valid menu list, and another file is left alone
+        let mut r = |p: &str| {
+            if p == "ui/serverinfo.menu" {
+                Some(patched.clone())
+            } else {
+                read(p)
+            }
+        };
+        let files = menu_list_files(&mut r).unwrap();
+        load_menu_files(&files, &mut r).unwrap();
+        assert_eq!(patch_serverinfo_popup("menuDef { }"), "menuDef { }");
+    }
+
+    /// dec058: Server Info asks the selected server (the sorted list's
+    /// address, not the raw index) and fills the feeder when the answer is in.
+    #[test]
+    fn menus_server_info_popup_fills_from_the_answer() {
+        if !have_data() {
+            return;
+        }
+        let mut u = ui(Team::None);
+        u.set_active_menu(UiMenuCommand::Main);
+        let r_ = by_text(&u, "main", "Play");
+        click(&mut u, r_);
+        u.lan.net = true;
+        let mk = |addr: &str, name: &str, ping: i32| ServerInfo {
+            addr: addr.into(),
+            host_name: name.into(),
+            map_name: "atcs".into(),
+            game: "base".into(),
+            clients: 1,
+            max_clients: 8,
+            ping,
+            visible: true,
+            protocol: 71,
+        };
+        u.lan.local = vec![
+            mk("10.0.0.1:30720", "slow", 90),
+            mk("10.0.0.2:30720", "fast", 10),
+        ];
+        u.set_cvar("ui_netSource", "2");
+        u.browser.sort_key = 4;
+        u.browser.sort_dir = false;
+        u.build_server_display_list(1);
+        u.feeder_selection_f(Feeder::Servers, 0);
+        let first = u.current_server_info().unwrap().addr;
+        u.run_menu_script("ServerStatus", None);
+        assert_eq!(
+            u.browser.status_address, first,
+            "the selected row's address"
+        );
+        assert!(
+            u.lan.status_reset && u.lan.status_poll.as_deref() == Some(first.as_str()),
+            "asks the host to getstatus"
+        );
+        let fs = u
+            .feeders
+            .iter()
+            .find(|(_, f)| **f == Feeder::ServerStatus)
+            .map(|(i, _)| *i)
+            .unwrap();
+        assert_eq!(u.feeder_count(fs), 0, "nothing until the answer");
+        // the host answers; the popup re-checks every 500 ms
+        u.lan.status_answer = Some((
+            first.clone(),
+            "\\sv_hostname\\fast\\mapname\\atcs\\\\3 20 \"Bot\"\\".into(),
+        ));
+        let (t, v) = (u.real_time, u.view.clone());
+        u.frame(t + 600, v);
+        assert_eq!(u.feeder_count(fs), 6);
+        assert_eq!(u.feeder_item_text(fs, 0, 3).0, "fast");
+        assert_eq!(u.feeder_item_text(fs, 5, 3).0, "\"Bot\"");
+        assert_eq!(u.feeder_item_text(fs, 5, 1).0, "3");
+        assert!(u.lan.status_poll.is_none());
     }
 
     #[test]

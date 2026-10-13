@@ -4472,6 +4472,16 @@ impl TremGame {
             return;
         };
         lan.net = true;
+        // the server info popup's getstatus (trap_LAN_ServerStatus)
+        if std::mem::take(&mut lan.status_reset) {
+            nh.cl.ui_server_status(&mut nh.net, None);
+        }
+        if let Some(a) = lan.status_poll.clone() {
+            if let Some(text) = nh.cl.ui_server_status(&mut nh.net, Some(&a)) {
+                lan.status_answer = Some((a, text));
+                lan.status_poll = None;
+            }
+        }
         // favorites: the ui's list is the one saved (resolved when it changes)
         let addrs: Vec<String> = lan.favorites.iter().map(|f| f.addr.clone()).collect();
         if addrs != self.lan_fav_addrs {

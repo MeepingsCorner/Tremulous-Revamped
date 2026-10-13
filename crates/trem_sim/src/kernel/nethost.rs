@@ -489,6 +489,7 @@ pub fn apply_client_cvars(cl: &mut NetClient, get: &dyn Fn(&str) -> Option<Strin
     cl.timeout = int("cl_timeout", cl.timeout);
     cl.nodelta = int("cl_nodelta", 0) != 0;
     cl.max_ping = int("cl_maxPing", cl.max_ping);
+    cl.server_status_resend = int("cl_serverStatusResendTime", cl.server_status_resend);
     cl.lan_force_packets = int("cl_lanForcePackets", 1) != 0;
     cl.guid_server_uniq = int("cl_guidServerUniq", 1) != 0;
     cl.rcon_password = get("rconPassword").unwrap_or_default();
