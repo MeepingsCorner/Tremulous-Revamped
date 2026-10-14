@@ -865,7 +865,7 @@ const CVAR_DEFAULTS: &[(&str, &str)] = &[
     ("r_picmip", "1"),
     ("r_texturebits", "0"),
     ("r_width", "0"),
-    ("rate", "90000"),
+    ("rate", "128000"),
     ("s_doppler", "1"),
     ("s_musicvolume", "0.25"),
     ("s_useOpenAL", "0"),
@@ -910,7 +910,7 @@ const ENGINE_CVARS: &[(&str, &str)] = &[
     ("m_filter", "1"),
     ("m_pitch", "0.022"),
     ("cl_freelook", "1"),
-    ("rate", "90000"),
+    ("rate", "128000"),
     ("s_volume", "0.8"),
     ("s_musicvolume", "0.25"),
     ("s_doppler", "1"),
@@ -6960,6 +6960,27 @@ fn patch_sound_options(text: &str) -> String {
     format!("{}{}{}", &text[..start], b, &text[end..])
 }
 
+/// The options' rate row (dec079): its label, and its values in
+/// KB/s (`rate` is bytes per second), highest first. The legacy list
+/// stopped at 25000, so the default (then 90000) showed an empty box.
+const NET_RATE_LABEL: &str = "Max Data Rate:";
+const NET_RATE_LIST: &str = "cvarFloatList { \"128 KB/s (default)\" 128000 \"25 KB/s\" 25000 \"5 KB/s (ISDN)\" 5000 \"4 KB/s (56k)\" 4000 \"3 KB/s (33.6k)\" 3000 \"2.5 KB/s (28.8k)\" 2500 }";
+
+/// The `rate` row of a menu (ingame_options' "Net Data Rate:",
+/// simple_options' "Network Connection:") with the port's label and list.
+/// A menu without that row is left as it is.
+fn patch_net_rate(text: &str) -> String {
+    let Some((start, end)) = item_range(text, "cvar \"rate\"") else { return text.to_string() };
+    let mut item = text[start..end].to_string();
+    let Some(t) = item.find("text \"") else { return text.to_string() };
+    let Some(t_end) = item[t + 6..].find('"').map(|n| t + 6 + n + 1) else { return text.to_string() };
+    item.replace_range(t..t_end, &format!("text \"{NET_RATE_LABEL}\""));
+    let Some(l) = item.find("cvarFloatList") else { return text.to_string() };
+    let Some(l_end) = item[l..].find('}').map(|n| l + n + 1) else { return text.to_string() };
+    item.replace_range(l..l_end, NET_RATE_LIST);
+    format!("{}{}{}", &text[..start], item, &text[end..])
+}
+
 /// `UI_Init`'s loading: menus (ui + cgame scoreboard), fonts, help,
 /// arenas, weapon icons.
 fn load_ui(lib: &mut Library) -> Result<Ui, String> {
@@ -6973,7 +6994,8 @@ fn load_ui(lib: &mut Library) -> Result<Ui, String> {
     let port = load_menu_files(&with_port, &mut |p: &str| match p {
         PORT_AUDIO_MENU_FILE => Some(port_audio_menu()),
         PORT_VOICE_MENU_FILE => Some(port_voice_menu(&devices)),
-        "ui/ingame_options.menu" => lib.text(p).map(|t| patch_voice_button(&patch_voip_bind(&patch_sound_options(&t)))),
+        "ui/ingame_options.menu" => lib.text(p).map(|t| patch_net_rate(&patch_voice_button(&patch_voip_bind(&patch_sound_options(&t))))),
+        "ui/options.menu" => lib.text(p).map(|t| patch_net_rate(&t)),
         _ => lib.text(p),
     });
     let (ui, defines) = match port {
@@ -9099,6 +9121,40 @@ mod tests {
         }
         // no bind table snapshot here: every command shows "???"
         assert_eq!(u.binding_from_name("+attack"), "???");
+    }
+
+    #[test]
+    fn net_rate_rows_show_the_default() {
+        // dec079: both rate rows (in game and main menu options) get
+        // the label and the KB/s list; the default was in neither
+        // list, so the box was empty
+        if !have_data() {
+            return;
+        }
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../re/source/assets");
+        let src = |p: &str| std::fs::read_to_string(repo.join(p)).ok();
+        for f in ["ui/ingame_options.menu", "ui/options.menu"] {
+            let t = src(f).expect("legacy menu");
+            let p = patch_net_rate(&t);
+            assert!(!p.contains("LAN/CABLE") && !p.contains("\"Net Data Rate:\"") && !p.contains("\"Network Connection:\""), "{f}");
+            assert_eq!(p.matches(NET_RATE_LIST).count(), 1, "{f}");
+            assert_eq!(p.matches("text \"Max Data Rate:\"").count(), 1, "{f}");
+            // only the rate row changes (createserver's sv_maxrate is another file)
+            assert_eq!(p.lines().count(), t.lines().count(), "{f}");
+        }
+        assert_eq!(patch_net_rate("menuDef { }"), "menuDef { }");
+        let mut u = ui_from(Team::None, &mut |p: &str| match p {
+            "ui/ingame_options.menu" | "ui/options.menu" => src(p).map(|t| patch_net_rate(&t)),
+            _ => src(p).or_else(|| read(p)),
+        });
+        for menu in ["ingame_options", "simple_options"] {
+            let r = by_text(&u, menu, "Max Data Rate:");
+            assert_eq!(u.it(r).def.cvar.as_deref(), Some("rate"));
+            for (v, label) in [("128000", "128 KB/s (default)"), ("25000", "25 KB/s"), ("2500", "2.5 KB/s (28.8k)")] {
+                u.set_cvar("rate", v);
+                assert_eq!(u.multi_setting(r), label, "{menu} {v}");
+            }
+        }
     }
 
     fn by_text(u: &Ui, menu: &str, text: &str) -> IRef {

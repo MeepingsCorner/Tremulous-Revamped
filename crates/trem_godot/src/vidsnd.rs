@@ -123,7 +123,7 @@ pub fn register(c: &mut Cvars, windowed: bool) {
         c.get(n, v, *f);
     }
     c.get("name", "UnnamedPlayer", CVAR_USERINFO | CVAR_ARCHIVE);
-    c.get("rate", "90000", CVAR_USERINFO | CVAR_ARCHIVE);
+    c.get("rate", "128000", CVAR_USERINFO | CVAR_ARCHIVE);
     c.get("r_availableModes", "", CVAR_ROM);
     c.get("cl_motdString", "", CVAR_ROM);
 }

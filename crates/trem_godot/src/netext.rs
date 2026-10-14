@@ -49,6 +49,24 @@ fn pak_dirs(pk3_paths: &[String]) -> Vec<(PathBuf, String)> {
     dirs
 }
 
+/// The old defaults (rate 25000 or 90000, cl_maxpackets 30, snaps 20)
+/// throttled downloads and updates: a saved old default becomes the new one
+/// (servers clamp them), once
+/// (cl_netDefaults 1, archived), so a rate picked later in the options
+/// stays (dec079).
+fn upgrade_net_defaults(c: &mut crate::cmd::Cvars) {
+    c.get("cl_netDefaults", "0", crate::cmd::CVAR_ARCHIVE);
+    if c.integer("cl_netDefaults") >= 1 {
+        return;
+    }
+    for (n, old, new) in [("rate", "25000", "128000"), ("rate", "90000", "128000"), ("cl_maxpackets", "30", "125"), ("snaps", "20", "40")] {
+        if c.find(n).is_some_and(|v| v.string == old) {
+            c.set(n, new);
+        }
+    }
+    c.set("cl_netDefaults", "1");
+}
+
 impl TremGame {
     /// `NET_Init` / `CL_Init` / `FS_InitFilesystem` parts of dec037 on the
     /// new network host: the search paths, fs_homepath, the demos folder,
@@ -69,13 +87,7 @@ impl TremGame {
         ] {
             self.client.cvars.get(n, v, f);
         }
-        // the old defaults (25000 / 30 / 20) throttled downloads and updates:
-        // a saved old default becomes the new one (servers clamp them)
-        for (n, old, new) in [("rate", "25000", "90000"), ("cl_maxpackets", "30", "125"), ("snaps", "20", "40")] {
-            if self.client.cvars.find(n).is_some_and(|v| v.string == old) {
-                self.client.cvars.set(n, new);
-            }
-        }
+        upgrade_net_defaults(&mut self.client.cvars);
         let dirs = pak_dirs(&self.pk3_paths);
         let Some(nh) = self.nethost.as_mut() else { return };
         nh.cl.fs = Some(PakSet::new(&dirs));
@@ -427,5 +439,43 @@ impl TremGame {
         if self.net_active() {
             self.net_process(delta);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::upgrade_net_defaults;
+    use crate::cmd::{Cvars, CVAR_ARCHIVE};
+
+    #[test]
+    fn net_defaults_upgrade_once() {
+        // an old config: the old defaults become the new ones, once
+        let mut c = Cvars::default();
+        for (n, v) in [("rate", "25000"), ("cl_maxpackets", "30"), ("snaps", "20")] {
+            c.get(n, v, CVAR_ARCHIVE);
+        }
+        upgrade_net_defaults(&mut c);
+        assert_eq!((c.string("rate"), c.string("cl_maxpackets"), c.string("snaps")), ("128000".into(), "125".into(), "40".into()));
+        assert_eq!(c.string("cl_netDefaults"), "1");
+        assert!(c.find("cl_netDefaults").is_some_and(|v| v.flags & CVAR_ARCHIVE != 0), "archived");
+        // the player then picks 25 KB/s: the next start keeps it
+        c.set("rate", "25000");
+        upgrade_net_defaults(&mut c);
+        assert_eq!(c.string("rate"), "25000");
+        // the previous default (90000) is upgraded once too, then kept
+        let mut c = Cvars::default();
+        c.get("rate", "90000", CVAR_ARCHIVE);
+        upgrade_net_defaults(&mut c);
+        assert_eq!(c.string("rate"), "128000");
+        c.set("rate", "90000");
+        upgrade_net_defaults(&mut c);
+        assert_eq!(c.string("rate"), "90000");
+        // a config written after the upgrade (cl_netDefaults set before the
+        // code registers it) keeps its choice too
+        let mut c = Cvars::default();
+        c.set("cl_netDefaults", "1");
+        c.set("rate", "25000");
+        upgrade_net_defaults(&mut c);
+        assert_eq!(c.string("rate"), "25000");
     }
 }
