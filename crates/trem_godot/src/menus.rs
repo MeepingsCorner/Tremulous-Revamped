@@ -6960,6 +6960,63 @@ fn patch_sound_options(text: &str) -> String {
     format!("{}{}{}", &text[..start], b, &text[end..])
 }
 
+/// The version line of the title screen (dec090): the build's `git describe`
+/// over the release tags (`v1.0`, or `v1.0-46-g2e2c4a1`, `-dirty` with local
+/// changes; the commit hash alone while the repository has no release tag; the
+/// Cargo version in a source tarball) and the date of its commit. Only the
+/// menu text: the `version` cvar, the serverinfo and the protocol are not touched.
+pub fn title_version_line() -> String {
+    let (v, d) = (env!("TREM_VERSION"), env!("TREM_BUILD_DATE"));
+    let v = if v.contains('.') && v.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+        format!("v{v}")
+    } else {
+        v.to_string()
+    };
+    if d.is_empty() {
+        v
+    } else {
+        format!("{v} - {d}")
+    }
+}
+
+/// The main menu's title block (dec090): a small spaced "REVAMPED" and the
+/// version line under the logo, and a second footer line under the original
+/// copyright line (which stays as it is). The pk3 is not touched.
+fn patch_main_title(text: &str) -> String {
+    let Some((_, end)) = item_range(text, "name copyright") else {
+        return text.to_string();
+    };
+    let item = |name: &str, t: &str, rect: &str, scale: &str, align: &str, color: &str| {
+        format!("\n\n    itemDef\n    {{\n      name {name}\n      type ITEM_TYPE_TEXT\n      text \"{t}\"\n      style WINDOW_STYLE_EMPTY\n      textstyle ITEM_TEXTSTYLE_NORMAL\n      textscale {scale}\n      rect {rect}\n      textalign {align}\n      forecolor {color}\n      visible MENU_TRUE\n      decoration\n    }}")
+    };
+    let mut add = String::new();
+    add.push_str(&item(
+        "revamped",
+        "R E V A M P E D",
+        "380 272 200 20",
+        ".32",
+        "ALIGN_RIGHT",
+        ".8 .855 .9 1",
+    ));
+    add.push_str(&item(
+        "revampedversion",
+        &title_version_line(),
+        "380 297 200 14",
+        ".22",
+        "ALIGN_RIGHT",
+        ".63 .63 .63 1",
+    ));
+    add.push_str(&item(
+        "copyright2",
+        "Tremulous Revamped (C) 2026 MeepingsCorner and contributors",
+        "0 462 640 10",
+        ".25",
+        "ALIGN_CENTER",
+        ".75 .75 .75 .75",
+    ));
+    format!("{}{}{}", &text[..end], add, &text[end..])
+}
+
 /// `UI_Init`'s loading: menus (ui + cgame scoreboard), fonts, help,
 /// arenas, weapon icons.
 fn load_ui(lib: &mut Library) -> Result<Ui, String> {
@@ -6973,6 +7030,7 @@ fn load_ui(lib: &mut Library) -> Result<Ui, String> {
     let port = load_menu_files(&with_port, &mut |p: &str| match p {
         PORT_AUDIO_MENU_FILE => Some(port_audio_menu()),
         PORT_VOICE_MENU_FILE => Some(port_voice_menu(&devices)),
+        "ui/main.menu" => lib.text(p).map(|t| patch_main_title(&t)),
         "ui/ingame_options.menu" => lib.text(p).map(|t| patch_voice_button(&patch_voip_bind(&patch_sound_options(&t)))),
         _ => lib.text(p),
     });
@@ -9294,6 +9352,45 @@ mod tests {
         // the options menu's network mode
         let np = by_text(&u, "simple_options", "Server Protocol:");
         assert_eq!(u.it(np).def.cvar.as_deref(), Some("cl_netProtocol"));
+    }
+
+    /// dec090: the title block and the second footer line are added, the original footer line stays, the version comes from the build.
+    #[test]
+    fn menus_title_block_and_footer() {
+        if !have_data() {
+            return;
+        }
+        let orig = read("ui/main.menu").unwrap();
+        let t = patch_main_title(&orig);
+        assert!(
+            t.contains("text \"Tremulous (C) 2005-2009 darklegion development\""),
+            "original footer line kept"
+        );
+        assert!(
+            t.contains("Tremulous Revamped (C) 2026 MeepingsCorner and contributors")
+                && t.contains("R E V A M P E D")
+        );
+        assert!(t.contains(&format!("text \"{}\"", title_version_line())));
+        // the menu parses, and the new items are decorations of the main page
+        let u = ui_from(Team::None, &mut |p: &str| {
+            if p == "ui/main.menu" {
+                Some(patch_main_title(&orig))
+            } else {
+                read(p)
+            }
+        });
+        for i in ["revamped", "revampedversion", "copyright2", "copyright"] {
+            assert!(u.it(mref(&u, "main", i)).def.text.is_some(), "{i}");
+        }
+        // the one-line version: v-prefixed number, or the commit hash; with the date when git has one
+        let v = title_version_line();
+        assert!(!v.is_empty() && !v.contains("  "), "{v}");
+        assert!(
+            !v.starts_with("v") || v.chars().nth(1).is_some_and(|c| c.is_ascii_digit()),
+            "a bare commit hash gets no v: {v}"
+        );
+        // a menu without the footer item is left as it is
+        assert_eq!(patch_main_title("{ }"), "{ }");
     }
 
     #[test]
