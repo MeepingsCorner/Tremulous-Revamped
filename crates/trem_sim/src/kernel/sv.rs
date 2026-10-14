@@ -394,9 +394,13 @@ pub struct Server {
     pub rcon_queue: Vec<(NetAdr, String)>,
     /// `FS_SV_FOpenFileRead` for downloads (the host's pk3 folders)
     pub file_source: Option<Box<dyn FnMut(&str) -> Option<Vec<u8>>>>,
-    /// masters resolved by a background thread (heartbeats)
-    master_adrs: Vec<Option<NetAdr>>,
-    master_rx: Option<std::sync::mpsc::Receiver<(usize, Option<NetAdr>)>>,
+    /// masters resolved by a background thread (heartbeats): per master its
+    /// ipv4 and its ipv6 address (sv_main.c `adr[i][0]`, `adr[i][1]`)
+    master_adrs: Vec<[Option<NetAdr>; 2]>,
+    /// per master and family: None = not asked (net_enabled), Some(None) = no address
+    master_rx: Option<std::sync::mpsc::Receiver<(usize, [Option<Option<NetAdr>>; 2])>>,
+    /// `NET_StringToAdr` for the masters (tests put a fake resolver here)
+    pub master_resolve: fn(&str, NetAdrType) -> (i32, NetAdr),
     rng: u32,
 }
 
@@ -450,8 +454,9 @@ impl Server {
             console: String::new(),
             rcon_queue: Vec::new(),
             file_source: None,
-            master_adrs: vec![None; MAX_MASTER_SERVERS],
+            master_adrs: vec![[None, None]; MAX_MASTER_SERVERS],
             master_rx: None,
+            master_resolve: netchan::string_to_adr,
             rng,
         };
         sv.world.level.dedicated = sv.cvars.dedicated != 0;
@@ -2246,31 +2251,48 @@ impl Server {
 
     // ============================================================ masters
 
-    /// `SV_MasterHeartbeat` (dedicated 2 only; masters are resolved on a
-    /// background thread and an unresolvable one is reported and skipped).
+    /// `SV_MasterHeartbeat` (dedicated 2 only). As sv_main.c, each master is
+    /// resolved for ipv4 and for ipv6 separately (the families net_enabled
+    /// opens) and the heartbeat goes to both addresses. The names are resolved
+    /// on a background thread; one without any address is reported and skipped.
     fn master_heartbeat(&mut self, net: &mut Net, message: &str) {
-        if self.cvars.dedicated != 2 || self.time < self.next_heartbeat_time {
+        let en = net.enabled;
+        if self.cvars.dedicated != 2 || en & (netchan::NET_ENABLEV4 | netchan::NET_ENABLEV6) == 0 || self.time < self.next_heartbeat_time {
             return;
         }
         self.next_heartbeat_time = self.time + HEARTBEAT_MSEC;
-        if self.master_rx.is_none() && self.master_adrs.iter().all(|a| a.is_none()) {
+        if self.master_rx.is_none() && self.master_adrs.iter().all(|a| a.iter().all(|x| x.is_none())) {
             let names = self.cvars.masters.clone();
+            let resolve = self.master_resolve;
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
                 for (i, n) in names.iter().enumerate() {
                     if n.is_empty() {
                         continue;
                     }
-                    let (r, mut a) = netchan::string_to_adr(n, NetAdrType::Unspec);
-                    if r == 2 {
-                        a.port = netchan::PORT_MASTER;
+                    let mut got = [None, None];
+                    for (k, (bit, family)) in [(netchan::NET_ENABLEV4, NetAdrType::Ip), (netchan::NET_ENABLEV6, NetAdrType::Ip6)].into_iter().enumerate() {
+                        if en & bit == 0 {
+                            continue;
+                        }
+                        let (r, mut a) = resolve(n, family);
+                        if r == 2 {
+                            // no port given: the default master port
+                            a.port = netchan::PORT_MASTER;
+                        }
+                        got[k] = Some((r != 0).then_some(a));
                     }
-                    let _ = tx.send((i, (r != 0).then_some(a)));
+                    let _ = tx.send((i, got));
                 }
             });
             self.master_rx = Some(rx);
             for n in self.cvars.masters.iter().filter(|n| !n.is_empty()) {
-                self.console.push_str(&format!("Resolving {n}\n"));
+                if en & netchan::NET_ENABLEV4 != 0 {
+                    self.console.push_str(&format!("Resolving {n} (IPv4)\n"));
+                }
+                if en & netchan::NET_ENABLEV6 != 0 {
+                    self.console.push_str(&format!("Resolving {n} (IPv6)\n"));
+                }
             }
             // the heartbeat goes out once the addresses are known
             self.next_heartbeat_time = self.time;
@@ -2278,11 +2300,15 @@ impl Server {
         }
         let mut sent = false;
         for i in 0..MAX_MASTER_SERVERS {
-            if let Some(a) = self.master_adrs[i] {
-                self.console.push_str(&format!("Sending heartbeat to {}\n", self.cvars.masters[i]));
-                net.out_of_band_print(NetSrc::Server, &a, &format!("heartbeat {message}\n"));
-                sent = true;
+            let adrs = self.master_adrs[i];
+            if adrs.iter().all(|a| a.is_none()) {
+                continue;
             }
+            self.console.push_str(&format!("Sending heartbeat to {}\n", self.cvars.masters[i]));
+            for a in adrs.into_iter().flatten() {
+                net.out_of_band_print(NetSrc::Server, &a, &format!("heartbeat {message}\n"));
+            }
+            sent = true;
         }
         // the C resolves the masters before sending; while the background
         // resolution has not answered yet, try again next frame (wt-a)
@@ -2297,16 +2323,21 @@ impl Server {
         while let Ok(x) = rx.try_recv() {
             got.push(x);
         }
-        for (i, a) in got {
-            match a {
-                Some(a) => {
-                    self.console.push_str(&format!("{} resolved to {}\n", self.cvars.masters[i], a.to_string_port()));
-                    self.master_adrs[i] = Some(a);
+        for (i, fams) in got {
+            for (k, f) in fams.into_iter().enumerate() {
+                let Some(a) = f else { continue };
+                let name = &self.cvars.masters[i];
+                match a {
+                    Some(a) => {
+                        self.console.push_str(&format!("{name} resolved to {}\n", a.to_string_port()));
+                        self.master_adrs[i][k] = Some(a);
+                    }
+                    None => self.console.push_str(&format!("{name} has no {} address.\n", if k == 0 { "IPv4" } else { "IPv6" })),
                 }
-                None => {
-                    self.console.push_str(&format!("Couldn't resolve address: {}\n", self.cvars.masters[i]));
-                    self.cvars.masters[i].clear();
-                }
+            }
+            if self.master_adrs[i].iter().all(|a| a.is_none()) {
+                self.console.push_str(&format!("Couldn't resolve address: {}\n", self.cvars.masters[i]));
+                self.cvars.masters[i].clear();
             }
         }
     }
@@ -2315,7 +2346,7 @@ impl Server {
     /// client that the server is going down.
     pub fn shutdown(&mut self, net: &mut Net, message: &str) {
         if self.cvars.dedicated == 2 {
-            for a in self.master_adrs.clone().into_iter().flatten() {
+            for a in self.master_adrs.clone().into_iter().flatten().flatten() {
                 net.out_of_band_print(NetSrc::Server, &a, &format!("heartbeat {GAMENAME}\n"));
             }
         }

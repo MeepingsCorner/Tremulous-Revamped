@@ -2642,8 +2642,7 @@ impl TremGame {
         if self.netext_ui_cvar(name, value) {
             return; // wt-a (dec037): com_downloadPrompt
         }
-        let l = name.to_ascii_lowercase();
-        if l.starts_with("g_") || l.starts_with("sv_") || l == "timelimit" {
+        if ui_cvar_is_host_side(name) {
             self.set_host_cvar(name, value);
         } else if self.is_server_word(name) {
             let r = self.console_line(&format!("{name} {value}"));
@@ -4282,6 +4281,11 @@ impl TremGame {
         }
     }
 
+    /// A cvar the server side reads: the host cvars first, then the client cvars.
+    /// A console command (`map`) runs while `with_client` has lent the client
+    /// out, so then the client cvars are empty: whatever the menus set for the
+    /// server (net_enabled, net_port, ...) has to be in `self.cvars` too
+    /// (`ui_set_cvar`), or `map` starts a single-process game (dec071).
     fn net_cvar(&self, name: &str) -> Option<String> {
         self.cvars.iter().rev().find(|(k_, _)| k_.eq_ignore_ascii_case(name)).map(|(_, v)| v.clone()).or_else(|| self.client.cvars.find(name).map(|v| v.string.clone()))
     }
@@ -6157,5 +6161,52 @@ impl TremGame {
     #[func]
     fn fmod_stats(&self) -> GString {
         GString::from(self.fmod.as_ref().map(|f| f.stats()).unwrap_or_default().as_str())
+    }
+}
+
+/// The cvars a menu sets (`trap_Cvar_Set`) that the server side reads too:
+/// game and server settings and the network server's own cvars (net_enabled
+/// from StartServer, net_port, dedicated, ...). Kept in the host cvars as well
+/// as the client cvars, since the client cvars are out of reach while a
+/// console command runs.
+pub(crate) fn ui_cvar_is_host_side(name: &str) -> bool {
+    let l = name.to_ascii_lowercase();
+    l.starts_with("g_")
+        || l.starts_with("sv_")
+        || l.starts_with("net_")
+        || l == "timelimit"
+        || l == "dedicated"
+        || l == "rconpassword"
+}
+
+#[cfg(test)]
+mod host_cvar_tests {
+    use super::ui_cvar_is_host_side;
+
+    #[test]
+    fn menu_cvars_the_listen_server_reads_reach_the_host_side() {
+        // StartServer sets net_enabled; without it in the host cvars `map` loads single-process (dec071)
+        for n in [
+            "net_enabled",
+            "NET_ENABLED",
+            "net_port",
+            "net_upnp",
+            "dedicated",
+            "sv_hostname",
+            "g_motd",
+            "timelimit",
+            "rconPassword",
+        ] {
+            assert!(ui_cvar_is_host_side(n), "{n}");
+        }
+        for n in [
+            "cl_allowDownload",
+            "r_gamma",
+            "ui_dedicated",
+            "name",
+            "com_downloadPrompt",
+        ] {
+            assert!(!ui_cvar_is_host_side(n), "{n}");
+        }
     }
 }

@@ -14,7 +14,7 @@
 //!   after the `cinematic splash.RoQ` of Com_Init, cinematic.rs): Play opens
 //!   the server browser (the `trap_LAN_*` lists mirror the network
 //!   client's: LAN scan, masters, pings, favorites; dec035), Create Server
-//!   starts a listen server through TremGame (`net_enabled 1`, `map
+//!   starts a listen server through TremGame (`net_enabled 3`, `map
 //!   <name>`), Leave / disconnect come back here. ITEM_TYPE_MODEL
 //!   items are rendered (menumodel.rs), the option cvars act on Godot
 //!   (vidsnd.rs), fades / transitions / orbits run, and the menu
@@ -2845,6 +2845,15 @@ impl Ui {
         self.carriage = carriage(&self.view.player);
     }
 
+    /// `net_enabled` for the server Create Server starts: ipv4 and ipv6
+    /// (NET_ENABLEV4 | NET_ENABLEV6), keeping the player's other bits
+    /// (NET_PRIOV6 4, NET_DISABLEMCAST 8). Profiles saved by the older menu
+    /// hold 1 (ipv4 only), so the families are always both set (dec071).
+    pub(crate) fn host_net_enabled(cur: &str) -> String {
+        let v = trem_sim::kernel::spawn::c_atoi(cur);
+        ((v & !3) | 3).to_string()
+    }
+
     /// `UI_RunMenuScript`.
     fn run_menu_script(&mut self, name: &str, arg: Option<&str>) {
         let p = self.view.player.clone();
@@ -2866,8 +2875,10 @@ impl Ui {
             "startserver" => {
                 let d = (self.cvar_value("ui_dedicated") as i32).clamp(0, 2);
                 self.set_cvar("dedicated", &d.to_string());
-                // the server the menu creates is a network (listen) server (dec033)
-                self.set_cvar("net_enabled", "1");
+                // the server the menu creates is a network (listen) server
+                // (dec033) on ipv4 and ipv6 (dec071)
+                let ne = Self::host_net_enabled(&self.cvar("net_enabled"));
+                self.set_cvar("net_enabled", &ne);
                 let s = self.cvar_value("ui_selectedMap") as i32;
                 if let Some(m) = self.map_list.get(s.max(0) as usize).map(|m| m.0.clone()) {
                     self.exec(&format!("wait ; wait ; map {m}\n"));
@@ -9181,6 +9192,20 @@ mod tests {
         let e = execs(&mut u);
         assert_eq!(e, vec!["wait ; wait ; map niveus\n".to_string()]);
         assert_eq!(u.cvar("dedicated"), "0");
+        // ipv4 and ipv6 (dec071)
+        assert_eq!(u.cvar("net_enabled"), "3");
+    }
+
+    #[test]
+    fn host_game_opens_ipv4_and_ipv6() {
+        assert_eq!(Ui::host_net_enabled(""), "3");
+        assert_eq!(Ui::host_net_enabled("0"), "3");
+        // the older menu saved 1 (ipv4 only)
+        assert_eq!(Ui::host_net_enabled("1"), "3");
+        assert_eq!(Ui::host_net_enabled("2"), "3");
+        // prefer ipv6 / no multicast stay
+        assert_eq!(Ui::host_net_enabled("5"), "7");
+        assert_eq!(Ui::host_net_enabled("11"), "11");
     }
 
     #[test]
