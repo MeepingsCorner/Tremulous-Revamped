@@ -1,0 +1,13 @@
+Tremulous Revamped (Windows x64)
+================================
+
+Play: run Tremulous.exe.
+
+4K textures (optional): download both tremulous-revamped-hd-textures zips
+from the same GitHub release and unzip them into this folder, so you get an
+"hd" folder next to Tremulous.exe.
+
+base/ holds the original Tremulous 1.1 content (see base/COPYING, base/CC
+and base/README.txt).
+Source code: https://github.com/MeepingsCorner/Tremulous-Revamped (this port);
+the original Tremulous code it is ported from: https://github.com/darklegion/tremulous-legacy
