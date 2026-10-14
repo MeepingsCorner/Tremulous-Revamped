@@ -2337,6 +2337,8 @@ pub struct Ui {
     /// `trap_RealTime`: seconds and the local (month 0-11, day, year, hour, minute)
     pub unix_time: i64,
     pub local_time: [i32; 5],
+    /// the first-run graphics dialog's inputs (None: no dialog)
+    pub gfx_setup: Option<crate::gfx::GfxSetup>,
 }
 
 /// Default menu cvars, then the cvarTable defaults.
@@ -2403,6 +2405,7 @@ impl Ui {
             preview_movie: false,
             unix_time: 0,
             local_time: [0, 1, 1970, 0, 0],
+            gfx_setup: None,
         };
         // UI_Init: Menus_CloseAll after loading (main.menu is `visible`)
         u.menus_close_all();
@@ -2906,6 +2909,8 @@ impl Ui {
             // the port's voice page (dec053): the microphone list again,
             // "Default" if the chosen device is gone, and the capture
             // restarted on it (TremGame's voip_refreshdevices)
+            "gfxsetup" => self.open_gfx_setup(false),
+            "gfxapply" => self.apply_gfx_setup(),
             "voiprefreshdevices" => {
                 let pairs = voice_device_pairs(&crate::voipsnd::VoipSound::input_devices());
                 for it in self.sets[0].iter_mut().flat_map(|m| m.items.iter_mut()) {
@@ -3716,8 +3721,62 @@ impl Ui {
                         self.menus_activate_by_name("error_popmenu");
                     }
                 }
+                self.offer_gfx_setup();
             }
             UiMenuCommand::Ingame => self.open_ingame(),
+        }
+    }
+
+    /// The first-run graphics choice (dec070): over the main menu,
+    /// once per run, unless `ui_gfxSetup` is 0 (its box ticked) or an error
+    /// popup is waiting.
+    fn offer_gfx_setup(&mut self) {
+        let off = self.cvar("ui_gfxSetup");
+        let Some(g) = self.gfx_setup.as_ref() else {
+            return;
+        };
+        if g.offered
+            || (!off.is_empty() && c_atof(&off) as i32 == 0)
+            || !self.cvar("com_errorMessage").is_empty()
+        {
+            return;
+        }
+        self.open_gfx_setup(true);
+    }
+
+    /// Open the graphics dialog over what is open. `first`: it starts on
+    /// the recommended mode (or the player's own value); from the options
+    /// it starts on the current `r_enhanced`. The box starts unticked.
+    pub fn open_gfx_setup(&mut self, first: bool) {
+        let Some(g) = self.gfx_setup.as_mut() else {
+            return;
+        };
+        g.offered = true;
+        let enhanced = if first {
+            g.preselect
+        } else {
+            c_atof(&self.cvar("r_enhanced")) as i32 != 0
+        };
+        self.cvars.insert(
+            "ui_gfxchoice".into(),
+            if enhanced { "1" } else { "0" }.into(),
+        );
+        self.cvars.insert("ui_gfxhide".into(), "0".into());
+        self.menus_activate_by_name("port_gfx");
+    }
+
+    /// The dialog's Play: `ui_gfxChosen` goes to 1 and `r_enhanced` follows the
+    /// choice (a value that already means the same, like a 2, is left alone); a ticked box
+    /// switches the dialog off (`ui_gfxSetup 0`).
+    fn apply_gfx_setup(&mut self) {
+        let enhanced = self.cvar("ui_gfxChoice") != "0";
+        // Play is the player's pick: from now on the saved r_enhanced is theirs
+        self.set_cvar("ui_gfxChosen", "1");
+        if (c_atof(&self.cvar("r_enhanced")) as i32 != 0) != enhanced {
+            self.set_cvar("r_enhanced", if enhanced { "1" } else { "0" });
+        }
+        if self.cvar("ui_gfxHide") == "1" {
+            self.set_cvar("ui_gfxSetup", "0");
         }
     }
 
@@ -6960,20 +7019,281 @@ fn patch_sound_options(text: &str) -> String {
     format!("{}{}{}", &text[..start], b, &text[end..])
 }
 
+/// The port's first-run graphics choice (dec070): a popup over the
+/// main menu, also opened from the options' video panel; built in like the
+/// audio pages, never read from the pk3s. It sets `r_enhanced`, and
+/// `ui_gfxSetup 0` when its box is ticked.
+pub const PORT_GFX_MENU_FILE: &str = "ui/port_gfx.menu";
+
+/// One `itemDef` of the dialog: `props` are its own lines (6 spaces in).
+fn gfx_item(name: &str, ty: i32, r: [i32; 4], props: &str) -> String {
+    format!("    itemDef\n    {{\n      name {name}\n      type {ty}\n      rect {} {} {} {}\n      visible 1\n{props}    }}\n", r[0], r[1], r[2], r[3])
+}
+
+/// An item's lines: shown only while `ui_gfxChoice` is `n` (`show`), or only while it is not.
+fn gfx_when(cvar: &str, n: i32, show: bool) -> String {
+    format!(
+        "      cvarTest \"{cvar}\"\n      {} {{ {n} }}\n",
+        if show { "showCvar" } else { "hideCvar" }
+    )
+}
+
+/// A text item (left aligned at the rect's x; `ITEM_TYPE_TEXT`, else it is not drawn).
+fn gfx_text(name: &str, r: [i32; 4], scale: &str, color: &str, text: &str, cond: &str) -> String {
+    gfx_item(name, IT_TEXT, r, &format!("      text \"{text}\"\n      style 0\n      textalign 0\n      textvalign 1\n      textscale {scale}\n      forecolor {color}\n      decoration\n{cond}"))
+}
+
+/// A bordered (and filled when `back` is Some) box without a type.
+fn gfx_box(
+    name: &str,
+    r: [i32; 4],
+    back: Option<&str>,
+    border: &str,
+    size: &str,
+    cond: &str,
+) -> String {
+    let fill = back
+        .map(|b| format!("      style 1\n      backcolor {b}\n"))
+        .unwrap_or_default();
+    let line = if border.is_empty() {
+        String::new()
+    } else {
+        format!("      border 1\n      borderSize {size}\n      borderColor {border}\n")
+    };
+    gfx_item(
+        name,
+        IT_NONE,
+        r,
+        &format!("{fill}{line}      decoration\n{cond}"),
+    )
+}
+
+/// A transparent button over `r`: plays the click and runs `action`.
+fn gfx_click(name: &str, r: [i32; 4], action: &str, cond: &str) -> String {
+    gfx_item(name, IT_BUTTON, r, &format!("      style 0\n{cond}      action\n      {{\n        play \"sound/misc/menu1.wav\";\n        {action}\n      }}\n"))
+}
+
+/// A choice's card: `n` 0 Classic / 1 Enhanced at `y`, drawn selected
+/// (orange frame, filled radio) while `ui_gfxChoice` is `n`, else grey.
+fn gfx_card(n: i32, y: i32, title: &str, tag: Option<&str>, desc: &str) -> String {
+    const ORANGE: &str = "1 .67 0 1";
+    const GREY: &str = ".55 .55 .55 1";
+    let mut s = String::new();
+    for sel in [true, false] {
+        let c = gfx_when("ui_gfxChoice", n, sel);
+        let k = if sel { "sel" } else { "off" };
+        s += &gfx_box(
+            &format!("card{n}{k}"),
+            [14, y, 312, 62],
+            Some(if sel {
+                ".07 .07 .07 1"
+            } else {
+                ".06 .06 .06 1"
+            }),
+            if sel { ORANGE } else { ".3 .3 .3 1" },
+            if sel { "2" } else { "1" },
+            &c,
+        );
+        s += &gfx_box(
+            &format!("radio{n}{k}"),
+            [25, y + 23, 16, 16],
+            None,
+            if sel { ORANGE } else { GREY },
+            "2",
+            &c,
+        );
+        s += &gfx_text(
+            &format!("title{n}{k}"),
+            [48, y + 6, 90, 24],
+            ".4",
+            if sel { "1 .75 0 1" } else { "1 1 1 1" },
+            title,
+            &c,
+        );
+    }
+    if let Some(tag) = tag {
+        s += &gfx_text(
+            &format!("tag{n}"),
+            [48 + 82, y + 9, 190, 16],
+            ".2",
+            "1 .75 0 1",
+            tag,
+            "",
+        );
+    }
+    s += &gfx_box(
+        &format!("dot{n}"),
+        [31, y + 29, 6, 6],
+        Some(ORANGE),
+        "",
+        "0",
+        &gfx_when("ui_gfxChoice", n, true),
+    );
+    s += &gfx_text(
+        &format!("desc{n}"),
+        [48, y + 34, 262, 18],
+        ".23",
+        ".72 .72 .72 1",
+        desc,
+        "",
+    );
+    s
+}
+
+/// The dialog for the adapter `gpu` (as shown; "" unknown) and the
+/// mode recommended for it (`recommended_enhanced`). It starts on
+/// `ui_gfxChoice` (0 Classic, 1 Enhanced), which the caller sets.
+fn port_gfx_menu(gpu: &str, recommended: Option<bool>) -> String {
+    let (classic_rec, enhanced_rec) = (recommended == Some(false), recommended == Some(true));
+    let tag = |rec: bool| (rec && !gpu.is_empty()).then(|| format!("Recommended for {gpu}"));
+    let who = if gpu.is_empty() {
+        "this PC".to_string()
+    } else {
+        format!("this PC: {gpu}")
+    };
+    let classic = if classic_rec {
+        "Looks like the original game. Smoother on this GPU."
+    } else {
+        "Looks like the original game."
+    };
+    let enhanced = if recommended == Some(false) {
+        "Sun shadows, better lighting. Needs a stronger GPU."
+    } else {
+        "Sun shadows, better lighting."
+    };
+    let mut m = String::from(
+        "// the port's first-run graphics choice; numbers, not menudef.h names\n{\n  menuDef\n  {\n    name \"port_gfx\"\n    visible 0\n    fullScreen 0\n    popup\n    rect 150 98 340 284\n    focusColor 1 .75 0 1\n    onESC { close port_gfx }\n\n",
+    );
+    m += &gfx_box(
+        "frame",
+        [0, 0, 340, 284],
+        Some("0 0 0 .96"),
+        ".55 .55 .55 1",
+        "2",
+        "",
+    );
+    m += &gfx_text("title", [16, 6, 300, 30], ".42", "1 1 1 1", "Graphics", "");
+    m += &gfx_text(
+        "note",
+        [16, 36, 308, 16],
+        ".22",
+        ".72 .72 .72 1",
+        &format!("Set up for {who}. One click and you are playing."),
+        "",
+    );
+    m += &gfx_card(0, 62, "Classic", tag(classic_rec).as_deref(), classic);
+    m += &gfx_card(1, 132, "Enhanced", tag(enhanced_rec).as_deref(), enhanced);
+    // Play: filled, underlined
+    m += &gfx_box(
+        "playfill",
+        [14, 206, 312, 34],
+        Some(".6 .4 .05 1"),
+        "",
+        "0",
+        "",
+    );
+    m += &gfx_box(
+        "playline",
+        [20, 236, 300, 2],
+        Some("1 .67 0 1"),
+        "",
+        "0",
+        "",
+    );
+    m += &gfx_item(
+        "play",
+        IT_BUTTON,
+        [14, 206, 312, 34],
+        "      text \"Play\"\n      style 0\n      textalign 1\n      textvalign 1\n      textscale .42\n      forecolor 1 .75 0 1\n      action\n      {\n        play \"sound/misc/menu4.wav\";\n        uiScript gfxApply;\n        close port_gfx\n      }\n",
+    );
+    // the box: unticked unless ui_gfxHide is 1
+    m += &gfx_box("hidebox", [14, 254, 14, 14], None, ".75 .75 .75 1", "2", "");
+    m += &gfx_box(
+        "hidetick",
+        [19, 259, 6, 6],
+        Some("1 .67 0 1"),
+        "",
+        "0",
+        &gfx_when("ui_gfxHide", 1, true),
+    );
+    m += &gfx_text(
+        "hidetext",
+        [36, 252, 200, 18],
+        ".24",
+        ".72 .72 .72 1",
+        "Don't show this again",
+        "",
+    );
+    m += &gfx_click(
+        "hideon",
+        [14, 252, 224, 18],
+        "setcvar ui_gfxHide 1",
+        &gfx_when("ui_gfxHide", 1, false),
+    );
+    m += &gfx_click(
+        "hideoff",
+        [14, 252, 224, 18],
+        "setcvar ui_gfxHide 0",
+        &gfx_when("ui_gfxHide", 1, true),
+    );
+    // the cards' clicks last: they are over everything else
+    m += &gfx_click("pick0", [14, 62, 312, 62], "setcvar ui_gfxChoice 0", "");
+    m += &gfx_click("pick1", [14, 132, 312, 62], "setcvar ui_gfxChoice 1", "");
+    m += "  }\n}\n";
+    m
+}
+
+/// The "Graphics Setup..." button (the dialog) in the options: the main
+/// menu's options (`simple_options`) get it on the row after Server
+/// Protocol; the in-game options' video panel on the row between the last
+/// setting and APPLY, a copy of the APPLY button one row up. A menu
+/// without either is left as it is.
+fn patch_gfx_button(text: &str) -> String {
+    if let Some((_, end)) = item_range(text, "text \"Server Protocol:\"") {
+        let b = "    itemDef\n    {\n      name gfxsetup\n      type ITEM_TYPE_BUTTON\n      text \"Graphics Setup...\"\n      style 0\n      rect X (Y+(12*(ELEM_H+ELEM_GAP))) W ELEM_H\n      textalign ALIGN_CENTER\n      textvalign VALIGN_CENTER\n      textscale .25\n      forecolor 1 1 1 1\n      visible MENU_TRUE\n      action\n      {\n        play \"sound/misc/menu1.wav\";\n        uiScript gfxSetup\n      }\n    }\n";
+        return format!("{}\n\n{}{}", &text[..end], b, &text[end..]);
+    }
+    let Some((start, end)) = item_range(text, "text \"APPLY\"") else {
+        return text.to_string();
+    };
+    let item = &text[start..end];
+    let Some(r) = item.find("(SCONTENT_Y+(") else {
+        return text.to_string();
+    };
+    let at = r + "(SCONTENT_Y+(".len();
+    let Some(len) = item[at..].find(|c: char| !c.is_ascii_digit()) else {
+        return text.to_string();
+    };
+    let Ok(row) = item[at..at + len].parse::<i32>() else {
+        return text.to_string();
+    };
+    let copy = format!("{}{}{}", &item[..at], row - 1, &item[at + len..])
+        .replacen("text \"APPLY\"", "text \"Graphics Setup...\"", 1)
+        .replacen("exec \"vid_restart\"", "uiScript gfxSetup", 1);
+    format!("{}\n\n    {}{}", &text[..end], copy, &text[end..])
+}
+
 /// `UI_Init`'s loading: menus (ui + cgame scoreboard), fonts, help,
 /// arenas, weapon icons.
-fn load_ui(lib: &mut Library) -> Result<Ui, String> {
+fn load_ui(lib: &mut Library, gfx: &crate::gfx::GfxSetup) -> Result<Ui, String> {
     // the port's enhanced-audio page and its button in the options; if
     // they fail to load with this data set, the original menus alone
     let mut files = menu_list_files(&mut |p: &str| lib.text(p))?;
     let mut with_port = files.clone();
     with_port.push(PORT_AUDIO_MENU_FILE.to_string());
     with_port.push(PORT_VOICE_MENU_FILE.to_string());
+    with_port.push(PORT_GFX_MENU_FILE.to_string());
     let devices = crate::voipsnd::VoipSound::input_devices();
     let port = load_menu_files(&with_port, &mut |p: &str| match p {
         PORT_AUDIO_MENU_FILE => Some(port_audio_menu()),
         PORT_VOICE_MENU_FILE => Some(port_voice_menu(&devices)),
-        "ui/ingame_options.menu" => lib.text(p).map(|t| patch_voice_button(&patch_voip_bind(&patch_sound_options(&t)))),
+        PORT_GFX_MENU_FILE => Some(port_gfx_menu(&gfx.gpu, gfx.recommended)),
+        "ui/options.menu" => lib.text(p).map(|t| patch_gfx_button(&t)),
+        "ui/ingame_options.menu" => lib.text(p).map(|t| {
+            patch_gfx_button(&patch_voice_button(&patch_voip_bind(&patch_sound_options(
+                &t,
+            ))))
+        }),
         _ => lib.text(p),
     });
     let (ui, defines) = match port {
@@ -6998,6 +7318,8 @@ fn load_ui(lib: &mut Library) -> Result<Ui, String> {
     let fonts = Fonts::new(font(20)?, font(26)?, font(34)?);
     let mut u = Ui::new(fonts, ui, cg, &defines);
     u.help = help;
+    // the graphics dialog, when its page loaded
+    u.gfx_setup = u.find_menu("port_gfx").map(|_| gfx.clone());
     // AssetCache / Asset_Parse: the fades every Menu_Init starts from
     let mut read = |p: &str| lib.text(p);
     if let Some(f) = files.iter().find_map(|f| read(f).and_then(|t| scan_asset_fades(&t, &mut read))) {
@@ -7686,9 +8008,10 @@ impl TremMenus {
         }
         let Some(mut game) = self.game() else { return false };
         let mut g = game.bind_mut();
+        let gfx = g.gfx_setup();
         let Some(lib) = g.hud_library() else { return false };
         self.tried_load = true;
-        match load_ui(lib) {
+        match load_ui(lib, &gfx) {
             Ok(mut u) => {
                 let rs = RenderingServer::singleton();
                 u.gl_info = format!("VENDOR: {}\nVERSION: {}\nPIXELFORMAT: color(32-bits) Z(24-bits) stencil(8-bits)\n", rs.get_video_adapter_vendor(), rs.get_video_adapter_name());
@@ -7717,7 +8040,39 @@ impl TremMenus {
                 vidsnd::register(gm.client_cvars(), windowed);
             }
             let ui = self.ui.as_mut().unwrap();
-            let names: Vec<String> = ui.cvars.keys().cloned().chain(vidsnd::VIDEO_CVARS.iter().chain(vidsnd::SOUND_CVARS).chain(vidsnd::CLIENT_CVARS).chain(vidsnd::UI_CVARS).map(|(n, _)| n.to_ascii_lowercase())).chain(vidsnd::SERVER_CVARS.iter().map(|(n, _, _)| n.to_ascii_lowercase())).chain(crate::fmodaudio::FMOD_CVARS.iter().map(|(n, _)| n.to_ascii_lowercase())).chain(["name", "rate", "r_availablemodes", "cl_motdstring"].map(String::from)).collect();
+            let names: Vec<String> = ui
+                .cvars
+                .keys()
+                .cloned()
+                .chain(
+                    vidsnd::VIDEO_CVARS
+                        .iter()
+                        .chain(vidsnd::SOUND_CVARS)
+                        .chain(vidsnd::CLIENT_CVARS)
+                        .chain(vidsnd::UI_CVARS)
+                        .map(|(n, _)| n.to_ascii_lowercase()),
+                )
+                .chain(
+                    vidsnd::SERVER_CVARS
+                        .iter()
+                        .map(|(n, _, _)| n.to_ascii_lowercase()),
+                )
+                .chain(
+                    crate::fmodaudio::FMOD_CVARS
+                        .iter()
+                        .map(|(n, _)| n.to_ascii_lowercase()),
+                )
+                .chain(
+                    [
+                        "name",
+                        "rate",
+                        "r_availablemodes",
+                        "cl_motdstring",
+                        "r_enhanced",
+                    ]
+                    .map(String::from),
+                )
+                .collect();
             let gm = game.bind();
             let c = gm.client_cvars_ref();
             let mut synced: Vec<String> = names.into_iter().filter(|n| c.find(n).is_some()).collect();
@@ -9108,6 +9463,245 @@ mod tests {
     }
     fn outs(u: &mut Ui) -> Vec<Out> {
         u.out.drain(..).collect()
+    }
+
+    /// The ui with the port's graphics dialog (and the options' button), as `load_ui` builds it.
+    fn ui_gfx(setup: crate::gfx::GfxSetup, enhanced_now: &str) -> Ui {
+        let mut files = menu_list_files(&mut |p: &str| read(p)).unwrap();
+        files.push(PORT_GFX_MENU_FILE.to_string());
+        let menu = port_gfx_menu(&setup.gpu, setup.recommended);
+        let mut r = |p: &str| match p {
+            PORT_GFX_MENU_FILE => Some(menu.clone()),
+            "ui/ingame_options.menu" => read(p).map(|t| patch_gfx_button(&t)),
+            _ => read(p),
+        };
+        let (menus, defines) = load_menu_files(&files, &mut r).unwrap();
+        let (cg, _) = load_menu_files(&["ui/teamscore.menu".to_string()], &mut r).unwrap();
+        let mut u = Ui::new(fonts(), menus, cg, &defines);
+        u.gfx_setup = Some(setup);
+        u.cvars.insert("ui_gfxsetup".into(), "1".into());
+        u.cvars.insert("r_enhanced".into(), enhanced_now.into());
+        u.frame(1000, GameView::default());
+        u
+    }
+
+    fn cvar_outs(u: &mut Ui) -> Vec<(String, String)> {
+        u.out
+            .drain(..)
+            .filter_map(|o| {
+                if let Out::Cvar(n, v) = o {
+                    Some((n, v))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn menus_graphics_choice_dialog() {
+        if !have_data() {
+            return;
+        }
+        // a weak GPU, nothing set by the player: over the main menu, Classic recommended and selected
+        let mut u = ui_gfx(
+            crate::gfx::GfxSetup::new("Intel(R) HD Graphics 520 (SKL GT2)", None),
+            "1",
+        );
+        u.set_active_menu(UiMenuCommand::Main);
+        assert_eq!(u.top_menu(), Some("port_gfx"));
+        assert!(
+            u.stack.iter().any(|&m| u.sets[0][m].name() == "main"),
+            "the main menu stays under it"
+        );
+        assert_eq!(u.cvar("ui_gfxChoice"), "0");
+        let txt = format!(
+            "{:?}",
+            u.sets[0][u.find_menu("port_gfx").unwrap()]
+                .items
+                .iter()
+                .filter_map(|i| i.def.text.clone())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            txt.contains("Recommended for Intel HD Graphics 520")
+                && txt.contains("Smoother on this GPU")
+                && txt.contains("Don't show this again"),
+            "{txt}"
+        );
+        assert!(!txt.contains("fps"), "no frame rates in the dialog");
+        // pick Enhanced, then Classic again, tick the box, Play
+        let r_ = mref(&u, "port_gfx", "pick1");
+        click(&mut u, r_);
+        assert_eq!(u.cvar("ui_gfxChoice"), "1");
+        let r_ = mref(&u, "port_gfx", "pick0");
+        click(&mut u, r_);
+        assert_eq!(u.cvar("ui_gfxChoice"), "0");
+        assert_eq!(u.cvar("ui_gfxHide"), "0", "the box starts unticked");
+        let r_ = mref(&u, "port_gfx", "hideon");
+        click(&mut u, r_);
+        assert_eq!(u.cvar("ui_gfxHide"), "1");
+        u.out.clear();
+        let r_ = by_text(&u, "port_gfx", "Play");
+        click(&mut u, r_);
+        let c = cvar_outs(&mut u);
+        assert!(
+            c.contains(&("r_enhanced".into(), "0".into()))
+                && c.contains(&("ui_gfxSetup".into(), "0".into()))
+                && c.contains(&("ui_gfxChosen".into(), "1".into())),
+            "{c:?}"
+        );
+        assert_eq!(u.top_menu(), Some("main"));
+        // once per run: the main menu again does not bring it back
+        u.set_active_menu(UiMenuCommand::Main);
+        assert_eq!(u.top_menu(), Some("main"));
+    }
+
+    #[test]
+    fn menus_graphics_choice_ignores_an_archived_r_enhanced_without_the_flag() {
+        if !have_data() {
+            return;
+        }
+        // an existing config: r_enhanced 1 archived by the game, ui_gfxChosen unset, weak GPU -> Classic
+        let weak = "Intel(R) HD Graphics 520 (SKL GT2)";
+        let p = crate::gfx::player_choice(Some(1), false, None);
+        let mut u = ui_gfx(crate::gfx::GfxSetup::new(weak, p), "1");
+        u.set_active_menu(UiMenuCommand::Main);
+        assert_eq!(u.top_menu(), Some("port_gfx"));
+        assert_eq!(u.cvar("ui_gfxChoice"), "0", "Classic pre-selected");
+        // the flag set: the player's Enhanced stays
+        let p = crate::gfx::player_choice(Some(1), true, None);
+        let mut u = ui_gfx(crate::gfx::GfxSetup::new(weak, p), "1");
+        u.set_active_menu(UiMenuCommand::Main);
+        assert_eq!(u.cvar("ui_gfxChoice"), "1");
+        // Esc writes nothing, so the flag stays 0 until Play
+        let p = crate::gfx::player_choice(Some(1), false, None);
+        let mut u = ui_gfx(crate::gfx::GfxSetup::new(weak, p), "1");
+        u.set_active_menu(UiMenuCommand::Main);
+        u.out.clear();
+        u.key_event(K::Escape, true);
+        assert!(cvar_outs(&mut u).is_empty());
+    }
+
+    #[test]
+    fn menus_graphics_choice_keeps_the_players_value_and_the_off_switch() {
+        if !have_data() {
+            return;
+        }
+        // the player's config says Enhanced on a weak GPU: the dialog starts on Enhanced and Play changes nothing
+        let mut u = ui_gfx(
+            crate::gfx::GfxSetup::new("Intel(R) HD Graphics 520 (SKL GT2)", Some(1)),
+            "1",
+        );
+        u.set_active_menu(UiMenuCommand::Main);
+        assert_eq!(u.top_menu(), Some("port_gfx"));
+        assert_eq!(u.cvar("ui_gfxChoice"), "1");
+        u.out.clear();
+        let r_ = by_text(&u, "port_gfx", "Play");
+        click(&mut u, r_);
+        assert_eq!(
+            cvar_outs(&mut u),
+            vec![("ui_gfxChosen".to_string(), "1".to_string())],
+            "only the flag is written: r_enhanced and the box stay as they are"
+        );
+        // Esc leaves the value alone too
+        let mut u = ui_gfx(
+            crate::gfx::GfxSetup::new("Intel(R) HD Graphics 520 (SKL GT2)", None),
+            "1",
+        );
+        u.set_active_menu(UiMenuCommand::Main);
+        u.out.clear();
+        u.key_event(K::Escape, true);
+        assert_eq!(u.top_menu(), Some("main"));
+        assert!(cvar_outs(&mut u).is_empty());
+        // ui_gfxSetup 0: never shown
+        let mut u = ui_gfx(
+            crate::gfx::GfxSetup::new("Intel(R) HD Graphics 520 (SKL GT2)", None),
+            "1",
+        );
+        u.cvars.insert("ui_gfxsetup".into(), "0".into());
+        u.set_active_menu(UiMenuCommand::Main);
+        assert_eq!(u.top_menu(), Some("main"));
+        // an unknown GPU: Enhanced selected, nothing recommended
+        let mut u = ui_gfx(crate::gfx::GfxSetup::new("", None), "1");
+        u.set_active_menu(UiMenuCommand::Main);
+        assert_eq!(u.cvar("ui_gfxChoice"), "1");
+        let m = &u.sets[0][u.find_menu("port_gfx").unwrap()];
+        assert!(!m.items.iter().any(|i| i
+            .def
+            .text
+            .as_deref()
+            .is_some_and(|t| t.starts_with("Recommended"))));
+        // reopened from the options: it starts on the current r_enhanced
+        let r_ = by_text(&u, "port_gfx", "Play");
+        click(&mut u, r_);
+        u.cvars.insert("r_enhanced".into(), "0".into());
+        let o = by_text(&u, "ingame_options", "Graphics Setup...");
+        u.run_menu_script("gfxSetup", None);
+        assert_eq!(u.top_menu(), Some("port_gfx"));
+        assert_eq!(u.cvar("ui_gfxChoice"), "0");
+        let _ = o;
+    }
+
+    #[test]
+    fn the_options_video_panel_has_the_graphics_setup_button() {
+        let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../re/source/assets");
+        let opts = std::fs::read_to_string(repo.join("ui/ingame_options.menu"))
+            .expect("legacy ingame_options.menu");
+        let patched = patch_gfx_button(&opts);
+        assert_eq!(patched.matches("text \"Graphics Setup...\"").count(), 1);
+        assert_eq!(
+            patched.matches("text \"APPLY\"").count(),
+            opts.matches("text \"APPLY\"").count()
+        );
+        assert!(
+            patched.contains("uiScript gfxSetup") && patched.contains("(SCONTENT_Y+(12*ELEM_H))"),
+            "the row above APPLY"
+        );
+        assert_eq!(patch_gfx_button("menuDef { }"), "menuDef { }");
+        // the main menu's options: a row after Server Protocol (that row is in the data set, not in re/source/assets)
+        if let Some(simple) = read("ui/options.menu") {
+            let sp = patch_gfx_button(&simple);
+            assert_eq!(sp.matches("text \"Graphics Setup...\"").count(), 1);
+            assert!(sp.contains("(Y+(12*(ELEM_H+ELEM_GAP)))") && sp.contains("uiScript gfxSetup"));
+        }
+        // the page parses and the button is in the options
+        let menu = port_gfx_menu("Intel HD Graphics 520", Some(false));
+        let mut r = |p: &str| match p {
+            PORT_GFX_MENU_FILE => Some(menu.clone()),
+            "ui/ingame_options.menu" => Some(patched.clone()),
+            _ => std::fs::read_to_string(repo.join(p)).ok(),
+        };
+        let files = vec![
+            "ui/ingame_options.menu".to_string(),
+            PORT_GFX_MENU_FILE.to_string(),
+        ];
+        let (menus, _) = load_menu_files(&files, &mut r).unwrap();
+        assert!(menus.iter().any(|m| m.name() == "port_gfx"));
+        assert!(format!(
+            "{:?}",
+            menus.iter().find(|m| m.name() == "ingame_options").unwrap()
+        )
+        .contains("Graphics Setup..."));
+    }
+
+    #[test]
+    fn the_dialog_text_follows_the_recommendation() {
+        let weak = port_gfx_menu("Intel HD Graphics 520", Some(false));
+        assert!(
+            weak.contains("Recommended for Intel HD Graphics 520")
+                && weak.contains("Looks like the original game. Smoother on this GPU.")
+                && weak.contains("Needs a stronger GPU.")
+        );
+        assert_eq!(weak.matches("Recommended for").count(), 1);
+        let strong = port_gfx_menu("NVIDIA GeForce RTX 4060", Some(true));
+        assert!(
+            strong.contains("Recommended for NVIDIA GeForce RTX 4060")
+                && !strong.contains("Smoother")
+                && !strong.contains("Needs a stronger")
+        );
+        let none = port_gfx_menu("", None);
+        assert!(!none.contains("Recommended") && none.contains("Set up for this PC. One click"));
     }
 
     #[test]

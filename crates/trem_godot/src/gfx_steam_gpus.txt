@@ -1,0 +1,181 @@
+# Every GPU name of the Steam Hardware Survey video card page (September 2026,
+# https://store.steampowered.com/hwsurvey/videocard/, all lists) with its PassMark G3D Mark
+# (https://www.videocardbenchmark.net/gpu_list.php), both read 2026-10-14.
+# tier: b below 1,250 (must be Classic), a above 2,500 (must be Enhanced), n between, u no score.
+a 28669 NVIDIA GeForce RTX 5070
+a 20613 NVIDIA GeForce RTX 5060
+a 21842 NVIDIA GeForce RTX 5060 Ti
+a 19481 NVIDIA GeForce RTX 4060
+a 16887 NVIDIA GeForce RTX 3060
+a 17315 NVIDIA GeForce RTX 4060 Laptop GPU
+a 12460 NVIDIA GeForce RTX 3050
+a 22592 NVIDIA GeForce RTX 4060 Ti
+a 16758 NVIDIA GeForce RTX 5060 Laptop GPU
+a 7868 NVIDIA GeForce GTX 1650
+a 26852 NVIDIA GeForce RTX 4070
+a 20213 NVIDIA GeForce RTX 3060 Ti
+a 35633 NVIDIA GeForce RTX 5080
+a 22065 NVIDIA GeForce RTX 3070
+a 32322 NVIDIA GeForce RTX 5070 Ti
+a 29941 NVIDIA GeForce RTX 4070 SUPER
+a 13092 NVIDIA GeForce RTX 3060 Laptop GPU
+a 14196 NVIDIA GeForce RTX 4050 Laptop GPU
+a 14071 NVIDIA GeForce RTX 2060
+a 2586 Intel Iris Xe Graphics
+u - AMD Radeon Graphics
+a 26924 AMD Radeon RX 9070 XT
+a 10017 NVIDIA GeForce GTX 1060
+a 24973 NVIDIA GeForce RTX 3080
+a 12655 NVIDIA GeForce GTX 1660 SUPER
+n 1541 Intel(R) UHD Graphics
+a 6367 NVIDIA GeForce GTX 1050 Ti
+a 31510 NVIDIA GeForce RTX 4070 Ti
+a 23163 NVIDIA GeForce RTX 3070 Ti
+a 19456 NVIDIA GeForce RTX 4070 Laptop GPU
+u - AMD Radeon(TM) Graphics
+a 12555 NVIDIA GeForce GTX 1660 Ti
+a 19663 AMD Radeon RX 9060 XT
+a 15038 AMD Radeon RX 6600
+a 16455 NVIDIA GeForce RTX 2060 SUPER
+a 31842 NVIDIA GeForce RTX 4070 Ti SUPER
+a 38032 NVIDIA GeForce RTX 4090
+a 10119 NVIDIA GeForce RTX 3050 6GB Laptop GPU
+a 19136 NVIDIA GeForce RTX 5070 Laptop GPU
+a 34206 NVIDIA GeForce RTX 4080 SUPER
+a 18124 NVIDIA GeForce RTX 2070 SUPER
+a 34438 NVIDIA GeForce RTX 4080
+n 1541 Intel UHD Graphics
+a 24472 AMD Radeon RX 7800 XT
+a 10057 NVIDIA GeForce RTX 3050 Ti Laptop GPU
+a 13509 NVIDIA GeForce GTX 1070
+a 7609 AMD Radeon RX 580 2048SP
+a 26736 NVIDIA GeForce RTX 3080 Ti
+a 16026 AMD Radeon RX 5700 XT
+a 19714 AMD Radeon RX 6700 XT
+a 8782 AMD Radeon RX 580
+a 5053 NVIDIA GeForce GTX 1050
+a 3267 Intel(R) Graphics
+a 16440 AMD Radeon RX 7600
+a 7730 NVIDIA GeForce RTX 2050
+a 11608 NVIDIA GeForce GTX 1660
+u - AMD Radeon (TM) Graphics
+a 22497 NVIDIA GeForce RTX 5070 Ti Laptop GPU
+a 16052 NVIDIA GeForce RTX 2070
+a 38990 NVIDIA GeForce RTX 5090
+a 31473 AMD Radeon RX 7900 XTX
+a 15002 NVIDIA GeForce RTX 3070 Laptop GPU
+a 14013 NVIDIA GeForce RTX 5050 Laptop GPU
+b 1038 Intel UHD Graphics 620
+a 15606 NVIDIA GeForce GTX 1080
+a 11966 NVIDIA GeForce RTX 3050 Laptop GPU
+a 7543 NVIDIA GeForce GTX 1650 Ti
+a 26469 NVIDIA GeForce RTX 3090
+a 7907 AMD Radeon RX 570
+a 29115 AMD Radeon RX 7900 XT
+a 18597 NVIDIA GeForce GTX 1080 Ti
+a 6727 AMD Radeon 780M Graphics
+n 1560 AMD Radeon Vega 8 Graphics
+a 16447 AMD Radeon RX 6600 XT
+a 5478 Intel Arc Graphics
+a 10191 NVIDIA GeForce GTX 1650 SUPER
+a 22773 AMD Radeon RX 7700 XT
+a 19388 NVIDIA GeForce RTX 2080 SUPER
+a 16745 NVIDIA GeForce RTX 5050
+a 17103 AMD Radeon RX 6650 XT
+a 20695 AMD Radeon RX 6750 XT
+b 1224 Intel UHD Graphics 630
+a 21404 NVIDIA GeForce RTX 2080 Ti
+a 25111 AMD Radeon RX 6800 XT
+a 17251 NVIDIA GeForce RTX 3070 Ti Laptop GPU
+a 25403 AMD Radeon RX 9070
+a 18574 NVIDIA GeForce RTX 2080
+a 2702 AMD Radeon RX 550
+n 2394 NVIDIA GeForce GT 1030
+a 14679 NVIDIA GeForce GTX 1070 Ti
+a 9614 AMD Radeon RX 6500 XT
+a 24765 NVIDIA GeForce RTX 4080 Laptop GPU
+b 859 Intel HD Graphics 520
+b 890 AMD Radeon Vega 3 Graphics
+b 917 Intel HD Graphics 620
+a 9636 NVIDIA GeForce GTX 970
+a 2948 Steam Deck GPU
+b 340 Intel HD Graphics 4000
+b 340 Intel Ivy Bridge
+b 631 Intel Haswell
+u - Intel Cherryview Cherrytrail
+u - Intel Valleyview Baytrail
+b 136 ATI Radeon HD 5450
+b 198 AMD Radeon HD 6450
+u - Intel HD Graphics 2500
+b 439 ATI Mobility Radeon HD 5000 Series
+n 1345 ATI Radeon HD 5700 Series
+b 733 AMD Radeon HD 6670
+n 1273 AMD Radeon HD 6700 Series
+b 551 AMD Radeon HD 6570
+b 407 AMD Radeon HD 7400M Series
+n 1928 AMD Radeon HD 6800 Series
+a 13753 AMD Radeon 6600M and 6700M Series
+b 596 Intel Broadwell
+a 2590 AMD Radeon HD 6900 Series
+n 1944 ATI Radeon HD 5800 Series
+b 802 ATI Radeon HD 5670
+b 474 ATI Radeon HD 5570
+b 275 AMD Radeon HD 6300M Series
+b 122 AMD Radeon HD 6310
+b 608 AMD Radeon HD 7500/7600 Series
+b 261 Intel Sandy Bridge
+b 261 Intel HD Graphics 3000
+b 146 NVIDIA GeForce 210
+b 244 Intel Ironlake Arrandale
+b 213 Intel HD Graphics 2000
+b 244 Intel Ironlake Clarkdale
+b 167 NVIDIA GeForce G210
+b 221 NVIDIA GeForce GT 220
+b 471 NVIDIA GeForce GT 240
+b 193 NVIDIA GeForce 9500 GT
+b 468 NVIDIA GeForce 9600 GT
+b 130 NVIDIA GeForce 310M
+u - ATI 760G
+b 170 NVIDIA GeForce 8400 GS
+b 555 NVIDIA GeForce 8800 GTX
+b 439 NVIDIA GeForce 9800 GT
+b 165 AMD Radeon HD 4350
+b 562 NVIDIA GeForce GTS 250
+b 111 AMD Radeon HD 4200
+b 197 NVIDIA GeForce 9400 GT
+b 219 NVIDIA GeForce GT 330M
+b 44 Mobile Intel 4 Series Express
+b 149 ATI Mobility Radeon HD 4570
+b 117 NVIDIA GeForce 405
+b 90 ATI Mobility Radeon HD 4200
+b 120 NVIDIA GeForce 315M
+b 248 AMD Radeon HD 4650
+b 381 AMD Radeon HD 4670
+b 122 AMD Radeon HD 4250
+b 112 NVIDIA GeForce 6800
+b 32 NVIDIA GeForce 7025
+b 2 Intel Graphics Media Accelerator 3150
+b 73 ATI Radeon 3100
+u - Intel Graphics Media Accelerator 3600 Series
+b 122 NVIDIA GeForce 7300 GT
+b 49 ATI Radeon X1600
+b 39 NVIDIA GeForce 7300 SE
+b 262 NVIDIA GeForce 7900 GS
+b 32 NVIDIA GeForce 6200 LE
+b 18 NVIDIA GeForce 7150M
+b 24 NVIDIA GeForce 6150 SE
+b 19 NVIDIA GeForce Go 6150
+b 48 ATI Mobility Radeon X2300
+b 84 ATI Radeon X800
+b 42 ATI Mobility Radeon X1400
+b 51 NVIDIA GeForce 7100 GS
+b 27 NVIDIA GeForce 6100
+b 84 ATI Radeon X1650
+b 39 ATI Mobility Radeon X1350
+b 81 NVIDIA GeForce 7300 LE
+b 9 Intel 82945G Express
+b 30 Intel G33/G31 Express
+b 5 Mobile Intel 945GM Express
+b 55 Intel Q35 Express
+b 42 ATI Radeon Xpress 1250
+b 2 Intel 946GZ Express

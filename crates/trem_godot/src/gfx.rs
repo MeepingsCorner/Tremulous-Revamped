@@ -151,6 +151,237 @@ impl RtBackend {
     }
 }
 
+// =====================================================================
+// the first-run graphics choice (the "Graphics" dialog of menus.rs)
+// =====================================================================
+
+/// Adapters below about PassMark G3D Mark 1,250, where the enhanced mode
+/// (`r_enhanced 1`) stays under 60 fps at 1280x720 and Classic does not
+/// (measured on atcs with bots: Intel HD 520 34.8 enhanced / 81.7 Classic,
+/// HD 4600 16.3 / 37.2). The line is the estimate of
+/// https://github.com/MeepingsCorner/Tremulous-Revamped/issues/3.
+///
+/// The rules come from joining every GPU name of the Steam Hardware Survey
+/// (https://store.steampowered.com/hwsurvey/videocard/, September 2026) with
+/// its G3D Mark (https://www.videocardbenchmark.net/gpu_list.php), both read
+/// 2026-10-14: each names a family whose parts score below the line or close
+/// to it, none above G3D 2,500 (the test runs the whole list).
+///
+/// A rule is words found in a row in the adapter's words (lowercase, "(R)",
+/// "(TM)" and the word "graphics" removed): a word is alternatives split by
+/// '|', where '#' is a digit, '[a-b]' a character in the range, '*' the rest
+/// of the word, and a lone '$' the end of the name or a "(codename)".
+const CLASSIC_GPUS: &[&str] = &[
+    // NVIDIA, Curie to Maxwell entry parts: GeForce 210 / 940M / 9500, GT 730M, GTX 2xx / 5xxM
+    "geforce [1-6]##*|7[0-4]#*|8##*|9[0-4]#*|[2-9]###*|g###*|go|fx|pcx",
+    "geforce g|gt|gts [1-8]##|[1-8]##a|[1-8]##m*",
+    "geforce gtx 2##|[2-5]##m|6[0-7]#m|7[0-6]#m",
+    "quadro fx|nvs",
+    "quadro k420|k510m|k600|k610m|k620m|k1000m|k1100m|k2000m",
+    "nvs ###*",
+    // AMD / ATI: Radeon HD 2000-8000 up to x6xx, X / Xpress / 3000 IGPs, R2-R6, low R7, Vega 2 / 3
+    "radeon hd [2-4]###*",
+    "radeon hd [5-8][0-6]##*",
+    "radeon hd 7730|7730m|7750m",
+    "radeon x*|3###*",
+    "radeon r2|r3|r4|r5|r6",
+    "radeon r7 $|2[0-5]#|340|430|m*",
+    "vega 2|3",
+    "firegl v####|t*|x*",
+    "ati|amd [7-8]##g*|cedar|caicos|palm|sumo*|redwood|turks|rv[1-7]##|rs[0-9]##",
+    // Intel: HD, UHD 6xx / 710, Iris 5100 / 6100 / Pro 5200, the old Mesa codenames, GMA chipsets
+    "intel hd",
+    "intel uhd 6##|71#",
+    "iris 5100|6100",
+    "iris pro 5200|6100",
+    "intel ironlake|sandy*|ivy*|haswell|broadwell|bay*|valleyview|cherry*",
+    "intel * express",
+    "intel * * express",
+    "intel 4 series",
+    "intel gma*|media",
+];
+
+/// Software rasterizers (no GPU): always Classic.
+const CLASSIC_SOFTWARE: &[&str] = &[
+    "llvmpipe",
+    "softpipe",
+    "swrast",
+    "swiftshader",
+    "basic render",
+];
+
+/// The adapter name's words: lowercase, "(R)" / "(TM)" and "graphics"
+/// removed, '/' a separator ("GeForce GT 730/PCIe/SSE2"), edge punctuation
+/// trimmed (a leading '(' stays).
+fn gpu_words(name: &str) -> Vec<String> {
+    let n = name
+        .to_ascii_lowercase()
+        .replace("(r)", "")
+        .replace("(tm)", "")
+        .replace('/', " ");
+    n.split_whitespace()
+        .map(|w| {
+            w.trim_start_matches(|c: char| !c.is_ascii_alphanumeric() && c != '(')
+                .trim_end_matches(|c: char| !c.is_ascii_alphanumeric())
+                .to_string()
+        })
+        .filter(|w| !w.is_empty() && w != "graphics")
+        .collect()
+}
+
+/// One word against one alternative of a rule word (see `CLASSIC_GPUS`).
+fn glob(p: &[u8], w: &[u8]) -> bool {
+    match (p.first(), w.first()) {
+        (Some(b'*'), _) => true,
+        (None, None) => true,
+        (Some(b'#'), Some(c)) => c.is_ascii_digit() && glob(&p[1..], &w[1..]),
+        (Some(b'['), Some(c)) if p.len() > 4 => (p[1]..=p[3]).contains(c) && glob(&p[5..], &w[1..]),
+        (Some(a), Some(c)) => a == c && glob(&p[1..], &w[1..]),
+        _ => false,
+    }
+}
+
+/// Does the rule's word sequence occur in the adapter's words?
+fn rule_hits(rule: &str, w: &[String]) -> bool {
+    let pat: Vec<&str> = rule.split(' ').collect();
+    (0..w.len()).any(|s| {
+        pat.iter().enumerate().all(|(k, p)| {
+            let x = w.get(s + k);
+            p.split('|').any(|a| match x {
+                _ if a == "$" => x.map_or(true, |x| x.starts_with('(')),
+                Some(x) => glob(a.as_bytes(), x.as_bytes()),
+                None => false,
+            })
+        })
+    })
+}
+
+/// NVK / nouveau on an NVIDIA GPU older than Turing ("... (NVK GK208)", or
+/// nouveau's bare "NV117" chipset id, hex, Turing from NV160): no
+/// reclocking there, so even strong cards run slowly (NVK on Kepler /
+/// Maxwell measured 2.4 fps).
+fn nouveau_pre_turing(w: &[String]) -> bool {
+    w.iter().enumerate().any(|(i, s)| {
+        if s == "(nvk" {
+            let chip = w.get(i + 1).map_or("", |c| c.as_str());
+            !["tu", "ga", "ad", "gb", "gh"]
+                .iter()
+                .any(|t| chip.starts_with(t))
+        } else {
+            (4..=5).contains(&s.len())
+                && s.starts_with("nv")
+                && u32::from_str_radix(&s[2..], 16).map_or(false, |n| n < 0x160)
+        }
+    })
+}
+
+/// Is the adapter below the line (see `CLASSIC_GPUS`)?
+pub fn classic_gpu(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    if CLASSIC_SOFTWARE.iter().any(|s| lower.contains(s)) {
+        return true;
+    }
+    let w = gpu_words(name);
+    nouveau_pre_turing(&w) || CLASSIC_GPUS.iter().any(|r| rule_hits(r, &w))
+}
+
+/// The mode recommended for the adapter: `Some(false)` Classic, `Some(true)`
+/// Enhanced, `None` when the name is empty (unknown: Enhanced stays the
+/// default and nothing is recommended).
+pub fn recommended_enhanced(name: &str) -> Option<bool> {
+    if name.trim().is_empty() {
+        None
+    } else {
+        Some(!classic_gpu(name))
+    }
+}
+
+/// The adapter name as the dialog shows it: no "(R)" / "(TM)", no leading
+/// "Mesa", no trailing "(codename)", at most 40 characters, and nothing the
+/// menu script's quoting would trip over.
+pub fn gpu_display_name(name: &str) -> String {
+    let mut n = name
+        .replace("(R)", "")
+        .replace("(TM)", "")
+        .replace("(r)", "")
+        .replace("(tm)", "");
+    n = n
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '"' | ';' | '{' | '}') {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect();
+    let mut n = n.split_whitespace().collect::<Vec<_>>().join(" ");
+    if n.to_ascii_lowercase().starts_with("mesa ") {
+        n = n[5..].to_string();
+    }
+    if n.ends_with(')') {
+        if let Some(i) = n.rfind(" (") {
+            n.truncate(i);
+        }
+    }
+    n.chars().take(40).collect::<String>().trim().to_string()
+}
+
+/// The `r_enhanced` the dialog treats as the player's own choice: the
+/// command line's (`+set r_enhanced X`, for that run), else the config's
+/// when `ui_gfxChosen` is 1. The game archives `r_enhanced` after every
+/// first run, so a saved value alone says nothing about a choice.
+pub fn player_choice(config: Option<i32>, chosen: bool, cmdline: Option<i32>) -> Option<i32> {
+    cmdline.or(config.filter(|_| chosen))
+}
+
+/// `r_enhanced` as the command line sets it (`+set|seta|sets r_enhanced X`; the last one counts).
+pub fn cmdline_enhanced(startup: &[String]) -> Option<i32> {
+    startup.iter().rev().find_map(|l| {
+        let mut w = l.split_whitespace();
+        let cmd = w.next()?.to_ascii_lowercase();
+        if !matches!(cmd.as_str(), "set" | "seta" | "sets" | "setu") {
+            return None;
+        }
+        if !w.next()?.eq_ignore_ascii_case("r_enhanced") {
+            return None;
+        }
+        let v = w.next()?.trim_matches('"');
+        Some(v.parse::<f32>().map(|f| f as i32).unwrap_or(0))
+    })
+}
+
+/// What the dialog is built from: the adapter, its recommendation and the
+/// first selection. A mode the player chose is never replaced: the dialog
+/// starts on it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GfxSetup {
+    /// the adapter name as shown ("" unknown)
+    pub gpu: String,
+    /// the recommended mode (`recommended_enhanced`)
+    pub recommended: Option<bool>,
+    /// the first selection: the player's own `r_enhanced`, else the recommendation, else Enhanced
+    pub preselect: bool,
+    /// the dialog was shown this run
+    pub offered: bool,
+}
+
+impl GfxSetup {
+    /// `device`: the adapter name; `player`: the player's own choice
+    /// (`player_choice`), None when they have made none.
+    pub fn new(device: &str, player: Option<i32>) -> Self {
+        let recommended = recommended_enhanced(device);
+        GfxSetup {
+            gpu: gpu_display_name(device),
+            recommended,
+            preselect: player
+                .map(|v| v != 0)
+                .unwrap_or_else(|| recommended.unwrap_or(true)),
+            offered: false,
+        }
+    }
+}
+
 /// What the GPU found at startup can do.
 #[derive(Clone, Debug, Default)]
 pub struct GpuCaps {
@@ -635,6 +866,193 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_rules_name_the_gpus_below_the_line() {
+        for n in [
+            "Intel(R) HD Graphics 4600",
+            "Intel(R) HD Graphics 520 (SKL GT2)",
+            "Mesa Intel(R) HD Graphics 4600 (HSW GT2)",
+            "Intel HD Graphics 530",
+            "Intel(R) HD Graphics",
+            "Intel(R) UHD Graphics 620",
+            "Intel(R) UHD Graphics 630 (CFL GT2)",
+            "AMD Radeon(TM) Vega 3 Graphics",
+            "AMD Radeon Vega 3 Graphics (RADV RAVEN)",
+            "AMD Radeon R7 Graphics (RADV KAVERI)",
+            "NVIDIA GeForce GT 730M",
+            "GeForce GT 730/PCIe/SSE2",
+            "NVIDIA GeForce GT 730A",
+            "AMD Radeon(TM) R4 Graphics",
+            "AMD Radeon R2 Graphics",
+            "NVIDIA Quadro K600",
+            "AMD Radeon HD 7750M",
+            "GeForce GT 730M (NVK GK208)",
+            "NVIDIA GeForce GTX 1080 (NVK GP104)",
+            "NV117",
+            "NVIDIA GeForce 940M",
+            "llvmpipe (LLVM 19.1.7, 256 bits)",
+            "Microsoft Basic Render Driver",
+        ] {
+            assert!(classic_gpu(n), "{n}");
+            assert_eq!(recommended_enhanced(n), Some(false), "{n}");
+        }
+    }
+
+    #[test]
+    fn the_rules_leave_the_rest_on_enhanced() {
+        for n in [
+            "Intel(R) UHD Graphics",
+            "Intel(R) UHD Graphics 750",
+            "Intel(R) UHD Graphics (TGL GT1)",
+            "Intel(R) Iris(R) Xe Graphics",
+            "Intel(R) Arc(TM) Graphics",
+            "AMD Radeon(TM) Vega 8 Graphics",
+            "AMD Radeon RX Vega 56",
+            "AMD Radeon 680M",
+            "AMD Custom GPU 0405",
+            "NVIDIA GeForce GTX 1650",
+            "NVIDIA GeForce GT 1030",
+            "GeForce GT 1030/PCIe/SSE2",
+            "NVIDIA Quadro K4200",
+            "NVIDIA Quadro K620",
+            "NVIDIA RTX A2000 Laptop GPU",
+            "NVIDIA GeForce RTX 3060 (NVK GA106)",
+            "NV162",
+            "Apple M2",
+        ] {
+            assert!(!classic_gpu(n), "{n}");
+            assert_eq!(recommended_enhanced(n), Some(true), "{n}");
+        }
+    }
+
+    #[test]
+    fn every_steam_survey_gpu_gets_the_mode_of_its_passmark_tier() {
+        let (mut below, mut above, mut other) = ((0, 0), (0, 0), Vec::new());
+        for l in include_str!("gfx_steam_gpus.txt").lines() {
+            if l.starts_with('#') {
+                continue;
+            }
+            let mut f = l.splitn(3, ' ');
+            let (tier, g3d, name) = (f.next().unwrap(), f.next().unwrap(), f.next().unwrap());
+            let classic = classic_gpu(name);
+            match tier {
+                "b" => below = (below.0 + classic as u32, below.1 + 1),
+                "a" => above = (above.0 + !classic as u32, above.1 + 1),
+                _ => other.push(format!(
+                    "{name} ({g3d}): {}",
+                    if classic { "Classic" } else { "Enhanced" }
+                )),
+            }
+            assert!(
+                tier != "b" || classic,
+                "below the line, not Classic: {name} ({g3d})"
+            );
+            assert!(
+                tier != "a" || !classic,
+                "above the line, not Enhanced: {name} ({g3d})"
+            );
+        }
+        println!(
+            "below -> Classic {}/{}, above -> Enhanced {}/{}",
+            below.0, below.1, above.0, above.1
+        );
+        println!("near / unscored: {}", other.join("; "));
+        assert!(below.1 > 50 && above.1 > 50);
+    }
+
+    #[test]
+    fn an_unknown_gpu_name_recommends_nothing() {
+        assert_eq!(recommended_enhanced(""), None);
+        assert_eq!(recommended_enhanced("   "), None);
+        let s = GfxSetup::new("", None);
+        assert!(s.preselect && s.recommended.is_none() && s.gpu.is_empty());
+    }
+
+    #[test]
+    fn a_saved_r_enhanced_is_a_choice_only_with_the_flag_or_on_the_command_line() {
+        let weak = "Intel(R) HD Graphics 520 (SKL GT2)";
+        // an existing config: the game archived r_enhanced 1, ui_gfxChosen never set -> the recommendation
+        let p = player_choice(Some(1), false, None);
+        assert_eq!(p, None);
+        let s = GfxSetup::new(weak, p);
+        assert_eq!(
+            (s.recommended, s.preselect),
+            (Some(false), false),
+            "Classic pre-selected"
+        );
+        // the flag is set -> the player's value, whatever the GPU
+        let p = player_choice(Some(1), true, None);
+        assert_eq!(p, Some(1));
+        assert!(GfxSetup::new(weak, p).preselect);
+        assert!(
+            !GfxSetup::new(
+                "NVIDIA GeForce RTX 4060",
+                player_choice(Some(0), true, None)
+            )
+            .preselect
+        );
+        // the command line wins, flag or not, and over the config's value
+        assert_eq!(player_choice(Some(0), false, Some(1)), Some(1));
+        assert_eq!(player_choice(Some(0), true, Some(1)), Some(1));
+        assert_eq!(player_choice(None, false, Some(0)), Some(0));
+        assert!(GfxSetup::new(weak, player_choice(Some(0), false, Some(1))).preselect);
+        // no config, no flag, no command line
+        assert_eq!(player_choice(None, true, None), None);
+        // parsing the command line's lines
+        let l = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(cmdline_enhanced(&l(&["set r_enhanced 0"])), Some(0));
+        assert_eq!(
+            cmdline_enhanced(&l(&["set R_Enhanced 1", "set r_enhanced \"2\""])),
+            Some(2)
+        );
+        assert_eq!(cmdline_enhanced(&l(&["seta r_enhanced 1"])), Some(1));
+        assert_eq!(
+            cmdline_enhanced(&l(&[
+                "set r_enhancedx 1",
+                "set r_hdTextures 0",
+                "connect h:1",
+                "set r_enhanced"
+            ])),
+            None
+        );
+        assert_eq!(cmdline_enhanced(&[]), None);
+    }
+
+    #[test]
+    fn the_dialog_never_overrides_a_value_the_player_set() {
+        // a weak GPU: Classic recommended, preselected on a first run
+        let weak = "Intel(R) HD Graphics 520 (SKL GT2)";
+        let first = GfxSetup::new(weak, None);
+        assert_eq!((first.recommended, first.preselect), (Some(false), false));
+        // the player's config says Enhanced: the dialog starts on it, whatever the GPU
+        let kept = GfxSetup::new(weak, Some(1));
+        assert!(kept.preselect, "r_enhanced 1 stays selected on a weak GPU");
+        assert_eq!(GfxSetup::new(weak, Some(2)).preselect, true);
+        // and Classic stays selected on a strong one
+        let strong = "NVIDIA GeForce RTX 4060";
+        assert_eq!(GfxSetup::new(strong, None).preselect, true);
+        assert_eq!(GfxSetup::new(strong, Some(0)).preselect, false);
+        // an unknown name does not change a player's value either
+        assert_eq!(GfxSetup::new("", Some(0)).preselect, false);
+    }
+
+    #[test]
+    fn the_adapter_name_is_shown_short_and_menu_safe() {
+        assert_eq!(
+            gpu_display_name("Mesa Intel(R) HD Graphics 520 (SKL GT2)"),
+            "Intel HD Graphics 520"
+        );
+        assert_eq!(
+            gpu_display_name("NVIDIA GeForce RTX 4060"),
+            "NVIDIA GeForce RTX 4060"
+        );
+        assert_eq!(
+            gpu_display_name("evil \"name\"; { close }"),
+            "evil name close"
+        );
+        assert!(gpu_display_name(&"x".repeat(100)).len() <= 40);
+    }
+
+    #[test]
     fn rt_mode_follows_the_gpu() {
         let nv = GpuCaps { vendor: "NVIDIA".into(), device: "NVIDIA GeForce RTX 4060".into(), driver: "vulkan".into(), hw_rt: true, compute: true };
         let amd = GpuCaps { vendor: "AMD".into(), device: "AMD Radeon RX 7800 XT".into(), driver: "vulkan".into(), hw_rt: true, compute: true };
@@ -691,6 +1109,8 @@ mod tests {
 #[derive(Default)]
 pub struct GfxRuntime {
     pub caps: Option<GpuCaps>,
+    /// the player's own `r_enhanced` (`gfx::player_choice`; None: none made): the graphics dialog never replaces it
+    pub player_enhanced: Option<i32>,
     pub env: Option<Gd<Environment>>,
     pub vanilla: Option<VanillaEnv>,
     /// build_level's sun and the lights over the reactor / overmind: the
