@@ -32,6 +32,19 @@ unzip it anywhere and run `Tremulous.exe`. For the 4K textures, also unzip
 both `tremulous-revamped-hd-textures-part*.zip` files into the same folder,
 so an `hd` folder sits next to `Tremulous.exe`.
 
+**Just play (Linux x86_64):** download `Tremulous-Revamped-linux-x86_64.zip`
+([release v1.0-linux.1](https://github.com/luuvasara/tremulous-revamped-linux/releases/tag/v1.0-linux.1)), unzip it anywhere and run `./Tremulous.x86_64`. It needs
+glibc 2.28 or newer (Ubuntu 18.10+, Debian 10+, Fedora 29+, RHEL 8+, Arch,
+SteamOS), a Vulkan 1.1 or OpenGL 3.3 driver and X11 or Wayland; sound uses
+Godot's audio (FMOD and Steam Audio are Windows-only). The `hd` folder works
+the same way as on Windows, and the Linux files can be unzipped into the
+same folder as the Windows zip (one `base/`, one `Tremulous.pck`). To build
+the zip yourself: `tools/build_release.sh`, which builds `libtrem_godot.so`
+against glibc 2.28 with zig as the C toolchain, exports with the `Linux`
+preset in `godot/export_presets.cfg` and writes a reproducible zip
+(`--combined` optionally also writes one zip holding both systems);
+`tools/test-matrix.sh <zip>` checks one in distro containers.
+
 **From source:**
 
 1. Install Godot **4.7** (standard build).

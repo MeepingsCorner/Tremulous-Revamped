@@ -1,0 +1,20 @@
+Tremulous Revamped (Windows x64 and Linux x86_64)
+=================================================
+
+Play: unzip anywhere, then
+  Windows: run Tremulous.exe
+  Linux:   run ./Tremulous.x86_64   (if it does not start: chmod +x Tremulous.x86_64)
+Both share one base/ folder and the same Tremulous.pck.
+
+Linux requirements: 64-bit Linux with glibc @REQ@ or newer, a Vulkan 1.1 or
+OpenGL 3.3 driver, X11 or Wayland. Sound on Linux uses Godot's own audio (the FMOD
+and Steam Audio files fmod.dll, phonon*.dll, trem_audio.dll are Windows-only).
+
+4K textures (optional): download both tremulous-revamped-hd-textures zips from
+the Tremulous-Revamped GitHub release "hd-textures-v1" and unzip them into this
+folder, so you get an "hd" folder next to the executable (used by both systems).
+
+base/ holds the original Tremulous 1.1 content (see base/COPYING, base/CC and
+base/README.txt).
+Source code: https://github.com/MeepingsCorner/Tremulous-Revamped (this port);
+the original Tremulous code it is ported from: https://github.com/darklegion/tremulous-legacy
