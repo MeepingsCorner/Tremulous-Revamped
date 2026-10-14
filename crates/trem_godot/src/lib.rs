@@ -14,6 +14,9 @@ mod mapents;
 mod marks;
 mod menumodel;
 mod menus;
+mod http; // HTTP GET on the engine HTTPClient + TLS (dec065)
+mod json; // a small JSON reader for the release list (dec065)
+mod news; // the News page: cl_newsURL, the release list, parsing (dec065)
 mod md3;
 mod models;
 mod game;
