@@ -134,6 +134,17 @@ enum CurrentMap {
     Bsp(Vec<String>, String),
 }
 
+/// What the host-time status waits for (dec076).
+struct HostReport {
+    map: String,
+    port: u16,
+    started: std::time::Instant,
+    fw: Option<(crate::hoststatus::Fw, crate::firewall::Verdict)>,
+    router: Option<crate::hoststatus::Router>,
+    upnp_on: bool,
+    ask: bool,
+}
+
 #[derive(GodotClass)]
 #[class(base=Node3D)]
 pub struct TremGame {
@@ -252,7 +263,14 @@ pub struct TremGame {
     /// player's dialog answer; the elevated fix running on its thread
     firewall_started: bool,
     firewall_asked: bool,
-    firewall_choice: Option<std::sync::mpsc::Receiver<i64>>,
+    firewall_choice: Option<std::sync::mpsc::Receiver<Option<i64>>>,
+    /// dec076: the status being collected for a hosted game (it may ask), not for startup
+    host_report: Option<HostReport>,
+    /// the last router answer and the last printed status (a late answer updates it)
+    router_last: Option<crate::hoststatus::Router>,
+    last_status: Option<crate::hoststatus::Status>,
+    /// the question being shown natively, kept for Godot's dialog if the native one fails
+    firewall_prompt: Option<crate::firewall::Prompt>,
     firewall_fixing: Option<std::sync::mpsc::Receiver<Result<(), String>>>,
     missiles: HashMap<usize, MissileVis>,
     flashes: Vec<(Gd<godot::classes::OmniLight3D>, f64)>,
@@ -380,6 +398,10 @@ impl INode3D for TremGame {
             firewall_started: false,
             firewall_asked: false,
             firewall_choice: None,
+            host_report: None,
+            router_last: None,
+            last_status: None,
+            firewall_prompt: None,
             firewall_fixing: None,
             missiles: HashMap::new(),
             flashes: Vec::new(),
@@ -4118,11 +4140,14 @@ impl TremGame {
     /// A cvar from the server side (rotation / console sets), else the client's.
     /// dec046: a network server asks the router to forward its port
     /// (`net_upnp`, on unless 0), on a thread; once per server.
+    fn upnp_enabled(&self) -> bool {
+        !self
+            .net_cvar("net_upnp")
+            .is_some_and(|v| trem_sim::kernel::spawn::c_atoi(&v) == 0)
+    }
+
     fn upnp_start(&mut self) {
-        if self.upnp_pending.is_some() || self.upnp_map.is_some() {
-            return;
-        }
-        if self.net_cvar("net_upnp").is_some_and(|v| trem_sim::kernel::spawn::c_atoi(&v) == 0) {
+        if self.upnp_pending.is_some() || self.upnp_map.is_some() || !self.upnp_enabled() {
             return;
         }
         let Some(port) = self.nethost.as_ref().and_then(|n| n.net.port(trem_sim::kernel::netchan::NetSrc::Server)) else { return };
@@ -4131,24 +4156,109 @@ impl TremGame {
             let _ = tx.send(crate::upnp::map_udp(port, "Tremulous"));
         });
         self.upnp_pending = Some(rx);
-        self.host_say(format!("UPnP: asking the router to forward UDP {port} for internet players..."));
     }
 
+    /// The router's answer: kept for the status (and the mapping to take back).
     fn upnp_poll(&mut self) {
         let Some(rx) = self.upnp_pending.as_ref() else { return };
         let Ok(r) = rx.try_recv() else { return };
         self.upnp_pending = None;
-        match r {
-            Ok(m) => {
-                match m.external_ip.as_deref() {
-                    Some(ip) if crate::upnp::is_private(ip) => self.host_say(format!("UPnP: the router forwards UDP {} to {}, but its own internet address {ip} is private: it sits behind another router or the provider's CGNAT, so internet players cannot reach it (forward the port on the other router too, or ask the provider for a public IP)", m.port, m.local_ip)),
-                    Some(ip) => self.host_say(format!("UPnP: the router forwards UDP {} to this PC: internet players can join at {ip}:{} (connect {ip}:{})", m.port, m.port, m.port)),
-                    None => self.host_say(format!("UPnP: the router forwards UDP {} to this PC ({}); internet players join at your public IP, port {}", m.port, m.local_ip, m.port)),
-                }
-                self.upnp_map = Some(m);
-            }
-            Err(e) => self.host_say(format!("UPnP: {e}. For internet players forward UDP {} in the router to this PC by hand.", self.nethost.as_ref().and_then(|n| n.net.port(trem_sim::kernel::netchan::NetSrc::Server)).unwrap_or(trem_sim::kernel::netchan::PORT_SERVER))),
+        let router = crate::hoststatus::Router::from_result(&r);
+        godot_print!("UPnP: {r:?}");
+        if let Ok(m) = r {
+            self.upnp_map = Some(m);
         }
+        self.router_last = Some(router.clone());
+        if let Some(rep) = self.host_report.as_mut() {
+            rep.router = Some(router);
+        } else if let Some(st) = self.last_status.as_mut() {
+            // the dialog did not wait for it (4 s): say it once it is known
+            st.router = router;
+            let line = st.router_line();
+            self.host_say(format!("Update: {line}"));
+        }
+    }
+
+    /// A status to collect for the game being hosted (`ask`: the dialog may open).
+    fn new_host_report(&self, ask: bool) -> HostReport {
+        let upnp_on = self.upnp_enabled();
+        let router = if !upnp_on {
+            Some(crate::hoststatus::Router::Off)
+        } else if self.upnp_map.is_some() {
+            self.router_last.clone()
+        } else {
+            None
+        };
+        HostReport {
+            map: self.view_map.clone().unwrap_or_default(),
+            port: self
+                .nethost
+                .as_ref()
+                .and_then(|n| n.net.port(trem_sim::kernel::netchan::NetSrc::Server))
+                .unwrap_or(trem_sim::kernel::netchan::PORT_SERVER),
+            started: std::time::Instant::now(),
+            fw: (!cfg!(windows)).then(|| {
+                (
+                    crate::hoststatus::Fw::NotApplicable,
+                    crate::firewall::Verdict::Unknown("not Windows".into()),
+                )
+            }),
+            router,
+            upnp_on,
+            ask,
+        }
+    }
+
+    /// Prints the status (and asks) once the firewall has answered and the
+    /// router has, or UPnP is off, or 4 s have passed (dec076).
+    fn host_report_poll(&mut self) {
+        let Some(r) = self.host_report.as_ref() else {
+            return;
+        };
+        if !crate::hoststatus::ready(
+            r.fw.is_some(),
+            r.router.is_some(),
+            r.upnp_on,
+            r.started.elapsed().as_secs_f64(),
+        ) {
+            return;
+        }
+        let Some(r) = self.host_report.take() else {
+            return;
+        };
+        let Some((fw, verdict)) = r.fw else { return };
+        let router = r.router.unwrap_or(crate::hoststatus::Router::NoAnswer);
+        let st = crate::hoststatus::Status {
+            map: r.map,
+            port: r.port,
+            fw,
+            router,
+            addrs: crate::hoststatus::order_addrs(
+                &trem_sim::kernel::netchan::local_ipv4(),
+                crate::upnp::default_route_ip(),
+            ),
+        };
+        for l in st.console() {
+            self.host_say(l);
+        }
+        let asked = self.firewall_asked || self.firewall_choice.is_some();
+        let setting = self.client.cvars.integer("net_firewallPrompt") as i64;
+        if crate::firewall::should_ask(
+            &verdict,
+            setting,
+            asked,
+            self.firewall_fixing.is_some(),
+            r.ask,
+        ) {
+            let exe = std::env::current_exe()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            if let Some(p) = st.prompt(&exe) {
+                self.firewall_asked = true;
+                self.firewall_ask(p);
+            }
+        }
+        self.last_status = Some(st);
     }
 
     /// dec047: asks Windows (on a thread) whether other PCs can reach the hosted game.
@@ -4163,32 +4273,41 @@ impl TremGame {
         self.firewall_pending = Some(rx);
     }
 
-    /// dec054: at startup the firewall is checked like a hosted game's
-    /// (the LAN scan's answers need the inbound rule too); when other PCs
-    /// cannot reach the game, Windows' own dialog asks the player once a
-    /// run (net_firewallPrompt 0: never).
+    /// dec076: the startup check is silent (a line in the log and console,
+    /// no dialog). The question is asked when the player hosts a network
+    /// game (`firewall_host_check`): the moment friends need the rule.
+    /// net_firewallPrompt 0 (archived; also what the old startup prompt's
+    /// "Don't ask again" saved) means "Don't ask when I host".
     fn firewall_frame(&mut self) {
         if !std::mem::replace(&mut self.firewall_started, true) {
-            self.client.cvars.get("net_firewallPrompt", "1", crate::cmd::CVAR_ARCHIVE);
-            if self.client.cvars.integer("net_firewallPrompt") != 0 {
-                self.firewall_start();
-            }
+            self.client
+                .cvars
+                .get("net_firewallPrompt", "1", crate::cmd::CVAR_ARCHIVE);
+            self.firewall_start();
         }
         if self.nethost.is_none() {
             // net_process polls while a network game runs
             self.firewall_poll();
         }
         if let Some(rx) = self.firewall_choice.as_ref() {
-            if let Ok(i) = rx.try_recv() {
+            if let Ok(a) = rx.try_recv() {
                 self.firewall_choice = None;
-                match i {
-                    0 => {
+                let Some(a) = a else {
+                    // the native dialog could not be shown: Godot's own, same question
+                    if let Some(p) = self.firewall_prompt.take() {
+                        self.firewall_ask_godot(&p);
+                    }
+                    return;
+                };
+                self.firewall_prompt = None;
+                match a {
+                    crate::firewall::ANSWER_ALLOW => {
                         let out = self.firewall_allow();
                         self.host_say(out.trim_end().to_string());
                     }
-                    2 => {
+                    crate::firewall::ANSWER_NEVER => {
                         self.client.cvars.set("net_firewallPrompt", "0");
-                        self.host_say("Windows Firewall: not asking again (set net_firewallPrompt 1 to be asked, or type firewall_allow)".into());
+                        self.host_say("Windows Firewall: not asking when you host (set net_firewallPrompt 1 to be asked again, or type firewall_allow)".into());
                     }
                     _ => {}
                 }
@@ -4199,13 +4318,25 @@ impl TremGame {
                 self.firewall_fixing = None;
                 match r {
                     Ok(()) => {
-                        self.host_say("Windows Firewall: Tremulous is allowed in; checking again".into());
+                        self.host_say(
+                            "Windows Firewall: the rule was added; checking again".into(),
+                        );
+                        self.host_report = Some(self.new_host_report(false));
                         self.firewall_start();
                     }
                     Err(e) => self.host_say(format!("Windows Firewall: {e}")),
                 }
             }
         }
+    }
+
+    /// dec076: a network game was started: check the firewall and, when other
+    /// PCs cannot reach it, ask (once a run, unless the player said never).
+    fn firewall_host_check(&mut self) {
+        self.client
+            .cvars
+            .get("net_firewallPrompt", "1", crate::cmd::CVAR_ARCHIVE);
+        self.firewall_start();
     }
 
     /// `firewall_allow`: Windows' administrator prompt (on a thread: it
@@ -4215,29 +4346,67 @@ impl TremGame {
         if self.firewall_fixing.is_some() {
             return "firewall_allow: already waiting for the administrator prompt\n".into();
         }
+        // the rule covers the networks this PC is on now (the code decides which; the player is not asked)
         let mut prof = self.firewall_missing.clone();
         if prof.is_empty() {
             prof = vec!["Private".into()];
         }
         let (tx, rx) = std::sync::mpsc::channel();
-        let p = prof.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(crate::firewall::request_allow(&p));
+            let _ = tx.send(crate::firewall::request_allow(&prof));
         });
         self.firewall_fixing = Some(rx);
-        format!("Asked Windows to allow this game in on the {} network: approve the administrator prompt\n", prof.join(", "))
+        "Asked Windows to allow this game in: approve the administrator prompt\n".into()
     }
 
-    /// Windows' own dialog (DisplayServer.dialog_show) with the question;
-    /// the answer comes back through a channel (no re-entry into TremGame).
-    fn firewall_ask(&mut self, title: &str, text: &str) {
-        let (tx, rx) = std::sync::mpsc::channel::<i64>();
-        let cb = Callable::from_fn("firewall_choice", move |args: &[&Variant]| {
-            let i = args.first().and_then(|v| v.try_to::<i64>().ok()).unwrap_or(1);
-            let _ = tx.send(i);
+    /// dec076: the question as a native Windows TaskDialog on a thread (the
+    /// game keeps running; the answer comes back through a channel, no
+    /// re-entry into TremGame). A `None` answer means the dialog could not
+    /// be shown: `firewall_frame` then uses Godot's own dialog.
+    fn firewall_ask(&mut self, p: crate::firewall::Prompt) {
+        let (tx, rx) = std::sync::mpsc::channel::<Option<i64>>();
+        let q = p.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::taskdialog::show(
+                &q.title,
+                &q.main,
+                &q.content,
+                &q.footer,
+                &q.buttons,
+                crate::firewall::ANSWER_HOST,
+            ));
         });
-        let buttons: PackedStringArray = crate::firewall::PROMPT_BUTTONS.iter().map(|b| GString::from(*b)).collect();
-        let e = godot::classes::DisplayServer::singleton().dialog_show(title, text, &buttons, &cb);
+        self.firewall_choice = Some(rx);
+        self.firewall_prompt = Some(p);
+    }
+
+    /// The fallback: Godot's DisplayServer.dialog_show, plain text, the same
+    /// answers (closing it means Host without it).
+    fn firewall_ask_godot(&mut self, p: &crate::firewall::Prompt) {
+        let (tx, rx) = std::sync::mpsc::channel::<Option<i64>>();
+        let ids: Vec<i64> = p.buttons.iter().map(|b| b.0).collect();
+        let cb = Callable::from_fn("firewall_choice", move |args: &[&Variant]| {
+            let i = args
+                .first()
+                .and_then(|v| v.try_to::<i64>().ok())
+                .unwrap_or(-1);
+            let _ = tx.send(Some(
+                ids.get(i as usize)
+                    .copied()
+                    .unwrap_or(crate::firewall::ANSWER_HOST),
+            ));
+        });
+        let buttons: PackedStringArray = p
+            .buttons
+            .iter()
+            .map(|b| GString::from(b.1.as_str()))
+            .collect();
+        let e = godot::classes::DisplayServer::singleton().dialog_show(
+            p.title.as_str(),
+            p.plain().as_str(),
+            &buttons,
+            &cb,
+        );
         if e == godot::global::Error::OK {
             self.firewall_choice = Some(rx);
         }
@@ -4247,19 +4416,15 @@ impl TremGame {
         let Some(rx) = self.firewall_pending.as_ref() else { return };
         let Ok(v) = rx.try_recv() else { return };
         self.firewall_pending = None;
-        let port = self.nethost.as_ref().and_then(|n| n.net.port(trem_sim::kernel::netchan::NetSrc::Server)).unwrap_or(trem_sim::kernel::netchan::PORT_SERVER);
         self.firewall_missing = match &v {
             crate::firewall::Verdict::NoRule(n) | crate::firewall::Verdict::Blocked(n) => n.clone(),
             _ => Vec::new(),
         };
-        let m = crate::firewall::message(&v, port);
-        if !m.is_empty() {
-            self.host_say(m);
-        }
-        // dec054: ask once a run, unless the player said never
-        if let Some((title, text)) = crate::firewall::prompt_text(&v) {
-            if self.client.cvars.integer("net_firewallPrompt") != 0 && !std::mem::replace(&mut self.firewall_asked, true) && self.firewall_fixing.is_none() {
-                self.firewall_ask(&title, &text);
+        // the startup check is silent (engine log only); hosting prints the status
+        godot_print!("Windows Firewall check: {v:?}");
+        if let Some(r) = self.host_report.as_mut() {
+            if r.fw.is_none() {
+                r.fw = Some((crate::hoststatus::Fw::from_verdict(&v), v));
             }
         }
     }
@@ -4709,13 +4874,11 @@ impl TremGame {
                 for l in out.lines() {
                     godot_print!("{l}");
                 }
-                // the join addresses and the firewall hint on the host's console too
-                for l in out.lines().filter(|l| l.contains("join at") || l.contains("Windows Firewall")) {
-                    self.misc.con.print(&format!("{l}\n"));
-                }
                 if !loopback_only {
+                    // the status (join addresses, firewall, router) is printed once both have answered
+                    self.host_report = Some(self.new_host_report(true));
                     self.upnp_start();
-                    self.firewall_start();
+                    self.firewall_host_check();
                 }
                 for l in &ld.then {
                     self.server_command(l);
@@ -4732,6 +4895,7 @@ impl TremGame {
     fn net_process(&mut self, delta: f64) {
         self.upnp_poll();
         self.firewall_poll();
+        self.host_report_poll();
         self.clock += delta;
         self.client_frame();
         self.sync_net_cvars(false);

@@ -161,6 +161,12 @@ fn local_ip_to(host: &str) -> Option<Ipv4Addr> {
     }
 }
 
+/// The address of this PC that faces the default route (what a UDP socket
+/// "connected" towards the internet would use; nothing is sent).
+pub fn default_route_ip() -> Option<Ipv4Addr> {
+    local_ip_to("192.0.2.1")
+}
+
 /// Ask the gateway at `location` to forward UDP `port` to this PC.
 pub fn map_at(location: &str, port: u16, desc: &str) -> Result<Mapping, String> {
     let (st, description) = http(location, "GET", &[], "")?;
