@@ -43,6 +43,7 @@ mod ragdoll; // ragdoll corpses (enhanced mode)
 mod upnp; // the router's port forwarding for hosted games
 mod firewall; // the Windows Firewall check for hosted games (dec047)
 mod lamps; // the map's lamps and sun: world-fixed shadows (enhanced mode)
+mod nvk; // NVK on pre-Turing NVIDIA: restart in OpenGL (dec078)
 
 struct TremExtension;
 

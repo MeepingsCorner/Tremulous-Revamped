@@ -49,6 +49,8 @@ pub const GFX_CVARS: &[(&str, &str)] = &[
     // map (the shadow sun, enhanced only)
     ("r_dynamicShadows", "1"),
     ("r_modelDebug", "0"),
+    // r_nvkOpenGL: NVK on an NVIDIA GPU older than Turing restarts in OpenGL (nvk.rs)
+    ("r_nvkOpenGL", "1"),
 ];
 
 /// The node group of every dynamic light (muzzle flashes, missiles,
