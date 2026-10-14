@@ -449,6 +449,17 @@ impl INode3D for TremGame {
         self.with_client(|c, g| c.startup(g));
         crate::gfx::register_cvars(&mut self.client.cvars);
         crate::fmodaudio::register_cvars(&mut self.client.cvars);
+        // NVK on an NVIDIA GPU older than Turing: restart once in OpenGL (nvk.rs)
+        if crate::nvk::check(crate::nvk::enabled(
+            self.client.cvars.integer(crate::nvk::CVAR),
+            &startup_commands(),
+        )) {
+            self.base_mut().set_process(false);
+            self.base_mut().set_process_input(false);
+            self.base_mut().set_process_unhandled_input(false);
+            self.base().get_tree().quit();
+            return;
+        }
         // the 4K pack is needed before the first map's textures load
         {
             let on = self.client.cvars.integer("r_hdTextures") != 0;
