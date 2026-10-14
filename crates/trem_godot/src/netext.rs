@@ -25,6 +25,8 @@ pub(crate) struct NetExt {
     stdin: Option<std::sync::mpsc::Receiver<String>>,
     /// the download prompt text for the ui (`com_downloadPromptText`)
     prompt: Option<String>,
+    /// the files and `sv_dlURL` of a refused download, for the download guide
+    guide: Option<(Vec<String>, String)>,
 }
 
 /// A folder of the user data (user://<sub>), globalized.
@@ -58,6 +60,8 @@ impl TremGame {
         const CVAR_TEMP: i32 = 0x0100; // q_shared.h (not kept by the port's store)
         for (n, v, f) in [
             ("cl_allowDownload", "0", CVAR_ARCHIVE),
+            // the community sites of the download guide (dlguide.rs); not saved, so a new default reaches everyone
+            ("cl_downloadSources", crate::dlguide::DEFAULT_SOURCES, 0),
             // the network mode (dec040): 0 Auto, 71 legacy 1.3, 69 vanilla 1.1.0
             ("cl_netProtocol", "0", CVAR_ARCHIVE),
             ("cl_autoRecordDemo", "0", CVAR_ARCHIVE),
@@ -110,6 +114,39 @@ impl TremGame {
         }
     }
 
+    /// `FS_Restart` for the host: the pk3 folders are read again, so a pak
+    /// that arrived after startup (a download, or one the player copied into
+    /// user://base by hand) joins the search path. `restart_core` also
+    /// rescans the network client's and the listen server's own pak sets;
+    /// the FsRestart event passes false, the client having done that itself.
+    pub(super) fn rescan_search_path(&mut self, restart_core: bool) {
+        self.pk3_paths = find_pk3s();
+        if restart_core {
+            if let Some(nh) = self.nethost.as_mut() {
+                for fs in [nh.cl.fs.as_mut(), nh.server_fs.as_mut()]
+                    .into_iter()
+                    .flatten()
+                {
+                    let feed = fs.feed;
+                    fs.restart(feed);
+                }
+            }
+        }
+        // the server's fs_game folder (a mod's downloaded paks)
+        if let Some(fs) = self.nethost.as_ref().and_then(|nh| nh.cl.fs.as_ref()) {
+            for p in fs.game_pak_paths() {
+                if !self.pk3_paths.contains(&p) {
+                    self.pk3_paths.push(p);
+                }
+            }
+        }
+        self.client_fs = Some(crate::hostfs::HostFs::new(&self.pk3_paths));
+        godot_print!(
+            "trem: search path restarted: {} pk3 file(s)",
+            self.pk3_paths.len()
+        );
+    }
+
     /// `CL_Connect_f`'s arguments: [-4|-6] server [-1|-69|-71] (the
     /// protocol flag of dec040; without it cl_netProtocol decides).
     pub(super) fn netext_connect(&mut self, args: &[String]) -> String {
@@ -122,6 +159,9 @@ impl TremGame {
             self.shutdown_map();
         }
         self.net_error = None;
+        // a pak copied into user://base since the last scan counts for this
+        // connection (connect, reconnect and the menus all come through here)
+        self.rescan_search_path(true);
         self.sync_net_cvars(true);
         let nh = self.nethost.as_mut().unwrap();
         let r = nh.connect_protocol(&server, family, protocol);
@@ -216,17 +256,7 @@ impl TremGame {
         match ev {
             HostEvent::FsRestart => {
                 // FS_Restart: a downloaded pak joins the search path
-                self.pk3_paths = find_pk3s();
-                // the server's fs_game folder (a mod's downloaded paks)
-                if let Some(fs) = self.nethost.as_ref().and_then(|nh| nh.cl.fs.as_ref()) {
-                    for p in fs.game_pak_paths() {
-                        if !self.pk3_paths.contains(&p) {
-                            self.pk3_paths.push(p);
-                        }
-                    }
-                }
-                self.client_fs = Some(crate::hostfs::HostFs::new(&self.pk3_paths));
-                godot_print!("trem: search path restarted: {} pk3 file(s)", self.pk3_paths.len());
+                self.rescan_search_path(false);
                 false
             }
             HostEvent::DemoCompleted => {
@@ -253,6 +283,11 @@ impl TremGame {
         }
         if nh.cl.download_prompt & DLP_SHOW != 0 && self.netext.prompt.is_none() {
             self.netext.prompt = Some(nh.cl.download_prompt_text.clone());
+            self.netext.guide = nh
+                .cl
+                .download_manual
+                .clone()
+                .map(|f| (f, nh.cl.sv_dl_url.clone()));
         }
     }
 
@@ -268,6 +303,14 @@ impl TremGame {
         }
         self.client.cvars.set("com_downloadPromptText", &t);
         Some(t)
+    }
+
+    /// What the download guide needs for the prompt just taken: the missing
+    /// files, the download address the connection's info gave, and the
+    /// community sources (`cl_downloadSources`). None: the old prompt.
+    pub(crate) fn take_download_guide(&mut self) -> Option<(Vec<String>, String, String)> {
+        let (files, url) = self.netext.guide.take()?;
+        Some((files, url, self.client.cvars.string("cl_downloadSources")))
     }
 
     /// The ui's `trap_Cvar_Set( "com_downloadPrompt" )` (uiScript

@@ -6969,10 +6969,12 @@ fn load_ui(lib: &mut Library) -> Result<Ui, String> {
     let mut with_port = files.clone();
     with_port.push(PORT_AUDIO_MENU_FILE.to_string());
     with_port.push(PORT_VOICE_MENU_FILE.to_string());
+    with_port.push(crate::dlguide::MENU_FILE.to_string());
     let devices = crate::voipsnd::VoipSound::input_devices();
     let port = load_menu_files(&with_port, &mut |p: &str| match p {
         PORT_AUDIO_MENU_FILE => Some(port_audio_menu()),
         PORT_VOICE_MENU_FILE => Some(port_voice_menu(&devices)),
+        crate::dlguide::MENU_FILE => Some(crate::dlguide::menu_text()),
         "ui/ingame_options.menu" => lib.text(p).map(|t| patch_voice_button(&patch_voip_bind(&patch_sound_options(&t)))),
         _ => lib.text(p),
     });
@@ -7182,6 +7184,8 @@ pub struct TremMenus {
     /// model view needs its own blend mode)
     layers: Vec<Rid>,
     premul: Option<Gd<godot::classes::CanvasItemMaterial>>,
+    /// the download guide on screen: what its two buttons open
+    guide: Option<crate::dlguide::Plan>,
 }
 
 #[godot_api]
@@ -7214,6 +7218,7 @@ impl IControl for TremMenus {
             intro_started: false,
             layers: Vec::new(),
             premul: None,
+            guide: None,
         }
     }
 
@@ -7792,13 +7797,47 @@ impl TremMenus {
         // then UIMENU_MAIN shows error_popmenu
         // wt-a (dec037): UI_DrawConnectScreen at CA_CONNECTED: com_downloadPrompt
         // DLP_SHOW opens download_popmenu (the ui answers with downloadUDP ...)
-        let prompt = if now { None } else { self.game().and_then(|mut g| g.bind_mut().take_download_prompt()) };
+        let prompt = if now {
+            None
+        } else {
+            self.game()
+                .and_then(|mut g| g.bind_mut().take_download_prompt())
+        };
+        let guide = if prompt.is_some() {
+            self.game()
+                .and_then(|mut g| g.bind_mut().take_download_guide())
+        } else {
+            None
+        };
         if let Some(t) = prompt {
             godot_print!("Opening download prompt...");
             let ui = self.ui.as_mut().unwrap();
             ui.cvars.insert("com_downloadprompttext".into(), t);
             ui.cvars.insert("com_downloadprompt".into(), "0".into());
-            ui.menus_activate_by_name("download_popmenu");
+            // a refused download with a usable file name: the guide's steps;
+            // else (or without its menus) the original box
+            let plan = guide
+                .and_then(|(files, url, sources)| crate::dlguide::plan(&files, &url, &sources));
+            let mut shown = false;
+            if let Some(p) = plan {
+                let root = godot::classes::ProjectSettings::singleton()
+                    .globalize_path("user://")
+                    .to_string();
+                let path = crate::dlguide::display_path(&root, &p.folder, cfg!(windows));
+                for (k, v) in p.cvars(&path) {
+                    ui.cvars.insert(k.into(), v);
+                }
+                if ui.menus_activate_by_name(p.menu()).is_some() {
+                    shown = true;
+                    self.guide = Some(p);
+                }
+            }
+            if !shown {
+                self.ui
+                    .as_mut()
+                    .unwrap()
+                    .menus_activate_by_name("download_popmenu");
+            }
             self.flush();
         }
         let err = if now { None } else { self.game().and_then(|mut g| g.bind_mut().take_net_error()) };
@@ -7814,7 +7853,7 @@ impl TremMenus {
         // Server or the console) closes the ui (cls.keyCatchers = 0) so the
         // loading screen shows instead of the menu it was started from
         let loading = self.game().is_some_and(|g| g.bind().is_loading());
-        if loading && !now && self.ui.as_ref().unwrap().is_open() {
+        if closes_ui_for_loading(loading, now, self.ui.as_ref().unwrap().top_menu()) {
             self.ui.as_mut().unwrap().set_active_menu(UiMenuCommand::None);
             self.flush();
         }
@@ -7967,6 +8006,26 @@ impl TremMenus {
                                 let mut a = rest.split_whitespace();
                                 let (n, b) = (a.next().unwrap_or("").to_string(), a.next().unwrap_or("").to_string());
                                 self.play_system_cinematic(&n, &b);
+                            }
+                            // the download guide's two buttons (dlguide.rs): only addresses
+                            // and folders it checked itself are opened
+                            "dlguide_online" => {
+                                if let Some(u) = self.guide.as_ref().and_then(|p| p.url.clone()) {
+                                    godot::classes::Os::singleton()
+                                        .shell_open(&GString::from(u.as_str()));
+                                }
+                            }
+                            "dlguide_folder" => {
+                                if let Some(p) = self.guide.as_ref() {
+                                    let dir = godot::classes::ProjectSettings::singleton()
+                                        .globalize_path(&format!("user://{}", p.folder))
+                                        .to_string();
+                                    let _ = std::fs::create_dir_all(&dir);
+                                    godot::classes::Os::singleton()
+                                        .shell_show_in_file_manager_ex(&GString::from(dir.as_str()))
+                                        .open_folder(true)
+                                        .done();
+                                }
                             }
                             "vid_restart" => self.vid_restart(),
                             "snd_restart" => {
@@ -8320,9 +8379,41 @@ impl TremMenus {
 // tests (legacy data: /tmp/claude-0/datalegacy)
 // =====================================================================
 
+/// CL_MapLoading closes the ui when a map (or the connect screen) shows, except
+/// the download prompt: it opens at CA_CONNECTED, while the connect screen is
+/// already up, and the connection waits for its answer (dec063).
+fn closes_ui_for_loading(loading: bool, in_game: bool, top_menu: Option<&str>) -> bool {
+    loading && !in_game && top_menu.is_some() && !top_menu.is_some_and(is_download_menu)
+}
+
+/// The boxes that wait for the player's answer about missing files: the
+/// original prompt and the download guide's two layouts.
+fn is_download_menu(name: &str) -> bool {
+    matches!(
+        name,
+        "download_popmenu" | crate::dlguide::MENU_A | crate::dlguide::MENU_B
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn download_prompt_survives_the_loading_close() {
+        assert!(!closes_ui_for_loading(
+            true,
+            false,
+            Some("download_popmenu")
+        ));
+        for m in [crate::dlguide::MENU_A, crate::dlguide::MENU_B] {
+            assert!(!closes_ui_for_loading(true, false, Some(m)));
+        }
+        assert!(closes_ui_for_loading(true, false, Some("main")));
+        assert!(!closes_ui_for_loading(true, false, None));
+        assert!(!closes_ui_for_loading(false, false, Some("main")));
+        assert!(!closes_ui_for_loading(true, true, Some("main")));
+    }
 
     const DATA: &str = "/tmp/claude-0/datalegacy";
 
