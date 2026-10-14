@@ -264,6 +264,11 @@ has no `trim-paths` yet), so panic locations name `/cargo/...` and
 with MSVC from the SDK files in `third_party/fmod` and
 `third_party/steamaudio`; other builds keep Godot's audio.
 
+For a Windows release without the SmartScreen warning, `tools/package_windows.sh`
+builds the folder from Godot's officially signed 4.7.2 engine exe (renamed
+`Tremulous.exe`, checked against Godot's SHA512-SUMS) and our `Tremulous.pck`,
+instead of an exported template (those are unsigned).
+
 The 4K texture pack is too big for the repo: download both zips from the
 [4K texture pack release](https://github.com/MeepingsCorner/Tremulous-Revamped/releases/tag/hd-textures-v1)
 and unzip them into one `hd` folder, next to the game's executable or in the
