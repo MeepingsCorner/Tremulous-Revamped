@@ -1286,7 +1286,7 @@ impl Server {
             c.rate = 99999; // lans should not rate limit
         } else {
             let v = svgame::info_value(&c.userinfo, "rate");
-            c.rate = if v.is_empty() { 3000 } else { super::spawn::c_atoi(&v).clamp(1000, 90000) };
+            c.rate = client_rate(&v);
         }
         // snaps command
         let v = svgame::info_value(&c.userinfo, "snaps");
@@ -2423,7 +2423,33 @@ pub fn args_sanitize(s: &str) -> String {
     s.chars().map(|c| if matches!(c, '\n' | '\r' | ';') { ' ' } else { c }).collect()
 }
 
+/// A client's `rate` userinfo (bytes per second) as the server takes it:
+/// 3000 when unset, else 1000..=MAX_CLIENT_RATE. The legacy servers cap at
+/// 90000; the port at 128000, its client default (dec079).
+pub const MAX_CLIENT_RATE: i32 = 128000;
+fn client_rate(v: &str) -> i32 {
+    if v.is_empty() {
+        3000
+    } else {
+        super::spawn::c_atoi(v).clamp(1000, MAX_CLIENT_RATE)
+    }
+}
+
 /// `trap_RealTime`.
 pub fn real_time() -> i32 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i32).unwrap_or(0)
+}
+
+#[cfg(test)]
+mod rate_tests {
+    #[test]
+    fn client_rate_caps_at_128000() {
+        // dec079: the client default 128000 is taken as it is
+        assert_eq!(super::client_rate("128000"), 128000);
+        assert_eq!(super::client_rate("200000"), 128000);
+        assert_eq!(super::client_rate("90000"), 90000);
+        assert_eq!(super::client_rate("25000"), 25000);
+        assert_eq!(super::client_rate("10"), 1000);
+        assert_eq!(super::client_rate(""), 3000);
+    }
 }
