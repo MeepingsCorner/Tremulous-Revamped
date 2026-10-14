@@ -5,7 +5,45 @@
 //! keep Godot's audio.
 use std::path::PathBuf;
 
+/// dec090: the version the title screen shows. `git describe` over the
+/// release tags (`v1.0`, `v1.0-46-g2e2c4a1`, `-dirty` when the tree has
+/// changes; only `v<digit>` tags count, so the texture pack tag is ignored),
+/// the commit hash alone when there is no such tag. Without git (a source zip)
+/// the environment's TREM_VERSION / TREM_BUILD_DATE, set by whoever builds a
+/// release, and then the Cargo version. TREM_BUILD_DATE is otherwise the date
+/// of the commit (reproducible), empty without git.
+fn export_version() {
+    let git = |args: &[&str]| -> Option<String> {
+        let out = std::process::Command::new("git").args(args).output().ok()?;
+        let s = String::from_utf8(out.stdout).ok()?.trim().to_string();
+        (out.status.success() && !s.is_empty()).then_some(s)
+    };
+    // a commit appends to logs/HEAD (also in a worktree); a checkout moves HEAD
+    for what in ["HEAD", "logs/HEAD"] {
+        if let Some(p) = git(&["rev-parse", "--git-path", what]) {
+            println!("cargo::rerun-if-changed={p}");
+        }
+    }
+    println!("cargo::rerun-if-env-changed=TREM_VERSION");
+    println!("cargo::rerun-if-env-changed=TREM_BUILD_DATE");
+    let env = |k: &str| std::env::var(k).ok().filter(|s| !s.is_empty());
+    let version = env("TREM_VERSION")
+        .or_else(|| {
+            git(&[
+                "describe", "--tags", "--match", "v[0-9]*", "--always", "--dirty",
+            ])
+        })
+        .or_else(|| env("CARGO_PKG_VERSION"))
+        .unwrap_or_default();
+    let date = env("TREM_BUILD_DATE")
+        .or_else(|| git(&["log", "-1", "--format=%cs"]))
+        .unwrap_or_default();
+    println!("cargo::rustc-env=TREM_VERSION={version}");
+    println!("cargo::rustc-env=TREM_BUILD_DATE={date}");
+}
+
 fn main() {
+    export_version();
     println!("cargo::rerun-if-changed=native/trem_audio.c");
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let root = manifest.join("../..");
