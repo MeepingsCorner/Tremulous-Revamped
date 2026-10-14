@@ -141,39 +141,34 @@ pub fn resolution(r_width: i32, r_height: i32, desktop: (i32, i32)) -> (i32, i32
     }
 }
 
+/// The modes the Video Mode list offers, smallest first: the monitor sizes
+/// at 1% or more in the Steam Hardware Survey (September 2026, primary
+/// display resolution) plus the lower render sizes 800x600, 1024x768,
+/// 1280x720 and 1600x900.
+pub const COMMON_MODES: &[(i32, i32)] = &[
+    (800, 600), (1024, 768), (1280, 720), (1366, 768), (1600, 900), (1920, 1080), (1920, 1200),
+    (2560, 1440), (2560, 1600), (3440, 1440), (3840, 2160),
+];
+
 /// `GLimp_DetectAvailableModes` (`r_availableModes`): Godot lists no
-/// display modes, so every common mode (4:3, 5:4, 16:10, 16:9, 21:9 and
-/// 32:9, up to 8K) plus the desktop's own, sorted like `GLimp_CompareModes`
-/// (closest to the display aspect first, then area). Modes larger than the
-/// screen still work: the game renders at that size and scales it to the
-/// window / screen (`apply_window`), like a supersampled mode.
+/// display modes, so the common modes that fit on the desktop plus the
+/// desktop's own size, smallest first (by area, then width). Any other size
+/// still works through `r_width` / `r_height` (the menu shows it as its
+/// "Custom" entry).
 pub fn available_modes(desktop: (i32, i32)) -> String {
-    const MODES: &[(i32, i32)] = &[
-        (640, 480), (800, 600), (1024, 768), (1152, 864), (1280, 960), (1400, 1050), (1600, 1200), (2048, 1536),
-        (1280, 1024), (2560, 2048),
-        (1280, 800), (1440, 900), (1680, 1050), (1920, 1200), (2560, 1600), (2880, 1800), (3840, 2400),
-        (1024, 576), (1280, 720), (1360, 768), (1366, 768), (1600, 900), (1920, 1080), (2560, 1440), (3200, 1800), (3840, 2160), (5120, 2880), (7680, 4320),
-        (2560, 1080), (3440, 1440), (3840, 1600), (5120, 2160),
-        (3840, 1080), (5120, 1440),
-    ];
-    let mut m: Vec<(i32, i32)> = MODES.to_vec();
-    if desktop.0 > 0 && desktop.1 > 0 && !m.contains(&desktop) {
+    let known = desktop.0 > 0 && desktop.1 > 0;
+    let mut m: Vec<(i32, i32)> = COMMON_MODES.iter().copied().filter(|&(w, h)| !known || (w <= desktop.0 && h <= desktop.1)).collect();
+    if known && !m.contains(&desktop) {
         m.push(desktop);
     }
-    let display_aspect = if desktop.1 > 0 { desktop.0 as f32 / desktop.1 as f32 } else { 4.0 / 3.0 };
-    m.sort_by(|a, b| {
-        let da = (a.0 as f32 / a.1 as f32 - display_aspect).abs();
-        let db = (b.0 as f32 / b.1 as f32 - display_aspect).abs();
-        let d = da - db;
-        if d > 0.001 {
-            std::cmp::Ordering::Greater
-        } else if d < -0.001 {
-            std::cmp::Ordering::Less
-        } else {
-            (a.0 * a.1).cmp(&(b.0 * b.1))
-        }
-    });
+    m.sort_by_key(|&(w, h)| (w * h, w));
     m.iter().map(|(w, h)| format!("{w}x{h}")).collect::<Vec<_>>().join(" ")
+}
+
+/// The desktop size (`DisplayServer.screen_get_size`).
+pub fn desktop_size() -> (i32, i32) {
+    let d = DisplayServer::singleton().screen_get_size();
+    (d.x, d.y)
 }
 
 /// The window size for a mode in windowed mode: the mode, shrunk (keeping
@@ -304,8 +299,7 @@ impl VidSnd {
 
     /// `vid_restart`: the latched renderer cvars, the window and gamma.
     pub fn vid_restart(&mut self, c: &mut Cvars, parent: &mut Gd<Node>) {
-        let desktop = DisplayServer::singleton().screen_get_size();
-        c.set("r_availableModes", &available_modes((desktop.x, desktop.y)));
+        c.set("r_availableModes", &available_modes(desktop_size()));
         self.apply_window(c, true, parent);
         self.apply_gamma(c, parent);
         Self::apply_texture_mode(c, parent);
@@ -441,13 +435,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn vidsnd_available_modes_fit_the_desktop() {
+        // 1440p: nothing larger than the monitor, the desktop is a common mode (listed once)
+        assert_eq!(available_modes((2560, 1440)), "800x600 1024x768 1280x720 1366x768 1600x900 1920x1080 1920x1200 2560x1440");
+        // 4K: the whole list
+        let m = available_modes((3840, 2160));
+        assert_eq!(m.split(' ').count(), COMMON_MODES.len(), "{m}");
+        assert!(m.starts_with("800x600 ") && m.ends_with(" 3440x1440 3840x2160"), "{m}");
+        // an odd desktop is added once, in size order
+        assert_eq!(available_modes((1680, 1050)), "800x600 1024x768 1280x720 1366x768 1600x900 1680x1050");
+        let m = available_modes((5120, 1440));
+        assert!(m.ends_with(" 2560x1440 3440x1440 5120x1440") && !m.contains("2560x1600") && !m.contains("3840x2160"), "{m}");
+        // 1366x768 desktop: 1600x900 and up hidden
+        assert_eq!(available_modes((1366, 768)), "800x600 1024x768 1280x720 1366x768");
+        // no desktop size known: the common modes
+        assert_eq!(available_modes((0, 0)).split(' ').count(), COMMON_MODES.len());
+        // every listed mode appears once
+        for d in [(1920, 1080), (2560, 1440), (3840, 2160), (1680, 1050), (1280, 800)] {
+            let m = available_modes(d);
+            let v: Vec<&str> = m.split(' ').collect();
+            let mut u = v.clone();
+            u.dedup();
+            assert_eq!(v, u, "{d:?}");
+            assert_eq!(v.iter().filter(|x| **x == format!("{}x{}", d.0, d.1)).count(), 1, "{d:?}");
+        }
+    }
+
+    #[test]
     fn vidsnd_option_mapping() {
         assert_eq!(resolution(1024, 768, (1920, 1080)), (1024, 768));
         assert_eq!(resolution(0, 0, (1920, 1080)), (1920, 1080));
         assert_eq!(resolution(0, 0, (0, 0)), (640, 480));
-        let m = available_modes((1920, 1080));
-        assert!(m.starts_with("1024x576 "), "16:9 modes first, by area: {m}");
-        assert!(m.contains("1920x1080") && m.contains("1024x768") && m.contains("2560x1440") && m.contains("3440x1440"));
+        assert_eq!(available_modes((1920, 1080)), "800x600 1024x768 1280x720 1366x768 1600x900 1920x1080");
         assert_eq!(windowed_size((1280, 720), (1920, 1080)), (1280, 720));
         assert_eq!(windowed_size((3840, 2160), (1920, 1080)), (1920, 1080));
         assert_eq!(texture_mode("GL_LINEAR_MIPMAP_NEAREST"), Some((false, true)));

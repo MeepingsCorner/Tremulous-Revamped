@@ -80,6 +80,10 @@ pub const IT_SAYFIELD: i32 = 6;
 pub const IT_CYCLE: i32 = 7;
 pub const IT_LISTBOX: i32 = 8;
 pub const IT_COMBOBOX: i32 = 9;
+/// the open combobox's row under the mouse (a dim focus gold) and its
+/// current row; the item's outlinecolor (0.1 0.1 0.1 0.5) hardly shows on black
+const COMBO_HOVER_COLOR: Rgba = [1.0, 0.75, 0.0, 0.35];
+const COMBO_CURRENT_COLOR: Rgba = [1.0, 1.0, 1.0, 0.14];
 pub const IT_MODEL: i32 = 10;
 pub const IT_OWNERDRAW: i32 = 11;
 pub const IT_NUMERICFIELD: i32 = 12;
@@ -2279,6 +2283,8 @@ pub struct Ui {
     /// g_editingField + g_editItem
     editing: Option<IRef>,
     combo: Option<IRef>,
+    /// the rows the open combobox shows (`combo_rows`)
+    combo_rows: i32,
     capture: Capture,
     capture_expiry: i32,
     item_capture: Option<IRef>,
@@ -2328,6 +2334,8 @@ pub struct Ui {
     pub mod_dirs: Vec<(String, String)>,
     /// `UI_ParseResolutions` (r_availableModes)
     pub resolutions: Vec<(i32, i32)>,
+    /// the desktop size (r_width / r_height 0 run at it)
+    pub desktop: (i32, i32),
     /// assetGlobalDef fadeAmount / fadeClamp / fadeCycle
     pub asset_fade: (f32, f32, i32),
     /// uiInfo.mapList[].cinematic: -1 not tried, -2 none (`<map>.roq`)
@@ -2364,6 +2372,7 @@ impl Ui {
             cursor: (320.0, 240.0),
             editing: None,
             combo: None,
+            combo_rows: 0,
             capture: Capture::None,
             capture_expiry: 0,
             item_capture: None,
@@ -2398,6 +2407,7 @@ impl Ui {
             fs_files: Vec::new(),
             mod_dirs: Vec::new(),
             resolutions: Vec::new(),
+            desktop: (0, 0),
             asset_fade: (0.1, 1.0, 1),
             map_cinematic: HashMap::new(),
             preview_movie: false,
@@ -3413,8 +3423,16 @@ impl Ui {
             }
             Feeder::HelpList => self.help.get(ix).map(|h| h.0.clone()).unwrap_or_default(),
             Feeder::Resolutions => match self.resolutions.get(ix) {
-                Some(&(w, h)) => format!("{w}x{h} ({})", display_aspect_string(w, h)),
-                None => format!("Custom ({}x{})", self.cvar_value("r_width") as i32, self.cvar_value("r_height") as i32),
+                Some(&(w, h)) => mode_label(w, h, self.desktop),
+                None => {
+                    let (w, h) = (self.cvar_value("r_width") as i32, self.cvar_value("r_height") as i32);
+                    if w > 0 && h > 0 {
+                        format!("Custom ({w}x{h})")
+                    } else {
+                        // the desktop size is not known (not in the list)
+                        "Desktop".to_string()
+                    }
+                }
             },
             Feeder::Servers => return (self.server_item_text(ix, column), None),
             Feeder::ServerStatus => self.browser.status_lines.get(ix).and_then(|l| l.get(column)).cloned().unwrap_or_default(),
@@ -3503,8 +3521,11 @@ impl Ui {
             Feeder::Cinematics => self.preview_movie = false,
             Feeder::Resolutions => {
                 if let Some(&(w, h)) = self.resolutions.get(index.max(0) as usize).filter(|_| index >= 0) {
-                    self.set_cvar("r_width", &w.to_string());
-                    self.set_cvar("r_height", &h.to_string());
+                    // r_width / r_height 0 already run at the desktop size: keep them
+                    if !((w, h) == self.desktop && self.follows_desktop()) {
+                        self.set_cvar("r_width", &w.to_string());
+                        self.set_cvar("r_height", &h.to_string());
+                    }
                 }
             }
             _ => {}
@@ -3548,13 +3569,19 @@ impl Ui {
     /// `UI_FeederInitialise`.
     fn feeder_initialise(&self, id: i32) -> i32 {
         match self.feeders.get(&id) {
-            // the mode r_width x r_height is, else the "Custom" entry
+            // the mode r_width x r_height is (the desktop's for 0), else the "Custom" entry
             Some(Feeder::Resolutions) => {
-                let (w, h) = (self.cvar_value("r_width") as i32, self.cvar_value("r_height") as i32);
+                let (w, h) = if self.follows_desktop() { self.desktop } else { (self.cvar_value("r_width") as i32, self.cvar_value("r_height") as i32) };
                 self.resolutions.iter().position(|&(x, y)| x == w && y == h).unwrap_or(self.resolutions.len()) as i32
             }
             _ => 0,
         }
+    }
+
+    /// r_width / r_height are not both set, so the game runs at the desktop
+    /// size (`GLimp_SetMode`, vidsnd::resolution).
+    fn follows_desktop(&self) -> bool {
+        self.cvar_value("r_width") as i32 <= 0 || self.cvar_value("r_height") as i32 <= 0
     }
 
     /// The selected entry of a uiInfo list.
@@ -4381,22 +4408,56 @@ pub fn scan_asset_fades(text: &str, read: &mut dyn FnMut(&str) -> Option<String>
     Some((amount.unwrap_or(0.0), clamp.unwrap_or(0.0), cycle.unwrap_or(0)))
 }
 
-/// `GCD` + `UI_DisplayAspectString` ("16:9", 8:5 named 16:10).
-pub fn display_aspect_string(w: i32, h: i32) -> String {
-    let (mut a, mut b) = (w, h);
-    while b != 0 {
-        let c = a % b;
-        a = b;
-        b = c;
+/// A combobox row's text that fits `room`: an entry ("WxH (notes)") too wide
+/// for it drops its notes from the front, then the brackets
+/// ("1920x1080 (1K, desktop)" -> "1920x1080 (desktop)" -> "1920x1080"),
+/// "Desktop (WxH)" reads "WxH"; other text is clipped as before.
+fn fit_combo_label(p: &Painter, text: String, room: f32, scale: f32) -> String {
+    if p.width(&text, scale) <= room || !text.ends_with(')') {
+        return text;
     }
-    let g = a.max(1);
-    let (mut w, mut h) = (w / g, h / g);
-    // For some reason 8:5 is usually referred to as 16:10
-    if w == 8 && h == 5 {
-        w = 16;
-        h = 10;
+    if let Some(mode) = text.strip_prefix("Desktop (").and_then(|t| t.strip_suffix(')')) {
+        return mode.to_string();
     }
-    format!("{w}:{h}")
+    if !text.starts_with(|c: char| c.is_ascii_digit()) {
+        return text;
+    }
+    let Some(i) = text.find(" (") else { return text };
+    let (mode, note) = (&text[..i], &text[i + 2..text.len() - 1]);
+    let parts: Vec<&str> = note.split(", ").collect();
+    for k in 1..parts.len() {
+        let t = format!("{mode} ({})", parts[k..].join(", "));
+        if p.width(&t, scale) <= room {
+            return t;
+        }
+    }
+    mode.to_string()
+}
+
+/// The Video Mode row of a mode (in place of `UI_DisplayAspectString`'s
+/// aspect, which read 683:384 for 1366x768): "WxH", with "1K" / "2K" / "4K"
+/// and "desktop" in brackets; the desktop size, when it is not one of the
+/// common modes, reads "Desktop (WxH)".
+pub fn mode_label(w: i32, h: i32, desktop: (i32, i32)) -> String {
+    let is_desktop = (w, h) == desktop;
+    if is_desktop && !vidsnd::COMMON_MODES.contains(&(w, h)) {
+        return format!("Desktop ({w}x{h})");
+    }
+    let mut hints = Vec::new();
+    match (w, h) {
+        (1920, 1080) => hints.push("1K"),
+        (2560, 1440) => hints.push("2K"),
+        (3840, 2160) => hints.push("4K"),
+        _ => {}
+    }
+    if is_desktop {
+        hints.push("desktop");
+    }
+    if hints.is_empty() {
+        format!("{w}x{h}")
+    } else {
+        format!("{w}x{h} ({})", hints.join(", "))
+    }
 }
 
 fn godot_print_unknown(name: &str) {
@@ -4439,11 +4500,35 @@ impl Ui {
     fn list_rect(&self, r: IRef) -> (R, i32) {
         let it = self.it(r);
         if it.ty == IT_COMBOBOX && self.combo.is_some() {
-            let h = it.def.element_height * it.def.drop_items as f32 + 2.0;
+            let h = it.def.element_height * self.combo_drop_items(r) as f32 + 2.0;
             ([it.rect[0], it.rect[1] + it.rect[3], it.rect[2], h], IT_LISTBOX)
         } else {
             (it.rect, it.ty)
         }
+    }
+
+    /// The rows of combobox `r` while it is open (the C's fixed dropitems,
+    /// which scrolled even a short list): see `combo_rows`.
+    fn combo_drop_items(&self, r: IRef) -> i32 {
+        if self.combo == Some(r) && self.combo_rows > 0 {
+            self.combo_rows
+        } else {
+            self.it(r).def.drop_items
+        }
+    }
+
+    /// The rows combobox `r` opens with: all its entries, as many as fit
+    /// between the row and the bottom of the screen (it scrolls only then).
+    fn combo_rows(&mut self, r: IRef) -> i32 {
+        let f = self.it(r).feeder;
+        let n = self.feeder_count(f);
+        let it = self.it(r);
+        let eh = it.def.element_height;
+        if eh <= 0.0 {
+            return it.def.drop_items;
+        }
+        let fit = ((480.0 - (it.rect[1] + it.rect[3]) - 2.0) / eh) as i32;
+        n.min(fit).max(1)
     }
 
     /// `Item_ListBox_NumItemsForItemHeight`.
@@ -4451,7 +4536,7 @@ impl Ui {
         let it = self.it(r);
         let (rect, ty) = self.list_rect(r);
         if ty == IT_COMBOBOX {
-            it.def.drop_items
+            self.combo_drop_items(r)
         } else if it.def.element_height > 0.0 {
             ((rect[3] - 2.0) / it.def.element_height) as i32
         } else {
@@ -5162,7 +5247,10 @@ impl Ui {
                 } else {
                     let (cx, cy) = self.cursor;
                     if contains(self.it(r).rect, cx, cy) && self.it(r).flags & WINDOW_HASFOCUS != 0 && matches!(key, K::Mouse1 | K::Mouse2) {
+                        self.combo_rows = self.combo_rows(r);
                         self.combo = Some(r);
+                        let s = self.it(r).list.start;
+                        self.list_set_start_pos(r, s);
                         true
                     } else {
                         false
@@ -5794,6 +5882,12 @@ impl Ui {
         for ii in 0..self.sets[set][mi].items.len() {
             self.item_paint(p, Self::iref(set, mi, ii));
         }
+        // the open combobox's list over the items after it (combo_box_paint)
+        if let Some(c) = self.combo.filter(|c| c.set == set && c.menu == mi) {
+            if self.it(c).flags & WINDOW_VISIBLE != 0 && self.it(c).ty == IT_COMBOBOX {
+                self.combo_list_paint(p, c);
+            }
+        }
     }
 
     /// `Item_Paint`.
@@ -6124,6 +6218,15 @@ impl Ui {
             p.clip = None;
             return;
         }
+        if highlight && it.ty == IT_COMBOBOX && self.combo == Some(r) {
+            let (cx, cy) = self.cursor;
+            if row == it.list.cursor && contains([x, y, w, eh], cx, cy) {
+                p.fill([x, y, w, eh], COMBO_HOVER_COLOR);
+            } else if row == it.cursor_pos {
+                p.fill([x, y, w, eh], COMBO_CURRENT_COLOR);
+            }
+        }
+        let it = self.it(r);
         let m = p.fonts.em_height(scale);
         let columns = it.def.columns.clone();
         if !columns.is_empty() {
@@ -6149,7 +6252,10 @@ impl Ui {
             }
         } else {
             let offset = if biased { 4.0 * a } else { 4.0 };
-            let (text, img) = self.feeder_item_text(f, row, 0);
+            let (mut text, img) = self.feeder_item_text(f, row, 0);
+            if self.it(r).ty == IT_COMBOBOX {
+                text = fit_combo_label(p, text, w - offset, scale);
+            }
             p.clip = Some([x, y, w, eh]);
             if let Some(img) = img {
                 p.pic(&img, [x + offset, y, eh, eh], WHITE);
@@ -6172,9 +6278,23 @@ impl Ui {
         p.pic(ASSET_SCROLLBAR_ARROWDOWN, [x, y, self.arrow_w(), rect[3] - 2.0], WHITE);
         let c = self.it(r).cursor_pos;
         self.list_row_paint(p, r, rect, c, 0, false, true);
-        if self.combo == Some(r) {
-            self.list_box_paint(p, r);
-        }
+        // the open list is painted by menu_paint after the menu's other
+        // items, so none of them is drawn over it
+    }
+
+    /// The open combobox's list, as `Item_ComboBox_Paint` paints it: the
+    /// item cast to a listbox (`Item_ComboBox_MaybeCastToListBox`) through
+    /// `Item_Paint`, i.e. `Window_Paint` (the item's fill), the rows, then
+    /// `Border_Paint`.
+    fn combo_list_paint(&mut self, p: &mut Painter, r: IRef) {
+        let (lr, _) = self.list_rect(r);
+        let mut w = self.it(r).win();
+        w.rect = lr;
+        window_paint(p, &w);
+        self.list_box_paint(p, r);
+        let mut w = self.it(r).win();
+        w.rect = lr;
+        border_paint(p, &w);
     }
 
     /// `Item_OwnerDraw_Paint`.
@@ -7751,6 +7871,7 @@ impl TremMenus {
             }
             if first {
                 // UI_Init's UI_ParseResolutions (after GLimp's r_availableModes)
+                ui.desktop = vidsnd::desktop_size();
                 ui.parse_resolutions();
                 // ui_mousePitch from m_pitch
                 let mp = if c.value("m_pitch") >= 0.0 { "0" } else { "1" };
@@ -8246,6 +8367,7 @@ impl TremMenus {
         let modes = g.client_cvars().string("r_availableModes");
         if let Some(ui) = self.ui.as_mut() {
             ui.cvars.insert("r_availablemodes".into(), modes);
+            ui.desktop = vidsnd::desktop_size();
             ui.parse_resolutions();
         }
     }
@@ -9328,14 +9450,12 @@ mod tests {
         u.set_cvar("r_width", "800");
         u.set_cvar("r_height", "600");
         assert_eq!(u.feeder_count(fr), 4);
-        assert_eq!(u.feeder_item_text(fr, 1, 0).0, "1920x1080 (16:9)");
+        assert_eq!(u.feeder_item_text(fr, 1, 0).0, "1920x1080 (1K)");
         assert_eq!(u.feeder_item_text(fr, 3, 0).0, "Custom (800x600)");
         u.feeder_selection(fr, 2);
         assert_eq!((u.cvar("r_width"), u.cvar("r_height")), ("1024".to_string(), "768".to_string()));
         assert_eq!(u.feeder_initialise(fr), 2);
         assert_eq!(u.feeder_count(fr), 3);
-        assert_eq!(display_aspect_string(1680, 1050), "16:10");
-        assert_eq!(display_aspect_string(1024, 768), "4:3");
         // ui_glCustom presets (UI_Update)
         u.set_cvar("ui_glCustom", "3");
         u.ui_update("ui_glCustom");
@@ -9344,6 +9464,215 @@ mod tests {
         u.set_cvar("ui_glCustom", "0");
         u.ui_update("ui_glCustom");
         assert_eq!((u.cvar("r_picmip").as_str(), u.cvar("r_texturemode").as_str()), ("0", "GL_LINEAR_MIPMAP_LINEAR"));
+    }
+
+    #[test]
+    fn menus_video_mode_labels() {
+        assert_eq!(mode_label(1920, 1080, (1920, 1080)), "1920x1080 (1K, desktop)");
+        assert_eq!(mode_label(1920, 1080, (2560, 1440)), "1920x1080 (1K)");
+        assert_eq!(mode_label(2560, 1440, (2560, 1440)), "2560x1440 (2K, desktop)");
+        assert_eq!(mode_label(3840, 2160, (3840, 2160)), "3840x2160 (4K, desktop)");
+        assert_eq!(mode_label(1366, 768, (1920, 1080)), "1366x768");
+        assert_eq!(mode_label(1366, 768, (1366, 768)), "1366x768 (desktop)");
+        assert_eq!(mode_label(1920, 1200, (1920, 1080)), "1920x1200");
+        // a desktop that is not a common mode: its own row, no aspect (683:384 / 85:48 are gone)
+        assert_eq!(mode_label(1680, 1050, (1680, 1050)), "Desktop (1680x1050)");
+        assert_eq!(mode_label(1360, 768, (1360, 768)), "Desktop (1360x768)");
+        // no label is longer than the longest hinted one
+        for d in [(1920, 1080), (2560, 1440), (3840, 2160), (1680, 1050), (5120, 1440), (0, 0)] {
+            for &(w, h) in vidsnd::COMMON_MODES.iter().chain([d].iter()) {
+                assert!(mode_label(w, h, d).len() <= "1920x1080 (1K, desktop)".len(), "{w}x{h} on {d:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn menus_video_mode_labels_fit() {
+        if !have_data() {
+            return;
+        }
+        // both menus, 4:3 to 21:9: every label fits the open list and the
+        // closed box whole, or without the notes that do not fit
+        let mut u = ui(Team::None);
+        let fr = u.feeders.iter().find(|(_, f)| **f == Feeder::Resolutions).map(|(i, _)| *i).unwrap();
+        let fonts = u.fonts.clone();
+        let mut labels: Vec<String> = Vec::new();
+        for d in [(1920, 1080), (2560, 1440), (3840, 2160), (1680, 1050), (1366, 768), (3440, 1440)] {
+            for &(w, h) in vidsnd::COMMON_MODES.iter().chain([d].iter()) {
+                labels.push(mode_label(w, h, d));
+            }
+        }
+        let mut whole = 0;
+        for (vw, vh) in [(1024.0, 768.0), (1680.0, 1050.0), (1920.0, 1080.0), (3440.0, 1440.0)] {
+            u.set_aspect((640.0 * vh) / (480.0 * vw));
+            let a = u.aspect;
+            let p = Painter::new(&fonts, a, 0);
+            for menu in ["simple_options", "ingame_options"] {
+                let mi = u.find_menu(menu).unwrap();
+                let ii = u.sets[0][mi].items.iter().position(|i| i.ty == IT_COMBOBOX && i.feeder == fr).unwrap();
+                let it = &u.sets[0][mi].items[ii];
+                let biased = u.sets[0][mi].def.aspect_bias != ASPECT_NONE || it.def.aspect_bias != ASPECT_NONE;
+                let (scale, bs) = (it.def.text_scale, it.def.border_size);
+                let open = it.rect[2] - 2.0 * a * bs - if biased { 4.0 * a } else { 4.0 };
+                let closed = open - u.arrow_w();
+                for l in &labels {
+                    for room in [open, closed] {
+                        let f = fit_combo_label(&p, l.clone(), room, scale);
+                        assert!(p.width(&f, scale) <= room, "{f} in {menu} at {vw}x{vh}");
+                        assert!(f.starts_with(l.split(' ').next().unwrap()) || l == &format!("Desktop ({f})"), "{f}");
+                        whole += (f == *l && room == open) as i32;
+                        if (vw, vh) == (1920.0, 1080.0) && room == open && menu == "simple_options" && l.starts_with("1920x1080") {
+                            // 16:9 main menu: the open list has room for "1920x1080 (1K, desktop)"
+                            assert_eq!(f, *l);
+                        }
+                    }
+                }
+            }
+        }
+        assert!(whole > 0);
+        let p = Painter::new(&fonts, 1.0, 0);
+        let w = |t: &str| p.width(t, 0.25);
+        assert_eq!(fit_combo_label(&p, "1920x1080 (1K, desktop)".into(), w("1920x1080 (desktop)"), 0.25), "1920x1080 (desktop)");
+        assert_eq!(fit_combo_label(&p, "1920x1080 (1K, desktop)".into(), w("1920x1080 (de"), 0.25), "1920x1080");
+        assert_eq!(fit_combo_label(&p, "1920x1080 (1K)".into(), w("1920x1080 (1K)"), 0.25), "1920x1080 (1K)");
+        assert_eq!(fit_combo_label(&p, "Desktop (1680x1050)".into(), w("1680x1050"), 0.25), "1680x1050");
+        // the C's Custom row is only clipped
+        assert_eq!(fit_combo_label(&p, "Custom (3840x2160)".into(), 10.0, 0.25), "Custom (3840x2160)");
+    }
+
+    #[test]
+    fn menus_video_mode_list() {
+        if !have_data() {
+            return;
+        }
+        let mut u = ui(Team::None);
+        let fr = u.feeders.iter().find(|(_, f)| **f == Feeder::Resolutions).map(|(i, _)| *i).unwrap();
+        let rows = |u: &mut Ui| (0..u.feeder_count(fr)).map(|i| u.feeder_item_text(fr, i, 0).0).collect::<Vec<_>>();
+        let monitor = |u: &mut Ui, d: (i32, i32), w: &str, h: &str| {
+            u.desktop = d;
+            u.set_cvar("r_availableModes", &vidsnd::available_modes(d));
+            u.parse_resolutions();
+            u.set_cvar("r_width", w);
+            u.set_cvar("r_height", h);
+        };
+        let wh = |u: &Ui| (u.cvar("r_width"), u.cvar("r_height"));
+        // 1080p at the default r_width / r_height 0: the desktop row (listed once), no "Custom (0x0)"
+        monitor(&mut u, (1920, 1080), "0", "0");
+        assert_eq!(rows(&mut u), ["800x600", "1024x768", "1280x720", "1366x768", "1600x900", "1920x1080 (1K, desktop)"]);
+        assert_eq!(u.feeder_initialise(fr), 5);
+        // picking it keeps 0 0 (no jump to a fixed size); another row sets that size
+        u.feeder_selection(fr, 5);
+        assert_eq!(wh(&u), ("0".to_string(), "0".to_string()));
+        u.feeder_selection(fr, 2);
+        assert_eq!(wh(&u), ("1280".to_string(), "720".to_string()));
+        assert_eq!(u.feeder_initialise(fr), 2);
+        // from a fixed size the desktop row sets the desktop size
+        u.feeder_selection(fr, 5);
+        assert_eq!(wh(&u), ("1920".to_string(), "1080".to_string()));
+        assert_eq!(u.feeder_initialise(fr), 5);
+        // 1440p
+        monitor(&mut u, (2560, 1440), "0", "0");
+        let r = rows(&mut u);
+        assert_eq!(r.len(), 8, "{r:?}");
+        assert_eq!((r[5].as_str(), r[6].as_str(), r[7].as_str()), ("1920x1080 (1K)", "1920x1200", "2560x1440 (2K, desktop)"));
+        assert_eq!(u.feeder_initialise(fr), 7);
+        // 4K: all 11, the desktop marked once
+        monitor(&mut u, (3840, 2160), "0", "0");
+        let r = rows(&mut u);
+        assert_eq!(r.len(), 11, "{r:?}");
+        assert_eq!(r.iter().filter(|l| l.contains("desktop") || l.starts_with("Desktop")).count(), 1);
+        assert_eq!(r[10], "3840x2160 (4K, desktop)");
+        assert!(r.contains(&"2560x1440 (2K)".to_string()) && r.contains(&"3440x1440".to_string()));
+        // an odd desktop: one "Desktop (WxH)" row in size order
+        monitor(&mut u, (1680, 1050), "0", "0");
+        assert_eq!(rows(&mut u), ["800x600", "1024x768", "1280x720", "1366x768", "1600x900", "Desktop (1680x1050)"]);
+        assert_eq!(u.feeder_initialise(fr), 5);
+        // a saved size that is not listed (old list, config, larger than the monitor):
+        // the "Custom" row, selected, and the size is kept
+        for (w, h) in [("1280", "1024"), ("3840", "2160"), ("1440", "900")] {
+            monitor(&mut u, (1920, 1080), w, h);
+            let r = rows(&mut u);
+            assert_eq!(r.len(), 7, "{r:?}");
+            assert_eq!(r[6], format!("Custom ({w}x{h})"));
+            assert_eq!(u.feeder_initialise(fr), 6);
+            assert_eq!(wh(&u), (w.to_string(), h.to_string()));
+        }
+        // a saved size that is listed stays on its row
+        monitor(&mut u, (1920, 1080), "1366", "768");
+        assert_eq!(u.feeder_initialise(fr), 3);
+        assert_eq!(u.feeder_count(fr), 6);
+        // only one of r_width / r_height set runs at the desktop too (vidsnd::resolution)
+        monitor(&mut u, (1920, 1080), "1600", "0");
+        assert_eq!(u.feeder_initialise(fr), 5);
+        // desktop size unknown: the extra row reads "Desktop"
+        monitor(&mut u, (0, 0), "0", "0");
+        assert_eq!(rows(&mut u).last().map(String::as_str), Some("Desktop"));
+    }
+
+    #[test]
+    fn menus_video_mode_box_paint() {
+        if !have_data() {
+            return;
+        }
+        let mut u = ui(Team::None);
+        let fr = u.feeders.iter().find(|(_, f)| **f == Feeder::Resolutions).map(|(i, _)| *i).unwrap();
+        u.desktop = (1920, 1080);
+        u.set_cvar("r_availableModes", &vidsnd::available_modes(u.desktop));
+        u.parse_resolutions();
+        u.set_cvar("r_width", "0");
+        u.set_cvar("r_height", "0");
+        u.menus_activate_by_name("simple_options");
+        let mi = u.find_menu("simple_options").unwrap();
+        let ii = u.sets[0][mi].items.iter().position(|i| i.ty == IT_COMBOBOX && i.feeder == fr).expect("Video Mode combobox");
+        let r = IRef { set: 0, menu: mi, item: ii };
+        u.paint();
+        click(&mut u, r);
+        assert_eq!(u.combo, Some(r), "the click opens the list");
+        // as tall as its 6 entries (the menu file asks for 5 rows and a scrollbar)
+        let (lr, _) = u.list_rect(r);
+        let eh = u.it(r).def.element_height;
+        assert_eq!(u.list_num_items(r), 6);
+        assert!((lr[3] - (6.0 * eh + 2.0)).abs() < 1e-3, "{lr:?}");
+        // the mouse on the third row
+        u.mouse_move(lr[0] + 20.0, lr[1] + 1.0 + eh * 2.5);
+        assert_eq!(u.it(r).list.cursor, 2);
+        let cmds = u.paint();
+        let rect_of = |c: &Cmd| match c {
+            Cmd::Pic { r, .. } | Cmd::Fill { r, .. } | Cmd::Cinematic { r, .. } | Cmd::Model { r, .. } => *r,
+        };
+        let inside = |a: R| a[0] >= lr[0] - 0.01 && a[1] >= lr[1] - 0.01 && a[0] + a[2] <= lr[0] + lr[2] + 0.01 && a[1] + a[3] <= lr[1] + lr[3] + 0.01;
+        let it = u.it(r);
+        let (back, bc, bs) = (it.def.back, it.def.border_color, it.def.border_size);
+        assert_eq!((back, bc), ([0.0, 0.0, 0.0, 1.0], [0.5, 0.5, 0.5, 1.0]), "options.menu's backcolor / borderColor");
+        // Window_Paint: the black fill over the whole list, inside the border
+        let fill = [lr[0] + bs, lr[1] + bs, lr[2] - bs - 1.0, lr[3] - bs - 1.0];
+        let i_fill = cmds.iter().position(|c| *c == Cmd::Fill { r: fill, c: back }).expect("the list's fill");
+        // then the rows (the hovered one in dim gold), then the 1 px grey border
+        let i_hover = cmds.iter().position(|c| matches!(c, Cmd::Fill { c, .. } if *c == COMBO_HOVER_COLOR)).expect("hovered row");
+        assert!(i_hover > i_fill);
+        let hr = rect_of(&cmds[i_hover]);
+        assert!((hr[1] - (lr[1] + 1.0 + 2.0 * eh)).abs() < 1e-3, "{hr:?}");
+        let text = (i_fill + 1..cmds.len()).filter(|&i| matches!(cmds[i], Cmd::Pic { .. })).collect::<Vec<_>>();
+        assert!(!text.is_empty(), "the rows' text");
+        let borders = (0..cmds.len()).filter(|&i| matches!(&cmds[i], Cmd::Fill { r: br, c } if *c == bc && inside(*br) && (br[2] <= bs + 0.01 || br[3] <= bs + 0.01))).collect::<Vec<_>>();
+        assert_eq!(borders.len(), 4, "Border_Paint's four sides");
+        assert!(borders.iter().all(|&b| b > *text.last().unwrap()), "border after the rows");
+        // the list is the last thing painted: nothing of the menu's later items over it
+        assert!(cmds[i_fill..].iter().all(|c| inside(rect_of(c))), "only the list after its fill");
+        assert!(cmds[..i_fill].iter().any(|c| !inside(rect_of(c))), "the menu before it");
+        // no scrollbar: every entry is shown
+        assert!(!cmds[i_fill..].iter().any(|c| matches!(c, Cmd::Pic { img, .. } if img.as_str() == ASSET_SCROLLBAR)));
+        // the current (desktop) row is lit too
+        assert!(cmds[i_fill..].iter().any(|c| matches!(c, Cmd::Fill { c, .. } if *c == COMBO_CURRENT_COLOR)));
+        // a list that would leave the screen stops at its bottom and scrolls
+        u.combo = None;
+        u.it_mut(r).rect[1] = 420.0;
+        u.combo_rows = u.combo_rows(r);
+        u.combo = Some(r);
+        let (lr, _) = u.list_rect(r);
+        assert!(lr[1] + lr[3] <= 480.0 && u.list_num_items(r) < 6, "{lr:?}");
+        let cmds = u.paint();
+        assert!(cmds.iter().any(|c| matches!(c, Cmd::Pic { img, .. } if img.as_str() == ASSET_SCROLLBAR)));
     }
 
     #[test]
