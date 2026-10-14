@@ -65,8 +65,10 @@ pub const VIDEO_CVARS: &[(&str, &str)] = &[
 /// snd_main.c `S_Init`
 pub const SOUND_CVARS: &[(&str, &str)] = &[("s_volume", "0.8"), ("s_musicvolume", "0.25"), ("s_doppler", "1"), ("s_khz", "22"), ("s_useOpenAL", "0")];
 /// common.c / cl_main.c (CVAR_ARCHIVE)
-/// (`cl_netProtocol`: the network mode of dec040, 0 Auto, 71, 69)
-pub const CLIENT_CVARS: &[(&str, &str)] = &[("com_maxfps", "85"), ("cl_allowDownload", "0"), ("cg_shadows", "1"), ("cg_bounceParticles", "0"), ("cl_netProtocol", "0")];
+/// (`cl_netProtocol`: the network mode of dec040, 0 Auto, 71, 69;
+/// `cl_newsURL`: the legacy news address, cl_ui.c:103-104, and
+/// `cl_newsReleasesURL`: the release list under it, dec065)
+pub const CLIENT_CVARS: &[(&str, &str)] = &[("com_maxfps", "85"), ("cl_allowDownload", "0"), ("cg_shadows", "1"), ("cg_bounceParticles", "0"), ("cl_netProtocol", "0"), ("cl_newsURL", "http://tremulous.net/clientnews.txt"), ("cl_newsReleasesURL", "https://api.github.com/repos/MeepingsCorner/Tremulous-Revamped/releases?per_page=10"), ("cl_newsReleasesURL2", "https://api.github.com/repos/MeepingsCorner/Tremulous-Revamped-Release/releases?per_page=10"), ("cl_newsReleasesStaticURL", "https://raw.githubusercontent.com/MeepingsCorner/Tremulous-Revamped-Release/main/releases.json")];
 /// ui_main.c `cvarTable` (the CVAR_ARCHIVE ones)
 pub const UI_CVARS: &[(&str, &str)] = &[
     ("ui_browserShowFull", "1"),

@@ -35,29 +35,35 @@
 use std::collections::HashMap;
 
 use godot::classes::control::{LayoutPreset, MouseFilter};
-use godot::classes::{AudioStreamGenerator, AudioStreamGeneratorPlayback, AudioStreamPlayer, AudioStreamWav, Control, IControl, Image, ImageTexture, Input, InputEvent, InputEventKey, InputEventMouseButton, InputEventMouseMotion, RenderingServer, Texture2D, Time};
+use godot::classes::{
+    AudioStreamGenerator, AudioStreamGeneratorPlayback, AudioStreamPlayer, AudioStreamWav, Control,
+    IControl, Image, ImageTexture, Input, InputEvent, InputEventKey, InputEventMouseButton,
+    InputEventMouseMotion, RenderingServer, Texture2D, Time,
+};
 use godot::global::Key;
 use godot::prelude::*;
 
-use crate::game::TremGame;
-use crate::hud::{self, ItemDef, MenuDef, MenuSet, Script, Tok};
 use crate::cinematic::{self, Roq};
+use crate::game::TremGame;
+use crate::http::HttpJob;
+use crate::hud::{self, ItemDef, MenuDef, MenuSet, Script, Tok};
 use crate::menumodel::{MenuModel, ShaderScripts};
 use crate::models::Library;
+use crate::news;
 use crate::vidsnd::{self, VidSnd};
 use trem_sim::gen::buildables::BuildableId;
+use trem_sim::gen::buildables11::Buildable11Id;
 use trem_sim::gen::classes::ClassId;
+use trem_sim::gen::classes11::Class11Id;
 use trem_sim::gen::constants as k;
 use trem_sim::gen::enums::{Stat, Team};
 use trem_sim::gen::upgrades::UpgradeId;
-use trem_sim::gen::weapons::WeaponId;
-use trem_sim::gen::buildables11::Buildable11Id;
-use trem_sim::gen::classes11::Class11Id;
 use trem_sim::gen::upgrades11::Upgrade11Id;
+use trem_sim::gen::weapons::WeaponId;
 use trem_sim::gen::weapons11::Weapon11Id;
 use trem_sim::kernel::bg;
-use trem_sim::kernel::{bg11, v11};
 use trem_sim::kernel::world::{World, MAX_CLIENTS};
+use trem_sim::kernel::{bg11, v11};
 
 type Rgba = [f32; 4];
 type R = [f32; 4];
@@ -192,8 +198,6 @@ const NET_SOURCES: [&str; 4] = ["Internet", "Mplayer", "LAN", "Favorites"];
 /// ui_main.c `MonthAbbrev[]`
 const MONTH_ABBREV: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 /// ui_local.h limits
-const MAX_NEWS_LINES: usize = 50;
-const MAX_NEWS_LINEWIDTH: usize = 85;
 const MAX_MODS: usize = 64;
 const MAX_DEMOS: usize = 256;
 const MAX_MOVIES: usize = 256;
@@ -2318,6 +2322,13 @@ pub struct Ui {
     /// `trap_LAN_*`
     pub lan: Lan,
     pub browser: BrowserState,
+    /// the News page's two downloads, their answers kept for the session
+    news_sec: news::Section,
+    rel_sec: news::ReleasesSection,
+    /// starts a download; tests put a canned answer here (no network)
+    pub news_fetch: fn(&str, news::Kind) -> HttpJob,
+    /// the clock for "3 days ago" (unix seconds); tests fix it
+    pub news_clock: fn() -> i64,
     /// `UI_LoadMods` (name, description), `UI_LoadDemos`, `UI_LoadMovies`
     pub mods: Vec<(String, String)>,
     pub demos: Vec<String>,
@@ -2357,6 +2368,10 @@ impl Ui {
             feeders: feeder_table(defines),
             ods: ownerdraw_table(defines),
             cvars: default_cvars(),
+            news_sec: news::Section::default(),
+            rel_sec: news::ReleasesSection::default(),
+            news_fetch: news::start,
+            news_clock: news::unix_now,
             view: GameView::default(),
             out: Vec::new(),
             aspect: 1.0,
@@ -4002,8 +4017,23 @@ impl Ui {
         true
     }
 
-    /// `UI_UpdateNews`: this port has no cURL (`GetNews` without USE_CURL).
+    /// An address from an archived cvar, else its default.
+    fn news_url(&self, cvar: &str, default: &str) -> String {
+        let u = self.cvar(cvar);
+        if u.trim().is_empty() {
+            default.to_string()
+        } else {
+            u.trim().to_string()
+        }
+    }
+
+    /// `UI_UpdateNews` with `GetNews` (dec065): two non-blocking
+    /// downloads (the legacy news file at `cl_newsURL`, then the project's
+    /// release list at `cl_newsReleasesURL`), each polled every frame;
+    /// "Retrieving..." shows until a part is there, then its text (or the
+    /// leftover note), wrapped and split like the original.
     fn update_news(&mut self, begin: bool) {
+        let mut timed_out = false;
         if begin && !self.browser.news_active {
             self.browser.news_refresh_time = self.real_time + 10000;
             self.browser.news_active = true;
@@ -4011,31 +4041,52 @@ impl Ui {
             // do nothing
             return;
         } else if self.real_time > self.browser.news_refresh_time {
-            self.browser.news = vec!["^1Error: Timed out while contacting the server.".into()];
-            return;
+            timed_out = true;
         }
-        // start the news fetching (`trap_GetNews`)
-        let finished = true;
-        self.set_cvar("cl_newsString", "^1You must compile your client with CURL support to use this feature");
-        let news = self.cvar("cl_newsString");
-        // parse what comes back. Parse newlines and otherwise chop when necessary
-        let wrapped = item_text_wrap(&self.fonts, &news, 0.25, 325.0 * self.aspect, self.aspect);
-        let mut lines: Vec<String> = vec![String::new()];
-        for c in wrapped.chars() {
-            let line_len = lines.last().map(|l| l.len()).unwrap_or(0);
-            if line_len == MAX_NEWS_LINEWIDTH - 1 || c == '\n' {
-                if lines.len() == MAX_NEWS_LINES {
-                    break;
-                }
-                lines.push(String::new());
-                if c != '\n' {
-                    lines.last_mut().unwrap().push(c);
-                }
-            } else if c.is_ascii_graphic() || c == ' ' {
-                lines.last_mut().unwrap().push(c);
-            }
+        let now = self.real_time;
+        let news_url = self.news_url("cl_newsURL", news::DEFAULT_NEWS_URL);
+        // the live API of both repositories, else the static file (dec067)
+        let rel_urls = [
+            self.news_url("cl_newsReleasesURL", news::DEFAULT_RELEASES_URL),
+            self.news_url("cl_newsReleasesURL2", news::DEFAULT_RELEASES_URL2),
+        ];
+        let static_url = self.news_url(
+            "cl_newsReleasesStaticURL",
+            news::DEFAULT_RELEASES_STATIC_URL,
+        );
+        let fetch = self.news_fetch;
+        // trap_GetNews
+        let n = self.news_sec.step(
+            begin,
+            now,
+            timed_out,
+            &|| fetch(&news_url, news::Kind::News),
+            &|r| (news::from_result(&news_url, r), news::news_ok(r)),
+            &|| news::unavailable(&news_url, Some(&crate::http::HttpError::Timeout)),
+        );
+        let r = self.rel_sec.step(
+            begin,
+            now,
+            timed_out,
+            &|u| fetch(u, news::Kind::Releases),
+            &rel_urls,
+            &static_url,
+            (self.news_clock)(),
+        );
+        let finished = n.is_some() && r.is_some();
+        // cl_newsString: the news file's text, as in the original
+        let n_text = n.clone().unwrap_or_else(|| news::RETRIEVING.to_string());
+        if self.cvar("cl_newsString") != n_text {
+            self.set_cvar("cl_newsString", &n_text);
         }
-        self.browser.news = lines;
+        // parse what comes back. Parse newlines and otherwise chop when
+        // necessary: the news file first (its legacy 50 lines), then the
+        // release list with its own budget
+        let wrap = |t: &str| item_text_wrap(&self.fonts, t, 0.25, 325.0 * self.aspect, self.aspect);
+        self.browser.news = news::page_lines(
+            &wrap(n.as_deref().unwrap_or(news::RETRIEVING)),
+            &wrap(r.as_deref().unwrap_or(news::RETRIEVING)),
+        );
         if finished {
             self.browser.news_active = false;
         }
@@ -9247,12 +9298,52 @@ mod tests {
         // find a friend: no servers to ask
         u.set_cvar("ui_findPlayer", "^1Bob");
         u.run_menu_script("FindPlayer", None);
-        assert_eq!(u.browser.found_names, vec!["0 servers found with player Bob".to_string()]);
-        // news: no cURL in this port
+        assert_eq!(
+            u.browser.found_names,
+            vec!["0 servers found with player Bob".to_string()]
+        );
+        // news (dec065): the downloads are canned here, no network in tests
+        u.news_fetch = |url, _| {
+            if url.contains("repos/MeepingsCorner/Tremulous-Revamped/") {
+                crate::http::HttpJob::ready(Ok(br#"[{"tag_name":"hd-textures-v1","name":"4K texture pack","author":{"login":"MeepingsCorner"},"published_at":"2026-10-10T12:42:52Z","body":"4K texture pack."}]"#.to_vec()))
+            } else if url.contains("repos/MeepingsCorner/Tremulous-Revamped-Release/") {
+                crate::http::HttpJob::ready(Ok(br#"[{"tag_name":"v1.0","name":"Release 1.0","author":{"login":"MeepingsCorner"},"published_at":"2026-10-12T12:42:52Z","body":"First public build."}]"#.to_vec()))
+            } else {
+                crate::http::HttpJob::ready(Err(crate::http::HttpError::Status(404)))
+            }
+        };
+        // 2026-10-13 12:00 UTC
+        u.news_clock = || 1791892800;
         u.run_menu_script("getNews", None);
         // (wrapped at 325 * aspectScale like UI_UpdateNews)
         assert!(!u.browser.news.is_empty());
-        assert!(u.browser.news.concat().contains("CURL support"), "{:?}", u.browser.news);
+        let shown = u.browser.news.join(" | ");
+        assert!(
+            shown.contains("leftover from the original Tremulous"),
+            "{:?}",
+            u.browser.news
+        );
+        assert!(
+            shown.contains("http://tremulous.net/clientnews.txt"),
+            "{:?}",
+            u.browser.news
+        );
+        assert!(
+            !shown.contains("CURL") && !shown.contains("^1"),
+            "{:?}",
+            u.browser.news
+        );
+        // both repositories, newest first, each item with its repo (dec067)
+        assert!(shown.contains("^3Tremulous Revamped releases^7 |  | ^2Release 1.0^7 | MeepingsCorner released this on 2026-10-12 (yesterday) | "), "{:?}", u.browser.news);
+        assert!(
+            shown.contains(
+                "|  | ^24K texture pack^7 | MeepingsCorner released this on 2026-10-10 (3 days ago)"
+            ),
+            "{:?}",
+            u.browser.news
+        );
+        assert!(!shown.contains("Retrieving"), "{:?}", u.browser.news);
+        assert!(!u.browser.news_active);
     }
 
     #[test]
