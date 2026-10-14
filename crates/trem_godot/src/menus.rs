@@ -6966,17 +6966,8 @@ fn patch_sound_options(text: &str) -> String {
 /// Cargo version in a source tarball) and the date of its commit. Only the
 /// menu text: the `version` cvar, the serverinfo and the protocol are not touched.
 pub fn title_version_line() -> String {
-    let (v, d) = (env!("TREM_VERSION"), env!("TREM_BUILD_DATE"));
-    let v = if v.contains('.') && v.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-        format!("v{v}")
-    } else {
-        v.to_string()
-    };
-    if d.is_empty() {
-        v
-    } else {
-        format!("{v} - {d}")
-    }
+    // the same text the boot splash bakes in (crate::version_line, also used by build.rs)
+    crate::version_line::version_line(env!("TREM_VERSION"), env!("TREM_BUILD_DATE"))
 }
 
 /// The main menu's title block (dec090): a small spaced "REVAMPED" and the

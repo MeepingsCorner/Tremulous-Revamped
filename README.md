@@ -402,3 +402,8 @@ Other notes:
   `maprotation NAME`, `advanceMapRotation` and `stopMapRotation` (dec022).
 * Light flares default to `cg_lightFlare 3` (bisphere "real" fade, dec024);
   `cg_lightFlare 0..2` in the console switches mode.
+
+## Third-party credits
+
+Godot Engine logo (c) 2017 Andrea Calabró, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/), shown on the boot splash; press kit: https://godotengine.org/press/
+Godot Engine is MIT licensed: https://godotengine.org/license

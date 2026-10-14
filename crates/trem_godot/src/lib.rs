@@ -41,6 +41,9 @@ mod fmodaudio; // FMOD + Steam Audio sound path
 mod hdtex; // 4K texture packs (enhanced mode)
 mod ragdoll; // ragdoll corpses (enhanced mode)
 mod upnp; // the router's port forwarding for hosted games
+mod version_line; // the version text of the title screen and the boot splash
+#[cfg(test)]
+mod splash_png; // the boot splash build.rs bakes (tests only here)
 mod firewall; // the Windows Firewall check for hosted games (dec047)
 mod lamps; // the map's lamps and sun: world-fixed shadows (enhanced mode)
 

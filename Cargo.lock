@@ -548,6 +548,7 @@ version = "0.1.0"
 dependencies = [
  "cc",
  "godot",
+ "miniz_oxide",
  "trem_hdpack",
  "trem_sim",
 ]

@@ -17,3 +17,8 @@ godot = { version = "0.5", features = ["api-4-7", "experimental-godot-api"] }
 
 [build-dependencies]
 cc = "1"
+# the boot splash PNG (src/splash_png.rs); already in Cargo.lock through zip
+miniz_oxide = "0.9"
+
+[dev-dependencies]
+miniz_oxide = "0.9"
