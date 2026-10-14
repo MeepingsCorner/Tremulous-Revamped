@@ -458,3 +458,37 @@ fn nethost_listen_server_lan_browser_and_join() {
     assert!(!a.server.as_ref().unwrap().world.clients[ib].connected);
     assert!(!views[0].as_ref().unwrap().clients[ib].connected);
 }
+
+/// A player leaves a server and joins one again in the same session
+/// (the same client, so the same UDP port and qport).
+#[test]
+fn second_connect_in_one_session_joins_again() {
+    let mut port = 0;
+    let (mut sv, mut snet) = server(&mut port);
+    let addr = format!("127.0.0.1:{port}");
+    let mut peers = vec![Peer::new("Alice", GUID_A, &addr, None)];
+    for round in 0..3 {
+        for _ in 0..400 {
+            step(&mut sv, &mut snet, &mut peers, 16);
+            if peers[0].cl.state == ConnState::Active && sv.active_clients() == 1 {
+                break;
+            }
+        }
+        assert_eq!(
+            peers[0].cl.state,
+            ConnState::Active,
+            "round {round}: {:?}: {}",
+            peers[0].cl.error,
+            peers[0].cl.print_out
+        );
+        // some play time, then disconnect and connect again at once
+        for _ in 0..20 {
+            step(&mut sv, &mut snet, &mut peers, 16);
+        }
+        let p = &mut peers[0];
+        p.cl.disconnect(&mut p.net);
+        p.cg = None;
+        p.view = None;
+        p.cl.connect(&mut p.net, &addr).unwrap();
+    }
+}

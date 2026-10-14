@@ -41,6 +41,7 @@ mod fmodaudio; // FMOD + Steam Audio sound path
 mod hdtex; // 4K texture packs (enhanced mode)
 mod ragdoll; // ragdoll corpses (enhanced mode)
 mod upnp; // the router's port forwarding for hosted games
+mod dlguide; // the download guide: steps instead of the manual-install dead end
 mod firewall; // the Windows Firewall check for hosted games (dec047)
 mod lamps; // the map's lamps and sun: world-fixed shadows (enhanced mode)
 

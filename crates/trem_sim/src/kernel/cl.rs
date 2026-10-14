@@ -341,6 +341,8 @@ pub struct NetClient {
     /// `com_downloadPrompt` / `com_downloadPromptText` (the ui's download_popmenu)
     pub download_prompt: i32,
     pub download_prompt_text: String,
+    /// the files of the "does not allow downloading" prompt (the ui's download guide)
+    pub download_manual: Option<Vec<String>>,
     /// `clc.sv_allowDownload` / `clc.sv_dlURL` (CL_ParseServerInfo)
     pub sv_allow_download: i32,
     pub sv_dl_url: String,
@@ -489,6 +491,7 @@ impl NetClient {
             allow_download: 0,
             download_prompt: 0,
             download_prompt_text: String::new(),
+            download_manual: None,
             sv_allow_download: 0,
             sv_dl_url: String::new(),
             connected_to_pure: false,
@@ -553,6 +556,9 @@ impl NetClient {
         self.entity_baselines11.iter_mut().for_each(|b| *b = EntityState::default());
         self.pending_server_commands.clear();
         self.timeout_count = 0;
+        // CL_ClearState memsets cl, serverId included: a stale id equal to the
+        // server's makes it take us for caught up and never send the gamestate
+        self.server_id = 0;
     }
 
     // ============================================================ commands
@@ -1596,6 +1602,12 @@ impl NetClient {
                 } else {
                     "You are missing optional files provided by the server. You may not need them to play but can choose to download them anyway:"
                 };
+                let refused = self.connected_to_pure
+                    && (self.sv_allow_download & super::sv::DLF_ENABLE == 0
+                        || (self.sv_allow_download & super::sv::DLF_NO_UDP != 0
+                            && self.sv_allow_download & super::sv::DLF_NO_REDIRECT != 0));
+                self.download_manual =
+                    refused.then(|| names.iter().map(|n| n.to_string()).collect());
                 self.download_prompt_text = format!("{pure_msg}\n\n{files_s}\n");
                 self.download_prompt = DLP_SHOW;
                 return;
