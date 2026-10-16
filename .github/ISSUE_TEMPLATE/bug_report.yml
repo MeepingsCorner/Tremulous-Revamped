@@ -1,0 +1,103 @@
+name: Bug report
+description: Something doesn't work, looks wrong, or crashes.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. One problem per issue, please. Search the open issues first; if yours is there, add a comment or a thumbs-up instead.
+  - type: dropdown
+    id: build
+    attributes:
+      label: Which build are you playing?
+      options:
+        - Official release from this repository's Releases page
+        - Built myself from this repository's source
+        - Someone else's build, test build or fork
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version details
+      description: The release number, the commit you built from, or a link to where you got the build. If the game shows a version anywhere (menu, splash, console), copy it exactly.
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux
+        - Other (say below)
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Where did it happen?
+      options:
+        - Menus or settings
+        - Playing alone or with bots
+        - Hosting a game from the menu
+        - Playing on someone else's server
+        - Running a dedicated server
+    validations:
+      required: true
+  - type: textarea
+    id: wrong
+    attributes:
+      label: What is wrong?
+      description: Describe what happens, as exactly as you can.
+      placeholder: When I ..., the game ...
+    validations:
+      required: true
+  - type: textarea
+    id: should
+    attributes:
+      label: How do you think it should work?
+    validations:
+      required: true
+  - type: dropdown
+    id: basis
+    attributes:
+      label: Where does that expectation come from?
+      options:
+        - Classic Tremulous 1.1 worked this way
+        - Another Tremulous version worked this way (say which below)
+        - It would be an improvement over classic behaviour
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The shortest way to make it happen again. Say if it happens every time or only sometimes.
+      placeholder: |
+        1. ...
+        2. ...
+  - type: input
+    id: hardware
+    attributes:
+      label: Graphics card, screen and refresh rate
+      description: Helps with display and performance problems, e.g. "RTX 3060, 2560x1440, 165 Hz, Windows scaling 125 %".
+  - type: textarea
+    id: settings
+    attributes:
+      label: Settings you changed
+      description: For problems with settings or controls, list each setting and its value (menu name or console variable).
+  - type: textarea
+    id: log
+    attributes:
+      label: Console or log output
+      description: If you see error lines, copy them here.
+      render: text
+  - type: textarea
+    id: media
+    attributes:
+      label: Screenshots or video
+      description: Drag files here. Very useful for anything visual.
