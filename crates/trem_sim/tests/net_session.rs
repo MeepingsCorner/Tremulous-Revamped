@@ -458,3 +458,100 @@ fn nethost_listen_server_lan_browser_and_join() {
     assert!(!a.server.as_ref().unwrap().world.clients[ib].connected);
     assert!(!views[0].as_ref().unwrap().clients[ib].connected);
 }
+
+/// dec083: a client that joins as a spectator is looking along the
+/// intermission point's angles (G_SelectSpectatorSpawnPoint ->
+/// G_SetClientViewAngle), whatever its own cl.viewangles are when its first
+/// usercmd arrives: the previous game's view, mouse movement while the map
+/// loaded. The spawn runs at connect time in this port, before any cmd, so
+/// the delta_angles have to be taken against the first cmd.
+#[test]
+fn spectator_join_keeps_the_intermission_view() {
+    let mut port = 0;
+    let (mut sv, mut snet) = server(&mut port);
+    let addr = format!("127.0.0.1:{port}");
+    let mut peers = vec![Peer::new("Alice", GUID_A, &addr, None), Peer::new("Bob", GUID_B, &addr, None)];
+    // Alice starts with cl.viewangles 0; Bob arrives with a view he turned before (yaw 275, pitch 20)
+    peers[1].cmd.angles = [trem_sim::kernel::msg::angle2short(20.0), trem_sim::kernel::msg::angle2short(275.0), 0];
+    for _ in 0..400 {
+        step(&mut sv, &mut snet, &mut peers, 16);
+        if peers.iter().all(|p| p.cl.state == ConnState::Active) && sv.active_clients() == 2 {
+            break;
+        }
+    }
+    for _ in 0..40 {
+        step(&mut sv, &mut snet, &mut peers, 16);
+    }
+    let diff = |a: f32, b: f32| ((a - b + 540.0).rem_euclid(360.0) - 180.0).abs();
+    let want = sv.world.level.intermission_angle;
+    eprintln!("spectator_join_keeps_the_intermission_view: intermission angles {want:?}");
+    assert!(diff(want[1], 275.0) > 10.0 && diff(want[0], 20.0) > 10.0, "Bob's own view differs from the spawn view, so the test can tell");
+    for (n, p) in peers.iter().enumerate() {
+        let i = p.me();
+        assert_eq!(sv.world.clients[i].spectator, SpectatorState::Free as i32);
+        let sv_view = sv.world.clients[i].ps.viewangles;
+        assert!(diff(sv_view[1], want[1]) < 0.1 && diff(sv_view[0], want[0]) < 0.1, "client {n}: server view {sv_view:?}, intermission {want:?}");
+        // and the client's own predicted view agrees
+        let cl_view = p.view.as_ref().unwrap().clients[i].ps.viewangles;
+        assert!(diff(cl_view[1], want[1]) < 0.1 && diff(cl_view[0], want[0]) < 0.1, "client {n}: predicted view {cl_view:?}, intermission {want:?}");
+    }
+}
+
+/// dec083, the listen-server case ("Host Game"): the
+/// host's own player joins over the loopback, its first usercmd carries
+/// whatever cl.viewangles the host had (here yaw 275, pitch 20), and it
+/// must still look along the intermission point; again after the next map
+/// (SV_SpawnServer on the running server: every client gets a new gamestate
+/// and enters the world on its first cmd, as after map_restart).
+#[test]
+fn listen_host_keeps_the_intermission_view_after_map_change() {
+    use trem_sim::kernel::msg::angle2short;
+    use trem_sim::kernel::nethost::{HostEvent, NetHost};
+    let mut a = NetHost::new();
+    let mut cv = ServerCvars { hostname: "listen host".into(), ..Default::default() };
+    cv.dedicated = 0;
+    a.cl.userinfo = format!("\\name\\Host\\cl_guid\\{GUID_A}");
+    a.spawn_server(World::new(MapId::Arena), "arena", cv.clone(), "127.0.0.1", trem_sim::kernel::netchan::PORT_SERVER + 1, true);
+    let mut view: Option<World> = None;
+    let diff = |x: f32, y: f32| ((x - y + 540.0).rem_euclid(360.0) - 180.0).abs();
+    for (round, own) in [(20.0f32, 275.0f32), (-30.0, 30.0)].into_iter().enumerate() {
+        let cmd = UserCmd { angles: [angle2short(own.0), angle2short(own.1), 0], ..Default::default() };
+        let mut loaded = false;
+        for n in 0..600 {
+            let c = a.client_num().map(|_| cmd);
+            for e in a.frame(16, view.as_mut(), c) {
+                match e {
+                    HostEvent::LoadView { .. } => {
+                        view = Some(World::client_view(MapId::Arena));
+                        a.view_loaded();
+                        loaded = true;
+                    }
+                    HostEvent::Dropped { reason } => panic!("dropped: {reason}"),
+                    _ => {}
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_micros(300));
+            if loaded && n > 100 && a.client_num().is_some() && a.server.as_ref().unwrap().active_clients() == 1 {
+                break;
+            }
+        }
+        assert!(loaded, "round {round}: the host got a gamestate");
+        for _ in 0..40 {
+            let c = a.client_num().map(|_| cmd);
+            a.frame(16, view.as_mut(), c);
+        }
+        let i = a.client_num().unwrap();
+        let sv = a.server.as_ref().unwrap();
+        assert!(sv.world.clients[i].local_client);
+        let want = sv.world.level.intermission_angle;
+        assert!(diff(want[1], own.1) > 10.0, "the host's own yaw differs from the spawn view, so the test can tell");
+        let sv_view = sv.world.clients[i].ps.viewangles;
+        assert!(diff(sv_view[1], want[1]) < 0.1 && diff(sv_view[0], want[0]) < 0.1, "round {round}: server view {sv_view:?}, intermission {want:?}");
+        let cl_view = view.as_ref().unwrap().clients[i].ps.viewangles;
+        assert!(diff(cl_view[1], want[1]) < 0.1 && diff(cl_view[0], want[0]) < 0.1, "round {round}: host's predicted view {cl_view:?}, intermission {want:?}");
+        if round == 0 {
+            // the next map on the running server (change_map)
+            a.spawn_server(World::new(MapId::Arena), "arena", cv.clone(), "127.0.0.1", trem_sim::kernel::netchan::PORT_SERVER + 1, true);
+        }
+    }
+}

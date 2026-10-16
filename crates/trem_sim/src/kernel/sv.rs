@@ -1378,6 +1378,22 @@ impl Server {
     /// `SV_ClientEnterWorld` (ClientBegin ran at connect time, dec033).
     fn client_enter_world(&mut self, i: usize, cmd: Option<&UserCmd>) {
         self.clients[i].state = ClientState::Active;
+        // 1.1 runs ClientBegin on the first usercmd, so ClientSpawn's
+        // G_SetClientViewAngle (g_client.c:746) takes delta_angles against
+        // THAT cmd (trap_GetUsercmd). Here the spawn ran at connect time
+        // with no cmd at all (angles 0) and never set delta_angles, so the
+        // view became cmd.angles + 0, the client's own cl.viewangles,
+        // instead of the spawn angles (dec083). Redo the delta against the
+        // first cmd and keep the spawn view.
+        // ORDER DEPENDENCY: this must run from the Primed -> Active step that
+        // precedes the usercmd loop (as SV_ClientEnterWorld does before the
+        // cmd loop in sv_client.c), so the delta is taken before the first
+        // cmd is run through pmove. Moving enter_world after the loop breaks it.
+        if let (Some(cmd), true) = (cmd, self.world.clients[i].connected) {
+            let angles = self.world.clients[i].ps.viewangles;
+            self.world.clients[i].cmd.angles = cmd.angles;
+            super::client::set_view_angle(&mut self.world, i, angles);
+        }
         // resend all configstrings using the cs commands since these are
         // no longer sent when the client is CS_PRIMED
         self.update_client_configstrings(i);
