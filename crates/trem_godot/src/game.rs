@@ -3344,14 +3344,7 @@ impl TremGame {
         {
             let TremGame { world, lib, actors, ragdolls, death_push, alive_vel, lightgrid, .. } = self;
             let (w, lib) = (world.as_ref().unwrap(), lib.as_ref().unwrap());
-            // dead: PM_DEAD / EF_DEAD (a player waiting to spawn also has no
-            // health, and is not a corpse)
-            let dead_player = |i: usize| -> bool {
-                i < MAX_CLIENTS && w.ents[i].etype == EType::Player && {
-                    let ps = &w.clients[i].ps;
-                    ps.pm_type == trem_sim::gen::enums::PmType::Dead as i32 || ps.e_flags & k::EF_DEAD != 0
-                }
-            };
+            let dead_player = |i: usize| ragdoll_dead_player(w, i);
             let corpse = |i: usize| i < w.ents.len() && w.ents[i].inuse && w.ents[i].etype == EType::Corpse;
             for i in 0..MAX_CLIENTS.min(w.ents.len()) {
                 if w.ents[i].inuse && w.ents[i].etype == EType::Player && !dead_player(i) {
@@ -4925,6 +4918,20 @@ fn startup_commands() -> Vec<String> {
         .collect()
 }
 
+/// A dying body for the ragdolls: a player entity in PM_DEAD / EF_DEAD (a
+/// player waiting to spawn also has no health, and is not a corpse) that is
+/// still in the World. A networked view (a client, or the host of a listen
+/// server) drops the entity when the server takes the body away
+/// (SpawnCorpse unlinks it), but keeps the last playerstate it derived from
+/// it, still dead: without the `inuse` test that stale state kept the
+/// player's ragdoll on screen and the corpse taking over got a second one.
+fn ragdoll_dead_player(w: &World, i: usize) -> bool {
+    i < MAX_CLIENTS && i < w.ents.len() && w.ents[i].inuse && w.ents[i].etype == EType::Player && {
+        let ps = &w.clients[i].ps;
+        ps.pm_type == trem_sim::gen::enums::PmType::Dead as i32 || ps.e_flags & k::EF_DEAD != 0
+    }
+}
+
 /// Which entities get an original model (players, corpses, structures).
 fn actor_key(w: &World, i: usize) -> Option<String> {
     let e = &w.ents[i];
@@ -6208,5 +6215,80 @@ mod host_cvar_tests {
         ] {
             assert!(!ui_cvar_is_host_side(n), "{n}");
         }
+    }
+}
+
+#[cfg(test)]
+mod corpse_tests {
+    use super::ragdoll_dead_player;
+    use trem_sim::gen::enums::{MeansOfDeath, SpectatorState, Team};
+    use trem_sim::gen::maps::MapId;
+    use trem_sim::kernel::cgview::Cgame;
+    use trem_sim::kernel::cl::{ConnState, NetClient};
+    use trem_sim::kernel::netchan::{Net, NetSrc};
+    use trem_sim::kernel::sv::{Server, ServerCvars};
+    use trem_sim::kernel::types::UserCmd;
+    use trem_sim::kernel::world::{EType, World};
+    use trem_sim::kernel::{bot, combat};
+
+    /// A listen server's host sees an alien killed by a turret: once its
+    /// corpse is in the host's view, the dead player no longer counts as a
+    /// dying body, so the corpse takes its ragdoll over (one body, not two).
+    #[test]
+    fn corpse_replaces_the_dead_player_in_a_networked_view() {
+        let mut net = Net::new();
+        net.open(NetSrc::Server, "127.0.0.1", 0).unwrap();
+        let mut sv = Server::spawn(World::new(MapId::Arena), "arena", ServerCvars::default());
+        let mut cl = NetClient::new(0);
+        cl.userinfo = "\\name\\Host\\cl_guid\\0123456789ABCDEF0123456789ABCDEF".into();
+        cl.connect(&mut net, "localhost").unwrap();
+        let (mut view, mut cg): (Option<World>, Option<Cgame>) = (None, None);
+        let mut bot_i = None;
+        let (mut killed, mut checked) = (false, false);
+        let mut seen_dead = false;
+        for _ in 0..6000 {
+            sv.frame(&mut net, 16);
+            cl.frame(&mut net, 16);
+            if cl.gamestate_new {
+                view = Some(World::client_view(MapId::Arena));
+                cg = Some(Cgame::init(&cl));
+                cl.cgame_loaded(&mut net);
+            }
+            if let (Some(c), Some(v)) = (cg.as_mut(), view.as_mut()) {
+                if cl.state == ConnState::Active {
+                    c.frame(&mut cl, v);
+                }
+            }
+            cl.create_cmd(UserCmd::default());
+            cl.send_cmd(&mut net);
+            if cl.state != ConnState::Active {
+                continue;
+            }
+            let b = *bot_i.get_or_insert_with(|| bot::add_bot(&mut sv.world, "alien", Team::Aliens).unwrap());
+            let w = &sv.world;
+            let alive = w.clients[b].spectator == SpectatorState::Not as i32 && w.ents[b].health > 0;
+            if !killed && alive {
+                // a human turret's burst (MOD_MGTURRET), as in the report
+                let t = (64..w.num_entities).find(|&e| w.ents[e].inuse && w.ents[e].buildable == Some(trem_sim::gen::buildables::BuildableId::Mgturret));
+                combat::damage(&mut sv.world, b, t, t, None, None, 10000, 0, MeansOfDeath::Mgturret);
+                killed = true;
+                continue;
+            }
+            let v = view.as_ref().unwrap();
+            if killed && v.ents[b].inuse && ragdoll_dead_player(v, b) {
+                seen_dead = true;
+            }
+            let corpse = (64..v.num_entities).any(|e| v.ents[e].inuse && v.ents[e].etype == EType::Corpse);
+            if killed && corpse {
+                // the server took the body away; the view still has the
+                // player's last (dead) playerstate
+                assert!(!v.ents[b].inuse, "the dead player left the snapshot");
+                assert!(!ragdoll_dead_player(v, b), "the dead player is not a dying body any more: the corpse takes its ragdoll over");
+                checked = true;
+                break;
+            }
+        }
+        assert!(seen_dead, "the host saw the alien die");
+        assert!(checked, "the host saw the corpse");
     }
 }
