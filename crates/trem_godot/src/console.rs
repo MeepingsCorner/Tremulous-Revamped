@@ -16,7 +16,7 @@
 //! The logic is pure Rust (`Console`, unit tested); `TremConsole` is the
 //! Godot node that draws it like the original (the `console` shader over
 //! the top half, the red line, the red version string, 8x16 characters
-//! from gfx/2d/bigchars) and feeds it the keys while it is down.
+//! from gfx/2d/bigchars, scaled by `con_scale`) and feeds it the keys while it is down.
 
 use crate::keys::*;
 use godot::classes::{Control, IControl, InputEvent, InputEventKey};
@@ -40,6 +40,35 @@ pub const SMALLCHAR_HEIGHT: i32 = 16;
 /// q_shared.h SCREEN_WIDTH / SCREEN_HEIGHT
 const SCREEN_WIDTH: i32 = 640;
 const SCREEN_HEIGHT: i32 = 480;
+/// dec084: the largest fixed `con_scale` (darklegion/tremulous
+/// cl_console.c: Cvar_CheckRange( con_scale, 1, 4 ))
+pub const CON_SCALE_MAX: i32 = 4;
+/// cl_console.c DEFAULT_CONSOLE_WIDTH: 1.1's columns (640 virtual px)
+pub const DEFAULT_CONSOLE_WIDTH: i32 = SCREEN_WIDTH / SMALLCHAR_WIDTH - 2;
+
+/// dec084: the whole-number scale of the 8x16 character cell.
+/// `con_scale` 1-4 is fixed (larger values are 4); 0 (the default) or less
+/// is auto: height / 480, so 1x below 960 px (720p keeps 8x16), 2x at
+/// 1080p, 3x at 1440p, 4x at 2160p.
+pub fn con_cell_scale(con_scale: i32, vid_h: i32) -> i32 {
+    if con_scale >= 1 {
+        con_scale.min(CON_SCALE_MAX)
+    } else {
+        (vid_h / SCREEN_HEIGHT).clamp(1, CON_SCALE_MAX)
+    }
+}
+
+/// dec084: (cell width, cell height, columns) for a vid_w x vid_h
+/// window. `con_scale` 1 is the 1.1 console (8x16, 78 columns); every other
+/// value uses the full width like darklegion/tremulous `Con_CheckResize`:
+/// vid_w / cell width - 2 (78 before the window has a size).
+pub fn con_layout(con_scale: i32, vid_w: i32, vid_h: i32) -> (i32, i32, i32) {
+    let s = con_cell_scale(con_scale, vid_h);
+    let (cw, ch) = (SMALLCHAR_WIDTH * s, SMALLCHAR_HEIGHT * s);
+    let cols = if con_scale == 1 { DEFAULT_CONSOLE_WIDTH } else { vid_w / cw - 2 };
+    (cw, ch, if cols < 1 { DEFAULT_CONSOLE_WIDTH } else { cols })
+}
+
 /// q_shared.h Q3_VERSION (PRODUCT_NAME " " PRODUCT_VERSION)
 pub const Q3_VERSION: &str = "tremulous 1.1.0";
 /// q_shared.h INDENT_MARKER
@@ -100,16 +129,16 @@ pub struct ConText {
 impl Default for ConText {
     fn default() -> Self {
         let mut c = ConText { text: vec![(COLOR_WHITE << 8) | b' ' as u16; CON_TEXTSIZE], current: 0, x: 0, display: 0, linewidth: -1, totallines: 0, display_frac: 0.0, final_frac: 0.0, vislines: 0 };
-        c.check_resize();
+        c.check_resize(DEFAULT_CONSOLE_WIDTH);
         c
     }
 }
 
 impl ConText {
-    /// `Con_CheckResize`: the width is SCREEN_WIDTH / SMALLCHAR_WIDTH - 2
-    /// (the console text keeps to the 640 virtual columns).
-    pub fn check_resize(&mut self) {
-        let width = SCREEN_WIDTH / SMALLCHAR_WIDTH - 2;
+    /// `Con_CheckResize`: reformat the buffer for `width` columns (dec084:
+    /// `con_layout`'s; 1.1 kept SCREEN_WIDTH / SMALLCHAR_WIDTH - 2, 78).
+    pub fn check_resize(&mut self, width: i32) {
+        let width = if width < 1 { DEFAULT_CONSOLE_WIDTH } else { width };
         if width == self.linewidth {
             return;
         }
@@ -741,7 +770,8 @@ impl Console {
     /// `Con_ToggleConsole_f` / `Con_Close`'s field reset.
     pub fn reset_field(&mut self) {
         self.field.clear();
-        self.field.width_in_chars = CONSOLE_FIELD_WIDTH;
+        // dec084: as wide as the text (78 = CONSOLE_FIELD_WIDTH at con_scale 1)
+        self.field.width_in_chars = self.con.linewidth.max(1) as usize;
     }
 
     /// `Console_Key`: history, scrollback, Enter and Tab; the rest goes to
@@ -956,8 +986,14 @@ pub fn draw_voip_meter(text: &str) -> Vec<ConDraw> {
 
 /// `Con_DrawSolidConsole( frac )` for a vid_w x vid_h window; `input`:
 /// the edit line is drawn (`Con_DrawInput`'s check), `realtime` blinks the cursor.
-pub fn draw_solid_console(c: &mut Console, frac: f32, vid_w: i32, vid_h: i32, input: bool, realtime: u32) -> Vec<ConDraw> {
+/// dec084: `con_scale` sets the character cell (`con_layout`; the
+/// `Char`s are cells of that size) and the columns (`Con_DrawConsole`'s
+/// `Con_CheckResize`: the buffer is reformatted when they change).
+pub fn draw_solid_console(c: &mut Console, frac: f32, vid_w: i32, vid_h: i32, con_scale: i32, input: bool, realtime: u32) -> Vec<ConDraw> {
     let mut out = Vec::new();
+    let (cw, chh, cols) = con_layout(con_scale, vid_w, vid_h);
+    c.con.check_resize(cols);
+    c.field.width_in_chars = c.con.linewidth.max(1) as usize;
     let mut lines = (vid_h as f32 * frac) as i32;
     if lines <= 0 {
         return out;
@@ -976,22 +1012,22 @@ pub fn draw_solid_console(c: &mut Console, frac: f32, vid_w: i32, vid_h: i32, in
     let v = Q3_VERSION.as_bytes();
     let n = v.len() as i32;
     for (x, &ch) in v.iter().enumerate() {
-        out.push(ConDraw::Char(vid_w - (n - x as i32 + 1) * SMALLCHAR_WIDTH, lines - SMALLCHAR_HEIGHT, ch, COLOR_TABLE[COLOR_RED]));
+        out.push(ConDraw::Char(vid_w - (n - x as i32 + 1) * cw, lines - chh, ch, COLOR_TABLE[COLOR_RED]));
     }
     // draw the text
     let con = &mut c.con;
     con.vislines = lines;
-    let mut rows = (lines - SMALLCHAR_HEIGHT) / SMALLCHAR_HEIGHT;
-    let mut y = lines - SMALLCHAR_HEIGHT * 3;
+    let mut rows = (lines - chh) / chh;
+    let mut y = lines - chh * 3;
     // draw from the bottom up
     if con.display != con.current {
         // draw arrows to show the buffer is backscrolled
         let mut x = 0;
         while x < con.linewidth {
-            out.push(ConDraw::Char(xadjust + (x + 1) * SMALLCHAR_WIDTH, y, b'^', COLOR_TABLE[COLOR_RED]));
+            out.push(ConDraw::Char(xadjust + (x + 1) * cw, y, b'^', COLOR_TABLE[COLOR_RED]));
             x += 4;
         }
-        y -= SMALLCHAR_HEIGHT;
+        y -= chh;
         rows -= 1;
     }
     let mut row = con.display;
@@ -1007,18 +1043,18 @@ pub fn draw_solid_console(c: &mut Console, frac: f32, vid_w: i32, vid_h: i32, in
                 if t & 0xff == b' ' as u16 {
                     continue;
                 }
-                out.push(ConDraw::Char(xadjust + (x as i32 + 1) * SMALLCHAR_WIDTH, y, (t & 0xff) as u8, COLOR_TABLE[((t >> 8) & 7) as usize]));
+                out.push(ConDraw::Char(xadjust + (x as i32 + 1) * cw, y, (t & 0xff) as u8, COLOR_TABLE[((t >> 8) & 7) as usize]));
             }
         }
-        y -= SMALLCHAR_HEIGHT;
+        y -= chh;
         row -= 1;
     }
     // draw the input prompt, user text, and cursor if desired
     if input {
-        let y = con.vislines - SMALLCHAR_HEIGHT * 2;
+        let y = con.vislines - chh * 2;
         let white = COLOR_TABLE[COLOR_WHITE as usize];
-        out.push(ConDraw::Char(xadjust + SMALLCHAR_WIDTH, y, b']', white));
-        let x0 = xadjust + 2 * SMALLCHAR_WIDTH;
+        out.push(ConDraw::Char(xadjust + cw, y, b']', white));
+        let x0 = xadjust + 2 * cw;
         let (s, cur) = c.field.visible();
         // SCR_DrawSmallStringExt( noColorEscape ): colours apply, escapes are drawn
         let mut color = white;
@@ -1027,13 +1063,13 @@ pub fn draw_solid_console(c: &mut Console, frac: f32, vid_w: i32, vid_h: i32, in
                 color = COLOR_TABLE[color_index(s[i + 1]) as usize];
             }
             if ch != b' ' {
-                out.push(ConDraw::Char(x0 + i as i32 * SMALLCHAR_WIDTH, y, ch, color));
+                out.push(ConDraw::Char(x0 + i as i32 * cw, y, ch, color));
             }
         }
         // draw the cursor (off blink every 256 ms)
         if (realtime >> 8) & 1 == 0 {
             let cursor_char = if c.overstrike { 11 } else { 10 };
-            out.push(ConDraw::Char(x0 + cur * SMALLCHAR_WIDTH, y, cursor_char, white));
+            out.push(ConDraw::Char(x0 + cur * cw, y, cursor_char, white));
         }
     }
     out
@@ -1059,12 +1095,16 @@ pub struct TremConsole {
     background: Option<Gd<godot::classes::Texture2D>>,
     tried_textures: bool,
     ops: Vec<ConDraw>,
+    /// dec084: the cell of the `Char`s (con_layout)
+    cell: (i32, i32),
+    /// dec084: the charset with the nearest filter, for cells larger than 8x16
+    nearest: Option<(Gd<godot::classes::Texture2D>, Gd<godot::classes::Texture2D>)>,
 }
 
 #[godot_api]
 impl IControl for TremConsole {
     fn init(base: Base<Control>) -> Self {
-        TremConsole { base, game_path: NodePath::from("../../Game"), down: false, last_ms: 0, charset: None, background: None, tried_textures: false, ops: Vec::new() }
+        TremConsole { base, game_path: NodePath::from("../../Game"), down: false, last_ms: 0, charset: None, background: None, tried_textures: false, ops: Vec::new(), cell: (SMALLCHAR_WIDTH, SMALLCHAR_HEIGHT), nearest: None }
     }
 
     fn ready(&mut self) {
@@ -1073,6 +1113,8 @@ impl IControl for TremConsole {
         b.set_anchors_and_offsets_preset(godot::classes::control::LayoutPreset::FULL_RECT);
         b.set_mouse_filter(godot::classes::control::MouseFilter::IGNORE);
         b.set_focus_mode(godot::classes::control::FocusMode::ALL);
+        // over the menus (TremMenus is z 1): SCR_DrawScreenField draws the ui, then the console
+        b.set_z_index(2);
     }
 
     fn process(&mut self, _delta: f64) {
@@ -1092,6 +1134,7 @@ impl IControl for TremConsole {
         let down = self.down;
         let mut g = game.bind_mut();
         let speed = g.client_cvars_ref().find("scr_conspeed").map(|v| trem_sim::kernel::spawn::c_atof(&v.string) as f32).unwrap_or(3.0);
+        let con_scale = g.client_cvars_ref().find("con_scale").map(|v| trem_sim::kernel::spawn::c_atof(&v.string) as i32).unwrap_or(0);
         // wt-b: joystick keys while the console has the keys (Console_Key)
         g.wtb_set_console_down(down);
         for (k, _) in g.wtb_take_joy_keys(true) {
@@ -1102,7 +1145,9 @@ impl IControl for TremConsole {
         let c = g.misc_console();
         c.con.run(down, speed, frametime);
         let frac = c.con.display_frac;
-        self.ops = if frac > 0.0 { draw_solid_console(c, frac, vw, vh, down, now as u32) } else { Vec::new() };
+        self.ops = if frac > 0.0 { draw_solid_console(c, frac, vw, vh, con_scale, down, now as u32) } else { Vec::new() };
+        let (cw, chh, _) = con_layout(con_scale, vw, vh);
+        self.cell = (cw, chh);
         drop(g);
         // SCR_DrawScreenField: the voip meter over the console
         if let Some(m) = meter.as_deref() {
@@ -1150,12 +1195,19 @@ impl IControl for TremConsole {
                     }
                 }
                 ConDraw::Char(x, y, ch, c) => {
-                    let rect = Rect2::new(Vector2::new(*x as f32, *y as f32), Vector2::new(SMALLCHAR_WIDTH as f32, SMALLCHAR_HEIGHT as f32));
-                    match &self.charset {
+                    let (cw, chh) = self.cell;
+                    let rect = Rect2::new(Vector2::new(*x as f32, *y as f32), Vector2::new(cw as f32, chh as f32));
+                    match self.charset.clone() {
                         Some(t) => {
                             let (row, colm) = ((*ch >> 4) as f32, (*ch & 15) as f32);
-                            let t = &crate::hdtex::ui(t);
+                            let t = &crate::hdtex::ui(&t);
                         let src = Rect2::new(Vector2::new(colm * 0.0625, row * 0.0625) * t.get_size(), Vector2::new(0.0625, 0.0625) * t.get_size());
+                            if cw > SMALLCHAR_WIDTH {
+                                // dec084: whole-number scales stay sharp
+                                let t = self.nearest_charset(t);
+                                self.base_mut().draw_texture_rect_region_ex(&t, rect, src).modulate(col(c)).done();
+                                continue;
+                            }
                             let t = t.clone();
                             self.base_mut().draw_texture_rect_region_ex(&t, rect, src).modulate(col(c)).done();
                         }
@@ -1245,6 +1297,21 @@ impl TremConsole {
 }
 
 impl TremConsole {
+    /// dec084: `t` with the nearest filter (made again when the HD swap changes the texture).
+    fn nearest_charset(&mut self, t: &Gd<godot::classes::Texture2D>) -> Gd<godot::classes::Texture2D> {
+        if let Some((src, ct)) = &self.nearest {
+            if src == t {
+                return ct.clone();
+            }
+        }
+        let mut ct = godot::classes::CanvasTexture::new_gd();
+        ct.set_diffuse_texture(t);
+        ct.set_texture_filter(godot::classes::canvas_item::TextureFilter::NEAREST);
+        let ct = ct.upcast::<godot::classes::Texture2D>();
+        self.nearest = Some((t.clone(), ct.clone()));
+        ct
+    }
+
     fn game(&self) -> Option<Gd<crate::game::TremGame>> {
         self.base().get_node_or_null(&self.game_path)?.try_cast::<crate::game::TremGame>().ok()
     }
@@ -1461,7 +1528,7 @@ mod tests {
         let mut c = Console::default();
         c.print("^3hello\n");
         typed(&mut c, "ab");
-        let ops = draw_solid_console(&mut c, 0.5, 640, 480, true, 0);
+        let ops = draw_solid_console(&mut c, 0.5, 640, 480, 0, true, 0);
         assert_eq!(ops[0], ConDraw::Background([0.0, 0.0, 640.0, 240.0]));
         assert_eq!(ops[1], ConDraw::Fill([0.0, 240.0, 640.0, 2.0], COLOR_TABLE[1]));
         // the version at the bottom right, in red
@@ -1474,7 +1541,85 @@ mod tests {
         assert!(ops.contains(&ConDraw::Char(32, 240 - 32, 10, COLOR_TABLE[7])));
         // backscrolled: a row of red carets
         c.con.page_up();
-        let ops = draw_solid_console(&mut c, 0.5, 640, 480, false, 0);
+        let ops = draw_solid_console(&mut c, 0.5, 640, 480, 0, false, 0);
         assert!(ops.contains(&ConDraw::Char(8, 240 - 48, b'^', COLOR_TABLE[1])));
+    }
+
+    #[test]
+    fn con_scale_cell_and_columns_per_resolution() {
+        // dec084 auto: 1x at 720p, 2x at 1080p, 3x at 1440p, 4x at 2160p, full width
+        assert_eq!(con_layout(0, 1280, 720), (8, 16, 158));
+        assert_eq!(con_layout(0, 1920, 1080), (16, 32, 118));
+        assert_eq!(con_layout(0, 2560, 1440), (24, 48, 104));
+        assert_eq!(con_layout(0, 3840, 2160), (32, 64, 118));
+        assert_eq!(con_layout(0, 1024, 768), (8, 16, 126));
+        assert_eq!(con_layout(0, 640, 480), (8, 16, 78));
+        // 1 = the 1.1 console at any size
+        assert_eq!(con_layout(1, 1920, 1080), (8, 16, 78));
+        assert_eq!(con_layout(1, 2560, 1440), (8, 16, 78));
+        // 2-4 fixed, larger values are 4, negative values auto
+        assert_eq!(con_layout(2, 1280, 720), (16, 32, 78));
+        assert_eq!(con_layout(3, 1920, 1080), (24, 48, 78));
+        assert_eq!(con_layout(4, 1920, 1080), (32, 64, 58));
+        assert_eq!(con_layout(9, 1920, 1080), (32, 64, 58));
+        assert_eq!(con_layout(-1, 1920, 1080), (16, 32, 118));
+        // no window size yet: 78 columns
+        assert_eq!(con_layout(0, 0, 0), (8, 16, 78));
+        assert_eq!(con_cell_scale(0, 1079), 2);
+        assert_eq!(con_cell_scale(0, 959), 1);
+    }
+
+    #[test]
+    fn scaled_console_layout_and_line_count() {
+        let mut c = Console::default();
+        c.print("^3hello\n");
+        typed(&mut c, "ab");
+        let ops = draw_solid_console(&mut c, 0.5, 1920, 1080, 0, true, 0);
+        assert_eq!((c.con.linewidth, c.field.width_in_chars), (118, 118));
+        // the version at the bottom right in 16x32 cells
+        assert!(ops.contains(&ConDraw::Char(1920 - 16 * 16, 540 - 32, b't', COLOR_TABLE[1])));
+        // the text line above the input line, the prompt, the field and the cursor
+        assert!(ops.contains(&ConDraw::Char(16, 540 - 96, b'h', COLOR_TABLE[3])));
+        assert!(ops.contains(&ConDraw::Char(16, 540 - 64, b']', COLOR_TABLE[7])));
+        assert!(ops.contains(&ConDraw::Char(32, 540 - 64, b'a', COLOR_TABLE[7])));
+        assert!(ops.contains(&ConDraw::Char(64, 540 - 64, 10, COLOR_TABLE[7])));
+        // text rows: (540 - 32) / 32 = 15, the newest above the input line, the top one cut by the screen edge
+        let rows = |ops: &[ConDraw], h: i32| ops.iter().filter_map(|o| if let ConDraw::Char(x, y, _, _) = o { (*x < 1920 - 16 * h).then_some(*y) } else { None }).collect::<std::collections::BTreeSet<_>>();
+        for i in 0..40 {
+            c.print(&format!("line {i}\n"));
+        }
+        let ops = draw_solid_console(&mut c, 0.5, 1920, 1080, 0, false, 0);
+        let ys = rows(&ops, 16);
+        assert_eq!((ys.len(), *ys.iter().next().unwrap(), *ys.iter().last().unwrap()), (15, 540 - 96 - 14 * 32, 540 - 96));
+        // con_scale 1 at the same size: the 1.1 layout (8x16, 78 columns)
+        let ops = draw_solid_console(&mut c, 0.5, 1920, 1080, 1, false, 0);
+        assert_eq!(c.con.linewidth, 78);
+        assert!(ops.contains(&ConDraw::Char(1920 - 16 * 8, 540 - 16, b't', COLOR_TABLE[1])));
+        assert_eq!(rows(&ops, 8).len(), 32);
+    }
+
+    #[test]
+    fn wraps_at_the_new_width_and_keeps_the_text_on_resize() {
+        let mut c = Console::default();
+        c.print("kept line\n");
+        draw_solid_console(&mut c, 0.5, 1920, 1080, 0, false, 0);
+        assert_eq!(c.con.linewidth, 118);
+        assert_eq!(c.con.line_text(c.con.current - 1), "kept line");
+        // a 100-char line fits (it wrapped at 78 before); a word past 118 moves to the next line
+        let long = "x".repeat(100);
+        c.print(&format!("{long}\n"));
+        assert_eq!(c.con.line_text(c.con.current - 1), long);
+        c.print(&format!("{} abcdefgh\n", "y".repeat(112)));
+        assert_eq!(c.con.line_text(c.con.current - 2), "y".repeat(112));
+        assert_eq!(c.con.line_text(c.con.current - 1), "abcdefgh");
+        // a vid_restart to 1280x720: 158 columns, the lines are kept
+        draw_solid_console(&mut c, 0.5, 1280, 720, 0, false, 0);
+        assert_eq!(c.con.linewidth, 158);
+        assert_eq!(c.con.line_text(c.con.current - 1), "abcdefgh");
+        assert_eq!(c.con.line_text(c.con.current - 3), long);
+        // the edit line scrolls at the new width: 157 chars + the cursor
+        typed(&mut c, &"z".repeat(200));
+        let (vis, cur) = c.field.visible();
+        assert_eq!((vis.len(), cur), (157, 157));
     }
 }

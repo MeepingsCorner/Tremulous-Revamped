@@ -251,6 +251,8 @@ impl Client {
         c.cvars.get("cg_thirdPerson", "0", 0);
         // cl_console.c Con_Init; cg_main.c's debugging cvars (CVAR_CHEAT)
         c.cvars.get("scr_conspeed", "3", 0);
+        // dec084: 0 = auto (whole-number scale by height), 1 = the 1.1 8x16 console, 2-4 fixed
+        c.cvars.get("con_scale", "0", CVAR_ARCHIVE);
         for n in ["cg_debugevents", "cg_drawBBOX", "cg_drawSurfNormal"] {
             c.cvars.get(n, "0", 0);
         }
