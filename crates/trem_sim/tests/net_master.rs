@@ -379,3 +379,63 @@ fn the_lan_scan_finds_a_server_by_its_network_broadcast() {
     }
     assert_eq!(&got.expect("no broadcast arrived")[4..], b"getinfo xxx");
 }
+
+/// sv_main.c's SV_MasterHeartbeat: each master resolved for ipv4 and for
+/// ipv6 on its own, and the heartbeat sent to both (dec071). A fake resolver
+/// stands in for DNS; nothing leaves the process (Net::capture).
+fn fake_resolve(name: &str, family: trem_sim::kernel::netchan::NetAdrType) -> (i32, trem_sim::kernel::netchan::NetAdr) {
+    use trem_sim::kernel::netchan::{NetAdr, NetAdrType};
+    let a = |s: &str| NetAdr::from_socket(&s.parse().unwrap());
+    match (name, family) {
+        ("master.example", NetAdrType::Ip) => (2, a("192.0.2.10:1")),
+        ("master.example", NetAdrType::Ip6) => (2, a("[2001:db8::10]:1")),
+        ("v4only.example:31000", NetAdrType::Ip) => (1, a("192.0.2.20:31000")),
+        _ => (0, NetAdr::default()),
+    }
+}
+
+fn heartbeats_with(enabled: i32) -> (Vec<std::net::SocketAddr>, String) {
+    let mut net = Net::new();
+    net.enabled = enabled;
+    net.capture = Some(Vec::new());
+    let mut cv = ServerCvars { hostname: "port server".into(), ..Default::default() };
+    cv.dedicated = 2;
+    cv.masters[0] = "master.example".into();
+    cv.masters[1] = "v4only.example:31000".into();
+    cv.masters[2] = "nowhere.example".into();
+    let mut sv = Server::spawn(World::new(MapId::Arena), "arena", cv);
+    sv.master_resolve = fake_resolve;
+    let mut console = String::new();
+    let mut to = Vec::new();
+    for _ in 0..200 {
+        sv.frame(&mut net, 16);
+        console.push_str(&std::mem::take(&mut sv.console));
+        for (a, d) in net.capture.as_mut().unwrap().drain(..) {
+            if d.starts_with(b"\xff\xff\xff\xffheartbeat ") {
+                to.push(a.to_socket().unwrap());
+            }
+        }
+        if console.contains("Sending heartbeat to v4only.example") {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    to.sort();
+    (to, console)
+}
+
+#[test]
+fn heartbeats_go_to_the_ipv4_and_the_ipv6_address_of_each_master() {
+    use trem_sim::kernel::netchan::{NET_ENABLEV4, NET_ENABLEV6, PORT_MASTER};
+    let (to, console) = heartbeats_with(NET_ENABLEV4 | NET_ENABLEV6);
+    let mut want: Vec<std::net::SocketAddr> = vec![format!("192.0.2.10:{PORT_MASTER}").parse().unwrap(), format!("[2001:db8::10]:{PORT_MASTER}").parse().unwrap(), "192.0.2.20:31000".parse().unwrap()];
+    want.sort();
+    assert_eq!(to, want, "{console}");
+    for l in ["Resolving master.example (IPv4)", "Resolving master.example (IPv6)", "v4only.example:31000 has no IPv6 address.", "nowhere.example has no IPv4 address.", "Couldn't resolve address: nowhere.example"] {
+        assert!(console.contains(l), "{l}: {console}");
+    }
+    // net_enabled 1: ipv4 only, as the C
+    let (to, console) = heartbeats_with(NET_ENABLEV4);
+    assert!(to.iter().all(|a| a.is_ipv4()) && to.len() == 2, "{to:?}");
+    assert!(!console.contains("(IPv6)"), "{console}");
+}
