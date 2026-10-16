@@ -1,0 +1,33 @@
+name: Idea or request
+description: Suggest something new or a change to how something works.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      placeholder: When I ..., I can't ... / it's hard to ...
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How should it work?
+    validations:
+      required: true
+  - type: dropdown
+    id: basis
+    attributes:
+      label: Is this how classic Tremulous worked, or something new?
+      options:
+        - Classic Tremulous 1.1 worked this way (bring back)
+        - Another Tremulous version worked this way (say which below)
+        - New, an improvement over classic
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: ref
+    attributes:
+      label: References
+      description: Optional. Links to old code, configs, videos or other games.
